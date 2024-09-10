@@ -63,6 +63,9 @@ class BaseNode:
         """
         pass  # Nothing to validate
 
+    def __post_init__(self):
+        self.validate()
+
     def pretty(self) -> str:
         """
         Pretty-prints the contents of this node.
