@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Union, Tuple, Optional
 from spatialstencil.syntax.common.basenode import BaseNode
 from spatialstencil.syntax.common.types import ScalarType
@@ -118,6 +118,7 @@ class ArraySlice(SpatialNode):
     Represents a subscript or slice of an array.
     For single index access: array[i]
     For range access: array[start:end]
+    For stride access: array[start:end:stride]
     """
     array: Identifier
     indices: List[Union[int, Identifier, 'RangeExpression']]  # Handles single-index or ranges
@@ -213,7 +214,7 @@ class Kernel(SpatialNode):
     name: str
     parameters: List[Parameter]
     arguments: List[KernelArgument]
-    body: List['Expression']
+    body: List[SpatialNode]
 
     def as_ir(self, indent: int = 0) -> str:
         param_str = ", ".join(p.as_ir() for p in self.parameters)
@@ -226,7 +227,7 @@ class Kernel(SpatialNode):
 @dataclass
 class Expression(SpatialNode):
     """
-    A general expression that can take the form of an identifier, literal, subscript, unary/binary operator, etc.
+    A general expression that can take the form of an identifier, literal, array slice, unary/binary operator, etc.
     """
     value: Union[Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator, BoolExpression]
 
@@ -258,7 +259,7 @@ class FieldDeclaration(SpatialNode):
     field_name: Identifier
 
     def as_ir(self, indent: int = 0) -> str:
-        return f'{self.field_type.as_ir()} {self.field_name.as_ir()};'
+        return f'{self.field_type.as_ir()} {self.field_name.as_ir()}'
 
 
 # Place Block
@@ -295,7 +296,7 @@ class RoutingDeclaration(SpatialNode):
     def as_ir(self, indent: int = 0) -> str:
         hops_str = "auto" if self.hops == "auto" else f"[{', '.join(f'({dx}, {dy})' for dx, dy in self.hops)}]"
         channel_str = "auto" if self.channel == "auto" else str(self.channel)
-        return f"hops = {hops_str};\n{' ' * indent}channel = {channel_str};"
+        return f"hops = {hops_str}, \n{' ' * indent}channel = {channel_str}"
 
 
 # Relative Stream Declaration with Optional Routing
@@ -315,7 +316,7 @@ class RelativeStreamDeclaration(SpatialNode):
         routing_str = ""
         if self.routing:
             routing_str = f" {{\n{self.routing.as_ir(indent + 2)}\n{' ' * indent}}}"
-        return f'stream<{self.stream_type.element_type.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str};'
+        return (f'stream<{self.stream_type.element_type.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}')
 
 
 # Dataflow Block
@@ -367,8 +368,8 @@ class SendStatement(Statement):
 
     def as_ir(self, indent: int = 0) -> str:
         if self.completion_name:
-            return f'{self.completion_name.as_ir()} = send({self.local_array.as_ir()}, {self.stream_name.as_ir()});'
-        return f'send({self.local_array.as_ir()}, {self.stream_name.as_ir()});'
+            return f'{self.completion_name.as_ir()} = send({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
+        return f'send({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
 
 
 # Receive Statement
@@ -456,10 +457,10 @@ class AwaitStatement(Statement):
     """
     Await statement to wait for a completion.
     """
-    completion_name: Completion
+    completion: Completion
 
     def as_ir(self, indent: int = 0) -> str:
-        return f'await {self.completion_name.as_ir()};'
+        return f'await {self.completion.as_ir()}'
 
 
 # Compute Block
@@ -476,3 +477,21 @@ class ComputeBlock(SpatialNode):
         vars_str = ", ".join(var.as_ir() for var in self.variables)
         stmt_str = "\n".join(stmt.as_ir(indent + 2) for stmt in self.statements)
         return f'compute {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n}}'
+
+
+@dataclass
+class Phase(SpatialNode):
+    """
+    Encapsulates a phase of data placement, communication, and computation.
+    """
+    placement: List[PlaceBlock]
+    dataflow: List[DataflowBlock]
+    compute: List[ComputeBlock]
+
+    def as_ir(self, indent: int = 0) -> str:
+        phase_str = "phase {\n"
+        dataflow_str = "\n".join(df.as_ir(indent + 2) for df in self.dataflows)
+        compute_str = "\n".join(cmp.as_ir(indent + 2) for cmp in self.computes)
+        place_str = "\n".join(pl.as_ir(indent + 2) for pl in self.places)
+        return f'{phase_str}{dataflow_str}\n{compute_str}\n{place_str}\n{" " * indent}}}'
+
