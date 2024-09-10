@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Union, Tuple, Optional
 from spatialstencil.syntax.common.basenode import BaseNode
-from spatialstencil.syntax.common.types import ScalarType
+from spatialstencil.syntax.common.types import ScalarType, IRType
 
 
 @dataclass
@@ -34,6 +34,7 @@ class Parameter(SpatialNode):
     A parameter literal (e.g., I, J, K).
     """
     name: str
+    value: Optional[int] = None
 
     def as_ir(self, indent: int = 0) -> str:
         return self.name
@@ -54,7 +55,7 @@ class Identifier(SpatialNode):
 
 # Streams
 @dataclass
-class StreamType(SpatialNode):
+class StreamType(SpatialNode, IRType):
     """
     A stream type that sends elements of type T.
     """
@@ -66,7 +67,7 @@ class StreamType(SpatialNode):
 
 # Arrays
 @dataclass
-class ArrayType(SpatialNode):
+class ArrayType(SpatialNode, IRType):
     """
     An array type of a scalar or stream, with one or more dimensions.
     """
