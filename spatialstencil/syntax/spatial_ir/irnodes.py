@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Union, Tuple, Optional
+from typing import Union, Tuple, Optional
 from spatialstencil.syntax.common.basenode import BaseNode
 from spatialstencil.syntax.common.types import ScalarType, IRType
 
@@ -72,7 +72,7 @@ class ArrayType(SpatialNode, IRType):
     An array type of a scalar or stream, with one or more dimensions.
     """
     base_type: Union[ScalarType, StreamType]
-    dimensions: List[Union[int, Parameter]]
+    dimensions: list[Union[int, Parameter]]
 
     def as_ir(self, indent: int = 0) -> str:
         dims = ", ".join(str(dim.as_ir() if isinstance(dim, SpatialNode) else dim) for dim in self.dimensions)
@@ -122,7 +122,7 @@ class ArraySlice(SpatialNode):
     For stride access: array[start:end:stride]
     """
     array: Identifier
-    indices: List[Union[int, Identifier, 'RangeExpression']]  # Handles single-index or ranges
+    indices: list[Union[int, Identifier, 'RangeExpression']]  # Handles single-index or ranges
 
     def as_ir(self, indent: int = 0) -> str:
         index_strs = []
@@ -213,9 +213,9 @@ class Kernel(SpatialNode):
     A kernel definition.
     """
     name: str
-    parameters: List[Parameter]
-    arguments: List[KernelArgument]
-    body: List[SpatialNode]
+    parameters: list[Parameter]
+    arguments: list[KernelArgument]
+    body: list[SpatialNode]
 
     def as_ir(self, indent: int = 0) -> str:
         param_str = ", ".join(p.as_ir() for p in self.parameters)
@@ -270,9 +270,9 @@ class PlaceBlock(SpatialNode):
     The 'place' block for allocating variables or arrays on a subgrid of PEs.
     """
     variable_type: ScalarType
-    variables: List[Identifier]
+    variables: list[Identifier]
     subgrid: SubgridExpression
-    statements: List[FieldDeclaration]
+    statements: list[FieldDeclaration]
 
     def as_ir(self, indent: int = 0) -> str:
         vars_str = ", ".join(v.as_ir() for v in self.variables)
@@ -286,7 +286,7 @@ class RoutingDeclaration(SpatialNode):
     """
     A routing declaration for a stream, optionally specifying hops and channel.
     """
-    hops: Union[List[Tuple[int, int]], str] = "auto"  # List of hops or 'auto'
+    hops: Union[list[Tuple[int, int]], str] = "auto"  # list of hops or 'auto'
     channel: Union[int, str] = "auto"  # Channel ID or 'auto'
 
     def validate(self) -> None:
@@ -326,9 +326,9 @@ class DataflowBlock(SpatialNode):
     """
     The 'dataflow' block for describing communication streams between PEs.
     """
-    variables: List[Identifier]
+    variables: list[Identifier]
     subgrid: SubgridExpression
-    statements: List[RelativeStreamDeclaration]
+    statements: list[RelativeStreamDeclaration]
 
     def as_ir(self, indent: int = 0) -> str:
         vars_str = ", ".join(v.as_ir() for v in self.variables)
@@ -375,7 +375,7 @@ class SendStatement(Statement):
 
 # Receive Statement
 @dataclass
-class ReceiveStatement(SpatialNode):
+class Receive(SpatialNode):
     """
     Receive data from a stream.
     """
@@ -391,9 +391,9 @@ class ForeachStatement(Statement):
     """
     Foreach loop for asynchronously iterating over a received stream.
     """
-    variables: List[Identifier]
-    receive_stream: ReceiveStatement
-    body: List[Statement]
+    variables: list[Identifier]
+    receive_stream: Receive
+    body: list[Statement]
     completion_name: Optional[Completion] = None
     parameter_range: Optional[RangeExpression] = None
 
@@ -411,9 +411,9 @@ class MapStatement(Statement):
     """
     Map statement for applying an affine computation asynchronously to array elements.
     """
-    variables: List[Identifier]
+    variables: list[Identifier]
     range_expression: RangeExpression
-    body: List[Statement]
+    body: list[Statement]
     completion_name: Optional[Completion] = None
 
     def as_ir(self, indent: int = 0) -> str:
@@ -428,9 +428,9 @@ class ForStatement(Statement):
     """
     Sequential for loop for iterating over a range expression.
     """
-    variables: List[Identifier]
+    variables: list[Identifier]
     range_expression: RangeExpression
-    body: List[Statement]
+    body: list[Statement]
 
     def as_ir(self, indent: int = 0) -> str:
         vars_str = ", ".join(var.as_ir() for var in self.variables)
@@ -444,7 +444,7 @@ class AsyncBlock(Statement):
     """
     Asynchronous block for executing a computation asynchronously.
     """
-    body: List[Statement]
+    body: list[Statement]
     completion_name: Optional[Completion] = None
 
     def as_ir(self, indent: int = 0) -> str:
@@ -470,9 +470,9 @@ class ComputeBlock(SpatialNode):
     """
     The 'compute' block for defining computation on a subgrid of PEs.
     """
-    variables: List[Identifier]
+    variables: list[Identifier]
     subgrid: SubgridExpression
-    statements: List[Statement]
+    statements: list[Statement]
 
     def as_ir(self, indent: int = 0) -> str:
         vars_str = ", ".join(var.as_ir() for var in self.variables)
@@ -485,9 +485,9 @@ class Phase(SpatialNode):
     """
     Encapsulates a phase of data placement, communication, and computation.
     """
-    placement: List[PlaceBlock]
-    dataflow: List[DataflowBlock]
-    compute: List[ComputeBlock]
+    placement: list[PlaceBlock]
+    dataflow: list[DataflowBlock]
+    compute: list[ComputeBlock]
 
     def as_ir(self, indent: int = 0) -> str:
         phase_str = "phase {\n"
