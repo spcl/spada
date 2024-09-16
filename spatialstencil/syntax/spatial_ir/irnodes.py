@@ -135,36 +135,18 @@ class ArraySlice(SpatialNode):
         return f'{self.array.as_ir()}[{index_str}]'
 
 
-# Parameter Expressions (integer expressions)
 @dataclass
-class ParameterExpression(SpatialNode):
+class Expression(SpatialNode):
     """
-    An expression involving parameters, constants, and arithmetic operations.
+    A general expression that can take the form of an identifier, literal, array slice, unary/binary operator, etc.
     """
-    expr: Union[ConstantLiteral, Parameter, UnaryOperator, BinaryOperator]
+    value: Union[Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator]
+    type: ScalarType
 
     def as_ir(self, indent: int = 0) -> str:
-        return self.expr.as_ir()
+        return self.value.as_ir()
 
 
-# Boolean Expressions
-@dataclass
-class BoolExpression(SpatialNode):
-    """
-    A boolean expression (e.g., x == y).
-    """
-    left: 'Expression'
-    op: str
-    right: 'Expression'
-
-    def validate(self) -> None:
-        assert self.op in ('==', '!=', '<', '<=', '>', '>=')
-
-    def as_ir(self, indent: int = 0) -> str:
-        return f'{self.left.as_ir()} {self.op} {self.right.as_ir()}'
-
-
-# Range Expressions
 @dataclass
 class RangeExpression(SpatialNode):
     """
@@ -180,7 +162,6 @@ class RangeExpression(SpatialNode):
         return f'{self.start.as_ir()}:{self.stop.as_ir()}'
 
 
-# Kernel Arguments
 @dataclass
 class KernelArgument(SpatialNode):
     """
@@ -206,37 +187,29 @@ class KernelArgument(SpatialNode):
         return f'{self.arg_type.as_ir()} {self.name}'
 
 
-# Kernel
 @dataclass
 class Kernel(SpatialNode):
     """
     A kernel definition.
     """
-    name: str
+    name: str | None
     parameters: list[Parameter]
     arguments: list[KernelArgument]
     body: list[SpatialNode]
+
+    def validate(self) -> None:
+        assert all(isinstance(p, Parameter) for p in self.parameters)
+        assert all(isinstance(arg, KernelArgument) for arg in self.arguments)
+        assert all(isinstance(stmt, (Phase, ComputeBlock, DataflowBlock, PlaceBlock)) for stmt in self.body)
 
     def as_ir(self, indent: int = 0) -> str:
         param_str = ", ".join(p.as_ir() for p in self.parameters)
         arg_str = ", ".join(arg.as_ir() for arg in self.arguments)
         body_str = "\n".join(stmt.as_ir(indent + 2) for stmt in self.body)
-        return f'kernel {self.name}<{param_str}>({arg_str}) {{\n{body_str}\n}}'
+        return f'kernel @{self.name}<{param_str}>({arg_str}) {{\n{body_str}\n}}' if self.name \
+            else f'kernel<{param_str}>({arg_str}) {{\n{body_str}\n}}'
 
 
-# Expression
-@dataclass
-class Expression(SpatialNode):
-    """
-    A general expression that can take the form of an identifier, literal, array slice, unary/binary operator, etc.
-    """
-    value: Union[Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator, BoolExpression]
-
-    def as_ir(self, indent: int = 0) -> str:
-        return self.value.as_ir()
-
-
-# Subgrid Expression (already defined earlier)
 @dataclass
 class SubgridExpression(SpatialNode):
     """
@@ -249,7 +222,6 @@ class SubgridExpression(SpatialNode):
         return f'[{self.x_range.as_ir()} , {self.y_range.as_ir()}]'
 
 
-# Field Declaration (for variables and arrays in place blocks)
 @dataclass
 class FieldDeclaration(SpatialNode):
     """
@@ -262,8 +234,9 @@ class FieldDeclaration(SpatialNode):
     def as_ir(self, indent: int = 0) -> str:
         return f'{self.field_type.as_ir()} {self.field_name.as_ir()}'
 
-
+###
 # Place Block
+###
 @dataclass
 class PlaceBlock(SpatialNode):
     """
@@ -280,7 +253,6 @@ class PlaceBlock(SpatialNode):
         return f'place {self.variable_type.as_ir()} {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n}}'
 
 
-# Routing Declaration for Streams
 @dataclass
 class RoutingDeclaration(SpatialNode):
     """
@@ -300,7 +272,6 @@ class RoutingDeclaration(SpatialNode):
         return f"hops = {hops_str}, \n{' ' * indent}channel = {channel_str}"
 
 
-# Relative Stream Declaration with Optional Routing
 @dataclass
 class RelativeStreamDeclaration(SpatialNode):
     """
@@ -309,18 +280,21 @@ class RelativeStreamDeclaration(SpatialNode):
     """
     stream_type: StreamType
     stream_name: Identifier
-    dx: ParameterExpression
-    dy: ParameterExpression
+    dx: Expression
+    dy: Expression
     routing: Optional[RoutingDeclaration] = None
 
     def as_ir(self, indent: int = 0) -> str:
         routing_str = ""
         if self.routing:
             routing_str = f" {{\n{self.routing.as_ir(indent + 2)}\n{' ' * indent}}}"
-        return (f'stream<{self.stream_type.element_type.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}')
+        return f'stream<{self.stream_type.element_type.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
 
-
+###
 # Dataflow Block
+###
+
+
 @dataclass
 class DataflowBlock(SpatialNode):
     """
@@ -335,6 +309,9 @@ class DataflowBlock(SpatialNode):
         stmt_str = "\n".join(stmt.as_ir(indent + 2) for stmt in self.statements)
         return f'dataflow {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n}}'
 
+###
+# Compute Block
+###
 
 # Base class for all statements in the compute block
 @dataclass
@@ -479,6 +456,9 @@ class ComputeBlock(SpatialNode):
         stmt_str = "\n".join(stmt.as_ir(indent + 2) for stmt in self.statements)
         return f'compute {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n}}'
 
+###
+# Phases
+###
 
 @dataclass
 class Phase(SpatialNode):
