@@ -2,6 +2,8 @@
 Contains scalar type inference functionality for the Stencil IR.
 """
 import copy
+
+from spatialstencil.syntax.common import types
 from spatialstencil.syntax.stencil_ir import irnodes as sast
 from spatialstencil.syntax.stencil_ir import analysis
 
@@ -257,21 +259,21 @@ def _result_type_of(*args: sast.ScalarType, optype: str | None = None) -> sast.S
     for arg in args:
         if arg in (sast.ScalarType.f16, sast.ScalarType.f32, sast.ScalarType.f64):
             # Floating point
-            if max_bit_width_float[0] is None or max_bit_width_float[0] < sast.BIT_WIDTH[arg]:
-                max_bit_width_float = sast.BIT_WIDTH[arg], arg
+            if max_bit_width_float[0] is None or max_bit_width_float[0] < types.BIT_WIDTH[arg]:
+                max_bit_width_float = types.BIT_WIDTH[arg], arg
         elif arg in (sast.ScalarType.bool, sast.ScalarType.u8, sast.ScalarType.u16, sast.ScalarType.u32):
             # Unsigned integer
-            if max_bit_width_uint[0] is None or max_bit_width_uint[0] < sast.BIT_WIDTH[arg]:
-                max_bit_width_uint = sast.BIT_WIDTH[arg], arg
+            if max_bit_width_uint[0] is None or max_bit_width_uint[0] < types.BIT_WIDTH[arg]:
+                max_bit_width_uint = types.BIT_WIDTH[arg], arg
         else:
             # Signed integer
-            if max_bit_width_int[0] is None or max_bit_width_int[0] < sast.BIT_WIDTH[arg]:
-                max_bit_width_int = sast.BIT_WIDTH[arg], arg
+            if max_bit_width_int[0] is None or max_bit_width_int[0] < types.BIT_WIDTH[arg]:
+                max_bit_width_int = types.BIT_WIDTH[arg], arg
 
     # Specific math calls make the result floating point
     if optype in ('sqrt', 'cbrt'):
         if max_bit_width_float[0] is None:  # If no floating-point value exists, use other arguments
-            max_bit_width = max(sast.BIT_WIDTH[arg] for arg in args)
+            max_bit_width = max(types.BIT_WIDTH[arg] for arg in args)
             max_bit_width = max(16, max_bit_width)
             max_bit_width_float = max_bit_width, sast.ScalarType[f'f{max_bit_width}']
 
