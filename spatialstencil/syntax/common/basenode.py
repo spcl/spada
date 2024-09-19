@@ -3,6 +3,7 @@ Provides a base class for AST/IR trees. Includes children queries and schema val
 """
 import types
 import typing
+import warnings
 from dataclasses import dataclass
 from collections import deque
 import pprint
@@ -44,19 +45,26 @@ class BaseNode:
             return True
         visited.add(cls)
 
-        def _check_sequence(sequence, field_name):
+        def _check_sequence(sequence, f_name):
+
             for item in typing.get_args(sequence):
+                if isinstance(item, str):
+                    warnings.warn(f"Could not validate schema for field {f_name} of {cls} due to forward reference")
+                    continue
                 if typing.get_origin(item) is types.UnionType or typing.get_origin(item) is typing.Union:
                     _check_union(item, field_name)
                 elif issubclass(item, BaseNode):
                     item.validate_schema(visited)
                 elif not isinstance(item, type) or not issubclass(item, (int, float, str, type(None), Enum)):
-                    raise TypeError(f'Unsupported sequence content {item} for field {field_name} of {cls}')
+                    raise TypeError(f'Unsupported sequence content {item} for field {f_name} of {cls}')
 
         def _check_union(union, f_name):
             for subtype in typing.get_args(union):
                 # Handle Literal or None types
                 if typing.get_origin(subtype) is typing.Literal or subtype is type(None):
+                    continue
+                if isinstance(subtype, str):
+                    warnings.warn(f"Could not validate schema for field {f_name} of {cls} due to forward reference")
                     continue
                 if isinstance(typing.get_origin(subtype), (list, type)):
                     _check_sequence(subtype, f_name)
@@ -74,6 +82,7 @@ class BaseNode:
         for field_name, field in cls.__dataclass_fields__.items():
             # Resolve the field's type using get_type_hints (handling forward references)
             field_type = type_hints[field_name]
+            print(field_type)
 
             origin = typing.get_origin(field_type)
             if origin is types.UnionType or origin is typing.Union:
