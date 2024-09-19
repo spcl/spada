@@ -82,8 +82,6 @@ class BaseNode:
         for field_name, field in cls.__dataclass_fields__.items():
             # Resolve the field's type using get_type_hints (handling forward references)
             field_type = type_hints[field_name]
-            print(field_type)
-
             origin = typing.get_origin(field_type)
             if origin is types.UnionType or origin is typing.Union:
                 _check_union(field_type, field_name)
