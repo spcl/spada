@@ -10,16 +10,6 @@ from spatialstencil.syntax.common import visitor
 from spatialstencil.syntax.common.types import IRType, ScalarType
 
 
-@dataclass(frozen=True)
-class AnyType(IRType):
-
-    def as_ir(self) -> str:
-        return "?"
-
-    def is_unknown(self) -> bool:
-        return True
-
-
 class ComputationType(enum.Enum):
     # We are using numbers to ensure compatibility with GT4Py's AST values
     PARALLEL = 0
@@ -47,6 +37,16 @@ class Node(BaseNode):
         :param indent: Indentation for the IR node.
         """
         return str(self)
+
+
+@dataclass
+class AnyType(Node, IRType):
+
+    def as_ir(self) -> str:
+        return "?"
+
+    def is_unknown(self) -> bool:
+        return True
 
 
 class Domain(Node, IRType):
@@ -788,6 +788,7 @@ class Program(Node, Operation, Block):
         assert all(isinstance(i, (FieldType, ScalarType, AnyType)) for i in self.operation_type.source)
         assert all(isinstance(i, (FieldType, ScalarType, AnyType)) for i in self.operation_type.destination)
         assert isinstance(self.computations[-1], ReturnOp)
+        assert self.validate_schema()
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent

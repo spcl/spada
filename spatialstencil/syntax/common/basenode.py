@@ -1,9 +1,12 @@
 """
 Provides a base class for AST/IR trees. Includes children queries and schema validation.
 """
+import types
+import typing
 from dataclasses import dataclass
 from collections import deque
 import pprint
+from enum import Enum
 
 
 @dataclass
@@ -29,7 +32,7 @@ class BaseNode:
     """
 
     @classmethod
-    def validate_schema(cls, visited: set[type['BaseNode']] = None) -> None:
+    def validate_schema(cls, visited: set[type['BaseNode']] = None) -> bool:
         """
         Validates that the node type and all its child node types abide by
         the rules defined on ``BaseNode``.
@@ -38,23 +41,53 @@ class BaseNode:
         """
         visited = visited or set()
         if cls in visited:  # Skip type cycles
-            return
+            return True
         visited.add(cls)
 
+        def _check_sequence(sequence, field_name):
+            for item in typing.get_args(sequence):
+                if typing.get_origin(item) is types.UnionType or typing.get_origin(item) is typing.Union:
+                    _check_union(item, field_name)
+                elif issubclass(item, BaseNode):
+                    item.validate_schema(visited)
+                elif not isinstance(item, type) or not issubclass(item, (int, float, str, type(None), Enum)):
+                    raise TypeError(f'Unsupported sequence content {item} for field {field_name} of {cls}')
+
+        def _check_union(union, f_name):
+            for subtype in typing.get_args(union):
+                # Handle Literal or None types
+                if typing.get_origin(subtype) is typing.Literal or subtype is type(None):
+                    continue
+                if isinstance(typing.get_origin(subtype), (list, type)):
+                    _check_sequence(subtype, f_name)
+                # Handle BaseNode subclasses
+                elif isinstance(subtype, type) and issubclass(subtype, BaseNode):
+                    subtype.validate_schema(visited)
+                # Raise error for unsupported types
+                elif not isinstance(subtype, type) or not issubclass(subtype,
+                                                                   (BaseNode, int, float, str, type(None), Enum)):
+                    raise TypeError(f'Unsupported union type {subtype} for field {f_name} of {cls}')
+
+        # Use get_type_hints to resolve forward references
+        type_hints = typing.get_type_hints(cls)
+
         for field_name, field in cls.__dataclass_fields__.items():
-            if issubclass(field.type, BaseNode):
-                # Traverse
-                field.type.validate_schema(visited)
-            elif hasattr(field.type, '__origin__') and issubclass(field.type.__origin__, (tuple, list)):  # Sequence
-                # Check that contents must be either a terminator or a node
-                for subtype in field.type.__args__:
-                    if issubclass(subtype, BaseNode):
-                        subtype.validate_schema(visited)
-                    if not issubclass(subtype, (BaseNode, int, float, str, type(None))):
-                        raise TypeError(f'Unsupported sequence content "{subtype}" for field {field_name} of {cls}')
+            # Resolve the field's type using get_type_hints (handling forward references)
+            field_type = type_hints[field_name]
+
+            origin = typing.get_origin(field_type)
+            if origin is types.UnionType or origin is typing.Union:
+                _check_union(field_type, field_name)
+            elif isinstance(field_type, type) and issubclass(field_type, BaseNode):
+                # Traverse if it’s a BaseNode subclass
+                field_type.validate_schema(visited)
+            elif origin and issubclass(origin, (tuple, list)):  # Sequence
+                # Check contents of sequences
+                _check_sequence(field_type, field_name)
             else:
-                if not issubclass(field.type, (int, float, str, type(None))):
-                    raise TypeError(f'Unsupported terminator type "{field.type}" for field {field_name} of {cls}')
+                if not isinstance(field_type, type) or not issubclass(field_type, (int, float, str, type(None), Enum)):
+                    raise TypeError(f'Unsupported terminator type {field_type} for field {field_name} of {cls}')
+        return True
 
     def validate(self) -> None:
         """
