@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Union, Tuple, Optional
+from typing import Union, Tuple, Optional, Literal
 from spatialstencil.syntax.common.basenode import BaseNode
 from spatialstencil.syntax.common.types import ScalarType, IRType
 
@@ -21,7 +21,7 @@ class ConstantLiteral(SpatialNode):
     A constant literal (e.g., 0, 1, -12).
     """
     value: Union[int, float]
-    type: ScalarType
+    dtype: ScalarType
 
     def as_ir(self, indent: int = 0) -> str:
         return str(self.value)
@@ -59,10 +59,10 @@ class StreamType(SpatialNode, IRType):
     """
     A stream type that sends elements of type T.
     """
-    element_type: ScalarType
+    dtype: ScalarType
 
     def as_ir(self, indent: int = 0) -> str:
-        return f'stream<{self.element_type.as_ir()}>'
+        return f'stream<{self.dtype.as_ir()}>'
 
 
 # Arrays
@@ -73,6 +73,11 @@ class ArrayType(SpatialNode, IRType):
     """
     base_type: Union[ScalarType, StreamType]
     dimensions: list[Union[int, Parameter]]
+
+    def validate(self) -> None:
+        assert isinstance(self.dimensions, list)
+        assert all(isinstance(dim, (int, Parameter)) for dim in self.dimensions)
+        assert len(self.dimensions) > 0
 
     def as_ir(self, indent: int = 0) -> str:
         dims = ", ".join(str(dim.as_ir() if isinstance(dim, SpatialNode) else dim) for dim in self.dimensions)
@@ -141,7 +146,11 @@ class Expression(SpatialNode):
     A general expression that can take the form of an identifier, literal, array slice, unary/binary operator, etc.
     """
     value: Union[Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator]
-    type: ScalarType
+    dtype: ScalarType
+
+    def validate(self) -> None:
+        assert isinstance(self.value, (Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator))
+        assert isinstance(self.dtype, ScalarType)
 
     def as_ir(self, indent: int = 0) -> str:
         return self.value.as_ir()
@@ -152,63 +161,20 @@ class RangeExpression(SpatialNode):
     """
     A range expression (start:stop or start:stop:step).
     """
-    start: 'Expression'
-    stop: 'Expression'
-    step: 'Expression' = None
+    start: Expression
+    stop: Expression
+    step: Expression = None
+
+    def validate(self) -> None:
+        assert isinstance(self.start, Expression)
+        assert isinstance(self.stop, Expression)
+        if self.step:
+            assert isinstance(self.step, Expression)
 
     def as_ir(self, indent: int = 0) -> str:
         if self.step:
             return f'{self.start.as_ir()}:{self.stop.as_ir()}:{self.step.as_ir()}'
         return f'{self.start.as_ir()}:{self.stop.as_ir()}'
-
-
-@dataclass
-class KernelArgument(SpatialNode):
-    """
-    A kernel argument of a given type.
-    """
-    arg_type: Union[ScalarType, ArrayType, StreamType]
-    name: str
-    readonly: bool = False
-    writeonly: bool = False
-    compiletime: bool = False
-
-    def as_ir(self, indent: int = 0) -> str:
-        annotations = []
-        if self.readonly:
-            annotations.append('readonly')
-        if self.writeonly:
-            annotations.append('writeonly')
-        if self.compiletime:
-            annotations.append('compiletime')
-        ann_str = " ".join(annotations)
-        if ann_str:
-            return f'{self.arg_type.as_ir()} {ann_str} {self.name}'
-        return f'{self.arg_type.as_ir()} {self.name}'
-
-
-@dataclass
-class Kernel(SpatialNode):
-    """
-    A kernel definition.
-    """
-    name: str | None
-    parameters: list[Parameter]
-    arguments: list[KernelArgument]
-    body: list[SpatialNode]
-
-    def validate(self) -> None:
-        assert all(isinstance(p, Parameter) for p in self.parameters)
-        assert all(isinstance(arg, KernelArgument) for arg in self.arguments)
-        assert all(isinstance(stmt, (Phase, ComputeBlock, DataflowBlock, PlaceBlock)) for stmt in self.body)
-
-    def as_ir(self, indent: int = 0) -> str:
-        param_str = ", ".join(p.as_ir() for p in self.parameters)
-        arg_str = ", ".join(arg.as_ir() for arg in self.arguments)
-        body_str = "\n".join(stmt.as_ir(indent + 2) for stmt in self.body)
-        return f'kernel @{self.name}<{param_str}>({arg_str}) {{\n{body_str}\n}}' if self.name \
-            else f'kernel<{param_str}>({arg_str}) {{\n{body_str}\n}}'
-
 
 @dataclass
 class SubgridExpression(SpatialNode):
@@ -228,11 +194,15 @@ class FieldDeclaration(SpatialNode):
     Field declaration inside a place block.
     Can be either a scalar or an array.
     """
-    field_type: Union[ScalarType, ArrayType]
+    dtype: Union[ScalarType, ArrayType]
     field_name: Identifier
 
+    def validate(self) -> None:
+        assert isinstance(self.dtype, (ScalarType, ArrayType))
+        assert isinstance(self.field_name, Identifier)
+
     def as_ir(self, indent: int = 0) -> str:
-        return f'{self.field_type.as_ir()} {self.field_name.as_ir()}'
+        return f'{self.dtype.as_ir()} {self.field_name.as_ir()}'
 
 ###
 # Place Block
@@ -242,7 +212,6 @@ class PlaceBlock(SpatialNode):
     """
     The 'place' block for allocating variables or arrays on a subgrid of PEs.
     """
-    variable_type: ScalarType
     variables: list[Identifier]
     subgrid: SubgridExpression
     statements: list[FieldDeclaration]
@@ -250,7 +219,14 @@ class PlaceBlock(SpatialNode):
     def as_ir(self, indent: int = 0) -> str:
         vars_str = ", ".join(v.as_ir() for v in self.variables)
         stmt_str = "\n".join(stmt.as_ir(indent + 2) for stmt in self.statements)
-        return f'place {self.variable_type.as_ir()} {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n}}'
+        return f'place {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n}}'
+
+@dataclass
+class RoutingHop(SpatialNode):
+    offset = Tuple[int, int]
+
+    def as_ir(self, indent: int = 0) -> str:
+        return f'({self.offset[0]}, {self.offset[1]})'
 
 
 @dataclass
@@ -258,8 +234,8 @@ class RoutingDeclaration(SpatialNode):
     """
     A routing declaration for a stream, optionally specifying hops and channel.
     """
-    hops: Union[list[Tuple[int, int]], str] = "auto"  # list of hops or 'auto'
-    channel: Union[int, str] = "auto"  # Channel ID or 'auto'
+    hops: Union[list[RoutingHop], Literal["auto"]] = "auto"  # list of hops or 'auto'
+    channel: Union[int, Literal["auto"]] = "auto"  # Channel ID or 'auto'
 
     def validate(self) -> None:
         if isinstance(self.hops, list):
@@ -267,7 +243,7 @@ class RoutingDeclaration(SpatialNode):
                 assert abs(dx) + abs(dy) == 1, "Each hop must have an absolute sum of 1."
 
     def as_ir(self, indent: int = 0) -> str:
-        hops_str = "auto" if self.hops == "auto" else f"[{', '.join(f'({dx}, {dy})' for dx, dy in self.hops)}]"
+        hops_str = "auto" if self.hops == "auto" else f"[{', '.join(hop.as_ir() for hop in self.hops)}]"
         channel_str = "auto" if self.channel == "auto" else str(self.channel)
         return f"hops = {hops_str}, \n{' ' * indent}channel = {channel_str}"
 
@@ -278,7 +254,7 @@ class RelativeStreamDeclaration(SpatialNode):
     A stream declaration inside a dataflow block that declares a communication stream
     to and from PEs at relative positions, with an optional routing declaration.
     """
-    stream_type: StreamType
+    dtype: StreamType
     stream_name: Identifier
     dx: Expression
     dy: Expression
@@ -288,7 +264,7 @@ class RelativeStreamDeclaration(SpatialNode):
         routing_str = ""
         if self.routing:
             routing_str = f" {{\n{self.routing.as_ir(indent + 2)}\n{' ' * indent}}}"
-        return f'stream<{self.stream_type.element_type.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
+        return f'stream<{self.dtype.element_type.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
 
 ###
 # Dataflow Block
@@ -457,7 +433,7 @@ class ComputeBlock(SpatialNode):
         return f'compute {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n}}'
 
 ###
-# Phases
+# Phases & Kernels
 ###
 
 @dataclass
@@ -465,14 +441,66 @@ class Phase(SpatialNode):
     """
     Encapsulates a phase of data placement, communication, and computation.
     """
-    placement: list[PlaceBlock]
+    place: list[PlaceBlock]
     dataflow: list[DataflowBlock]
     compute: list[ComputeBlock]
 
     def as_ir(self, indent: int = 0) -> str:
         phase_str = "phase {\n"
-        dataflow_str = "\n".join(df.as_ir(indent + 2) for df in self.dataflows)
-        compute_str = "\n".join(cmp.as_ir(indent + 2) for cmp in self.computes)
-        place_str = "\n".join(pl.as_ir(indent + 2) for pl in self.places)
+        dataflow_str = "\n".join(df.as_ir(indent + 2) for df in self.dataflow)
+        compute_str = "\n".join(cmp.as_ir(indent + 2) for cmp in self.compute)
+        place_str = "\n".join(pl.as_ir(indent + 2) for pl in self.place)
         return f'{phase_str}{dataflow_str}\n{compute_str}\n{place_str}\n{" " * indent}}}'
 
+
+@dataclass
+class KernelArgument(SpatialNode):
+    """
+    A kernel argument of a given type.
+    """
+    dtype: Union[ScalarType, ArrayType, StreamType]
+    identifier: Identifier
+    readonly: bool = False
+    writeonly: bool = False
+    compiletime: bool = False
+
+    def validate(self) -> None:
+        assert isinstance(self.dtype, (ScalarType, ArrayType, StreamType))
+        assert isinstance(self.identifier, Identifier)
+
+    def as_ir(self, indent: int = 0) -> str:
+        annotations = []
+        if self.readonly:
+            annotations.append('readonly')
+        if self.writeonly:
+            annotations.append('writeonly')
+        if self.compiletime:
+            annotations.append('compiletime')
+        ann_str = " ".join(annotations)
+        if ann_str:
+            return f'{self.dtype.as_ir()} {ann_str} {self.identifier.as_ir()}'
+        return f'{self.dtype.as_ir()} {self.identifier.as_ir()}'
+
+
+@dataclass
+class Kernel(SpatialNode):
+    """
+    A kernel definition.
+    """
+    name: str | None
+    parameters: list[Parameter]
+    arguments: list[KernelArgument]
+    body: list[PlaceBlock | DataflowBlock | ComputeBlock | Phase]
+
+    def validate(self) -> None:
+        assert all(isinstance(p, Parameter) for p in self.parameters)
+        assert all(isinstance(arg, KernelArgument) for arg in self.arguments)
+        assert all(isinstance(stmt, (Phase, ComputeBlock, DataflowBlock, PlaceBlock)) for stmt in self.body)
+        assert self.validate_schema()
+
+    def as_ir(self, indent: int = 0) -> str:
+        param_str = ", ".join(p.as_ir() for p in self.parameters)
+        arg_str = ", ".join(arg.as_ir() for arg in self.arguments)
+        body_str = "\n".join(stmt.as_ir(indent + 2) for stmt in self.body)
+        return f'kernel @{self.name}<{param_str}>({arg_str}) {{\n{body_str}\n}}' if self.name \
+            else f'kernel<{param_str}>({arg_str}) {{\n{body_str}\n}}'
