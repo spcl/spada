@@ -3,6 +3,8 @@ from dataclasses import dataclass
 
 import spatialstencil.syntax.stencil_ir.irnodes as sast
 import spatialstencil.syntax.spatial_ir.irnodes as spa
+from spatialstencil.lowering.versioning import Versioning
+
 from spatialstencil.syntax.common.types import ScalarType
 from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle, split_rectangles, group_rectangles_by_domain
 from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
@@ -21,13 +23,10 @@ AbstractFieldDeclaration = Rectangle[FieldMetadata]
 
 
 class ProgramPlacement:
-    # Mapping from variable names to the number of fields allocated for that variable
-    # Used to generate unique names for variables
-    _var_counter: dict[str, int]
 
-    def __init__(self, domains: DomainCollector):
-        self._var_counter = defaultdict(int)
+    def __init__(self, domains: DomainCollector, versioning: Versioning[spa.Identifier]):
         self.domains = domains
+        self.versioning = versioning
 
     def place_program(self,
                       program: sast.Program) -> list[spa.PlaceBlock]:
@@ -66,11 +65,6 @@ class ProgramPlacement:
         blocks = self._abstract_fields_to_place_blocks(fields)
 
         return blocks
-
-    def _push_identifier(self, name: str) -> sast.Identifier:
-        version = self._var_counter[name]
-        self._var_counter[name] += 1
-        return spa.Identifier(name, version)
 
     def _place_inputs(self, scope: sast.Program | sast.ComputationBlock,
                       domains: DomainCollector) -> list[AbstractFieldDeclaration]:
@@ -130,8 +124,9 @@ class ProgramPlacement:
         subgrid = spa.SubgridExpression(spa.RangeExpression(range_x, range_x_end),
                                         spa.RangeExpression(range_y, range_y_end))
 
-        var_i = self._push_identifier("_i")
-        var_j = self._push_identifier("_j")
+
+        var_i = self.versioning.next_version("_i")
+        var_j = self.versioning.next_version("_j")
 
         place_block = spa.PlaceBlock(variables=[var_i, var_j],
                                      subgrid=subgrid,

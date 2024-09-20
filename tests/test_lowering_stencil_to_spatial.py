@@ -1,10 +1,9 @@
 import unittest
 from pathlib import Path
 
-from spatialstencil.syntax.stencil_ir import type_inference, parser, canonicalization, extent_inference, \
-    domain_inference
 
-from spatialstencil.syntax.stencil_ir.ssa import ScopedVersion, SSAVisitor
+from spatialstencil.syntax.stencil_ir import type_inference, parser
+
 import spatialstencil.syntax.stencil_ir.irnodes as sast
 import spatialstencil.syntax.spatial_ir.irnodes as spast
 
