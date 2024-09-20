@@ -202,7 +202,8 @@ class FieldDeclaration(SpatialNode):
         assert isinstance(self.field_name, Identifier)
 
     def as_ir(self, indent: int = 0) -> str:
-        return f'{self.dtype.as_ir()} {self.field_name.as_ir()}'
+        indent_str = '  ' * indent
+        return f'{indent_str}{self.dtype.as_ir()} {self.field_name.as_ir()}'
 
 ###
 # Place Block
@@ -217,9 +218,10 @@ class PlaceBlock(SpatialNode):
     statements: list[FieldDeclaration]
 
     def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
         vars_str = ", ".join(v.as_ir() for v in self.variables)
-        stmt_str = "\n".join(stmt.as_ir(indent + 2) for stmt in self.statements)
-        return f'place {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n}}'
+        stmt_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.statements)
+        return f'{indent_str}place {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n{indent_str}}}'
 
 @dataclass
 class RoutingHop(SpatialNode):
@@ -243,9 +245,10 @@ class RoutingDeclaration(SpatialNode):
                 assert abs(dx) + abs(dy) == 1, "Each hop must have an absolute sum of 1."
 
     def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
         hops_str = "auto" if self.hops == "auto" else f"[{', '.join(hop.as_ir() for hop in self.hops)}]"
         channel_str = "auto" if self.channel == "auto" else str(self.channel)
-        return f"hops = {hops_str}, \n{' ' * indent}channel = {channel_str}"
+        return f"{indent_str}hops = {hops_str}, \n{indent_str}channel = {channel_str}"
 
 
 @dataclass
@@ -261,10 +264,11 @@ class RelativeStreamDeclaration(SpatialNode):
     routing: Optional[RoutingDeclaration] = None
 
     def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
         routing_str = ""
         if self.routing:
-            routing_str = f" {{\n{self.routing.as_ir(indent + 2)}\n{' ' * indent}}}"
-        return f'stream<{self.dtype.element_type.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
+            routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{' ' * indent}}}"
+        return f'{indent_str}stream<{self.dtype.element_type.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
 
 ###
 # Dataflow Block
@@ -281,9 +285,10 @@ class DataflowBlock(SpatialNode):
     statements: list[RelativeStreamDeclaration]
 
     def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
         vars_str = ", ".join(v.as_ir() for v in self.variables)
-        stmt_str = "\n".join(stmt.as_ir(indent + 2) for stmt in self.statements)
-        return f'dataflow {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n}}'
+        stmt_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.statements)
+        return f'{indent_str}dataflow {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n{indent_str}}}'
 
 ###
 # Compute Block
@@ -307,7 +312,8 @@ class Completion(SpatialNode):
     name: Identifier
 
     def as_ir(self, indent: int = 0) -> str:
-        return f'completion {self.name.as_ir()}'
+        indent_str = '  ' * indent
+        return f'{indent_str}completion {self.name.as_ir()}'
 
 
 # Send Statement
@@ -321,9 +327,10 @@ class SendStatement(Statement):
     completion_name: Optional[Completion] = None
 
     def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
         if self.completion_name:
-            return f'{self.completion_name.as_ir()} = send({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
-        return f'send({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
+            return f'{indent_str}{self.completion_name.as_ir()} = send({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
+        return f'{indent_str}send({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
 
 
 # Receive Statement
@@ -335,7 +342,8 @@ class Receive(SpatialNode):
     stream_name: Identifier
 
     def as_ir(self, indent: int = 0) -> str:
-        return f'receive({self.stream_name.as_ir()})'
+        indent_str = '  ' * indent
+        return f'{indent_str}receive({self.stream_name.as_ir()})'
 
 
 # Foreach Loop (asynchronous)
@@ -351,11 +359,12 @@ class ForeachStatement(Statement):
     parameter_range: Optional[RangeExpression] = None
 
     def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
         vars_str = ", ".join(var.as_ir() for var in self.variables)
-        body_str = "\n".join(stmt.as_ir(indent + 2) for stmt in self.body)
+        body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
         if self.parameter_range:
-            return f'{self.completion_name.as_ir()} = foreach {vars_str} in [{self.parameter_range.as_ir()}, {self.receive_stream.as_ir()}] {{\n{body_str}\n{" " * indent}}}'
-        return f'{self.completion_name.as_ir()} = foreach {vars_str} in [{self.receive_stream.as_ir()}] {{\n{body_str}\n{" " * indent}}}'
+            return f'{indent_str}{self.completion_name.as_ir()} = foreach {vars_str} in [{self.parameter_range.as_ir()}, {self.receive_stream.as_ir()}] {{\n{body_str}\n{indent_str}}}'
+        return f'{indent_str}{self.completion_name.as_ir()} = foreach {vars_str} in [{self.receive_stream.as_ir()}] {{\n{body_str}\n{indent_str}}}'
 
 
 # Map Statement (asynchronous)
@@ -370,9 +379,10 @@ class MapStatement(Statement):
     completion_name: Optional[Completion] = None
 
     def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
         vars_str = ", ".join(var.as_ir() for var in self.variables)
-        body_str = "\n".join(stmt.as_ir(indent + 2) for stmt in self.body)
-        return f'{self.completion_name.as_ir()} = map {vars_str} in [{self.range_expression.as_ir()}] {{\n{body_str}\n{" " * indent}}}'
+        body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
+        return f'{indent_str}{self.completion_name.as_ir()} = map {vars_str} in [{self.range_expression.as_ir()}] {{\n{body_str}\n{indent_str}}}'
 
 
 # Sequential For Loop
@@ -386,9 +396,10 @@ class ForStatement(Statement):
     body: list[Statement]
 
     def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
         vars_str = ", ".join(var.as_ir() for var in self.variables)
-        body_str = "\n".join(stmt.as_ir(indent + 2) for stmt in self.body)
-        return f'for {vars_str} in [{self.range_expression.as_ir()}] {{\n{body_str}\n{" " * indent}}}'
+        body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
+        return f'{indent_str}for {vars_str} in [{self.range_expression.as_ir()}] {{\n{body_str}\n{indent_str}}}'
 
 
 # Asynchronous Block
@@ -401,8 +412,9 @@ class AsyncBlock(Statement):
     completion_name: Optional[Completion] = None
 
     def as_ir(self, indent: int = 0) -> str:
-        body_str = "\n".join(stmt.as_ir(indent + 2) for stmt in self.body)
-        return f'{self.completion_name.as_ir()} = async {{\n{body_str}\n{" " * indent}}}'
+        indent_str = '  ' * indent
+        body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
+        return f'{indent_str}{self.completion_name.as_ir()} = async {{\n{body_str}\n{indent_str}}}'
 
 
 # Await Completion Statement
@@ -414,7 +426,8 @@ class AwaitStatement(Statement):
     completion: Completion
 
     def as_ir(self, indent: int = 0) -> str:
-        return f'await {self.completion.as_ir()}'
+        indent_str = '  ' * indent
+        return f'{indent_str}await {self.completion.as_ir()}'
 
 
 # Compute Block
@@ -428,9 +441,10 @@ class ComputeBlock(SpatialNode):
     statements: list[Statement]
 
     def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
         vars_str = ", ".join(var.as_ir() for var in self.variables)
-        stmt_str = "\n".join(stmt.as_ir(indent + 2) for stmt in self.statements)
-        return f'compute {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n}}'
+        stmt_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.statements)
+        return f'{indent_str}compute {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n{indent_str}}}'
 
 ###
 # Phases & Kernels
@@ -446,11 +460,21 @@ class Phase(SpatialNode):
     compute: list[ComputeBlock]
 
     def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
         phase_str = "phase {\n"
-        dataflow_str = "\n".join(df.as_ir(indent + 2) for df in self.dataflow)
-        compute_str = "\n".join(cmp.as_ir(indent + 2) for cmp in self.compute)
-        place_str = "\n".join(pl.as_ir(indent + 2) for pl in self.place)
-        return f'{phase_str}{dataflow_str}\n{compute_str}\n{place_str}\n{" " * indent}}}'
+        dataflow_str = "\n".join(df.as_ir(indent + 1) for df in self.dataflow)
+        compute_str = "\n".join(cmp.as_ir(indent + 1) for cmp in self.compute)
+        place_str = "\n".join(pl.as_ir(indent + 1) for pl in self.place)
+
+        body_str = ""
+        if dataflow_str:
+            body_str += f'{dataflow_str}\n'
+        if compute_str:
+            body_str += f'{compute_str}\n'
+        if place_str:
+            body_str += f'{place_str}\n'
+
+        return f'{indent_str}{phase_str}{body_str}{indent_str}}}'
 
 
 @dataclass
@@ -501,6 +525,6 @@ class Kernel(SpatialNode):
     def as_ir(self, indent: int = 0) -> str:
         param_str = ", ".join(p.as_ir() for p in self.parameters)
         arg_str = ", ".join(arg.as_ir() for arg in self.arguments)
-        body_str = "\n".join(stmt.as_ir(indent + 2) for stmt in self.body)
+        body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
         return f'kernel @{self.name}<{param_str}>({arg_str}) {{\n{body_str}\n}}' if self.name \
             else f'kernel<{param_str}>({arg_str}) {{\n{body_str}\n}}'
