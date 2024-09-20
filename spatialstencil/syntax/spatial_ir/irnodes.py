@@ -430,6 +430,25 @@ class AwaitStatement(Statement):
         return f'{indent_str}await {self.completion.as_ir()}'
 
 
+# Assignment Statement
+
+@dataclass
+class AssignmentStatement(Statement):
+    """
+    Assigns the result of an expression to a field or variable
+    """
+    source: Expression
+    destination: ArraySlice | Identifier
+
+    def validate(self) -> None:
+        assert isinstance(self.source, Expression)
+        assert isinstance(self.destination, (ArraySlice, Identifier))
+
+    def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
+        return f'{indent_str}{self.destination.as_ir()} = {self.source.as_ir()}'
+
+
 # Compute Block
 @dataclass
 class ComputeBlock(SpatialNode):
