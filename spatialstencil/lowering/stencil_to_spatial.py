@@ -1,5 +1,6 @@
 import spatialstencil.syntax.stencil_ir.irnodes as sast
 import spatialstencil.syntax.spatial_ir.irnodes as spa
+from spatialstencil.lowering.stencil_to_spatial_dataflow import declare_dataflow_for_computation
 from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
 
 from spatialstencil.lowering.versioning import Versioning
@@ -27,24 +28,25 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
     domain_collector = DomainCollector()
     domain_collector.visit(stencil)
 
-    arguments = kernel_arguments(stencil, domain_collector)
-
     versioning = Versioning[spa.Identifier](spa.Identifier)
-
     placement = ProgramPlacement(domain_collector, versioning)
 
-    body = placement.place_program(stencil)
+    body = []
+    body.extend(placement.place_program(stencil))
 
     # Input generation:
+    arguments = kernel_arguments(stencil, domain_collector)
     compute = input_phase(body, arguments, versioning)
 
     body.extend(compute)
+
+    x_y_shift = domain_collector.get_shift()[0:2]
 
     for comp in stencil.computations:
 
         if isinstance(comp, sast.ComputationBlock):
             place = placement.place_computation(comp)
-            dataflow = declare_dataflow_for_computation(comp)
+            dataflow = declare_dataflow_for_computation(comp, versioning, x_y_shift)
             compute = generate_computation(comp)
             phase = spa.Phase(place=place, dataflow=dataflow, compute=compute)
 
@@ -130,9 +132,6 @@ def input_phase(body: list[spa.PlaceBlock],
     return compute
 
 
-def declare_dataflow_for_computation(comp: sast.ComputationBlock) -> list[spa.DataflowBlock]:
-    # TODO: Implement
-    return []
 
 def generate_computation(comp: sast.ComputationBlock) -> list[spa.ComputeBlock]:
     # TODO: Implement

@@ -43,6 +43,16 @@ class DomainCollector(sast.ScopedNodeVisitor):
         self._union_domain = domain
         return domain
 
+    def get_shift(self):
+        union_domain = self.get_union_domain()
+
+        shift_x = -union_domain.x[0] if union_domain.x[0] < 0 else 0
+        shift_y = -union_domain.y[0] if union_domain.y[0] < 0 else 0
+        shift_z = -union_domain.z[0] if union_domain.z[0] < 0 else 0
+
+        return shift_x, shift_y, shift_z
+
+
     def get_shifted_domain(self, identifier: sast.Identifier, scope: sast.Program | sast.ComputationBlock) -> sast.Cartesian | None:
         """
         Get the domain of an identifier in a given scope, where the negative values have been shifted to 0.
@@ -54,11 +64,8 @@ class DomainCollector(sast.ScopedNodeVisitor):
         domain = self.get_domain(identifier, scope)
         if domain is None:
             return None
-        union_domain = self.get_union_domain()
 
-        shift_x = -union_domain.x[0] if union_domain.x[0] < 0 else 0
-        shift_y = -union_domain.y[0] if union_domain.y[0] < 0 else 0
-        shift_z = -union_domain.z[0] if union_domain.z[0] < 0 else 0
+        shift_x, shift_y, shift_z = self.get_shift()
 
         return sast.Cartesian(
             x=sast.Interval(domain.x[0] + shift_x, domain.x[1] + shift_x),

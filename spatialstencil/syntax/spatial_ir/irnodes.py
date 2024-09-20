@@ -189,6 +189,17 @@ class SubgridExpression(SpatialNode):
     x_range: RangeExpression
     y_range: RangeExpression
 
+    @staticmethod
+    def from_tuple(x: tuple[int, int], y: tuple[int, int]) -> 'SubgridExpression':
+        range_x = Expression(ConstantLiteral(x[0], ScalarType.i32), ScalarType.i32)
+        range_x_end = Expression(ConstantLiteral(x[1], ScalarType.i32), ScalarType.i32)
+        range_y = Expression(ConstantLiteral(y[0], ScalarType.i32), ScalarType.i32)
+        range_y_end = Expression(ConstantLiteral(y[1], ScalarType.i32), ScalarType.i32)
+
+        subgrid = SubgridExpression(RangeExpression(range_x, range_x_end),
+                                    RangeExpression(range_y, range_y_end))
+        return subgrid
+
     def as_ir(self, indent: int = 0) -> str:
         return f'[{self.x_range.as_ir()} , {self.y_range.as_ir()}]'
 
@@ -228,9 +239,13 @@ class PlaceBlock(SpatialNode):
         stmt_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.statements)
         return f'{indent_str}place {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n{indent_str}}}'
 
+
 @dataclass
 class RoutingHop(SpatialNode):
-    offset = Tuple[int, int]
+    """
+    Represents one hop of dx, dy data movement
+    """
+    offset = tuple[int, int]
 
     def as_ir(self, indent: int = 0) -> str:
         return f'({self.offset[0]}, {self.offset[1]})'
@@ -273,7 +288,7 @@ class RelativeStreamDeclaration(SpatialNode):
         routing_str = ""
         if self.routing:
             routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{' ' * indent}}}"
-        return f'{indent_str}stream<{self.dtype.element_type.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
+        return f'{indent_str}stream<{self.dtype.dtype.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
 
 ###
 # Dataflow Block

@@ -116,14 +116,7 @@ class ProgramPlacement:
             assert field.x_range == x_range, "All fields must be allocated in the same x range"
             assert field.y_range == y_range, "All fields must be allocated in the same y range"
 
-        range_x = spa.Expression(spa.ConstantLiteral(x_range[0], ScalarType.i32), ScalarType.i32)
-        range_x_end = spa.Expression(spa.ConstantLiteral(x_range[1], ScalarType.i32), ScalarType.i32)
-        range_y = spa.Expression(spa.ConstantLiteral(y_range[0], ScalarType.i32), ScalarType.i32)
-        range_y_end = spa.Expression(spa.ConstantLiteral(y_range[1], ScalarType.i32), ScalarType.i32)
-
-        subgrid = spa.SubgridExpression(spa.RangeExpression(range_x, range_x_end),
-                                        spa.RangeExpression(range_y, range_y_end))
-
+        subgrid = spa.SubgridExpression.from_tuple(x_range, y_range)
 
         var_i = self.versioning.next_version("_i")
         var_j = self.versioning.next_version("_j")
