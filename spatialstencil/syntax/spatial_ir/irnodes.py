@@ -72,15 +72,15 @@ class ArrayType(SpatialNode, IRType):
     An array type of a scalar or stream, with one or more dimensions.
     """
     base_type: Union[ScalarType, StreamType]
-    dimensions: list[Union[int, Parameter]]
+    shape: list[Union[int, Parameter]]
 
     def validate(self) -> None:
-        assert isinstance(self.dimensions, list)
-        assert all(isinstance(dim, (int, Parameter)) for dim in self.dimensions)
-        assert len(self.dimensions) > 0
+        assert isinstance(self.shape, list)
+        assert all(isinstance(dim, (int, Parameter)) for dim in self.shape)
+        assert len(self.shape) > 0
 
     def as_ir(self, indent: int = 0) -> str:
-        dims = ", ".join(str(dim.as_ir() if isinstance(dim, SpatialNode) else dim) for dim in self.dimensions)
+        dims = ", ".join(str(dim.as_ir() if isinstance(dim, SpatialNode) else dim) for dim in self.shape)
         return f'{self.base_type.as_ir()}[{dims}]'
 
 
@@ -129,12 +129,17 @@ class ArraySlice(SpatialNode):
     array: Identifier
     indices: list[Union[int, Identifier, 'RangeExpression']]  # Handles single-index or ranges
 
+    def validate(self) -> None:
+        assert isinstance(self.array, Identifier)
+        assert isinstance(self.indices, list)
+        assert all(isinstance(idx, (int, Identifier, RangeExpression)) for idx in self.indices)
+
     def as_ir(self, indent: int = 0) -> str:
         index_strs = []
         for idx in self.indices:
-            if isinstance(idx, RangeExpression):
+            if isinstance(idx, (RangeExpression, Identifier)):
                 index_strs.append(idx.as_ir())
-            elif isinstance(idx, Identifier) or isinstance(idx, int):
+            elif isinstance(idx, int):
                 index_strs.append(str(idx))
         index_str = ", ".join(index_strs)
         return f'{self.array.as_ir()}[{index_str}]'
@@ -284,6 +289,11 @@ class DataflowBlock(SpatialNode):
     subgrid: SubgridExpression
     statements: list[RelativeStreamDeclaration]
 
+    def validate(self) -> None:
+        assert all(isinstance(var, Identifier) for var in self.variables)
+        assert all(isinstance(stmt, RelativeStreamDeclaration) for stmt in self.statements)
+        assert len(self.variables) == 2
+
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         vars_str = ", ".join(v.as_ir() for v in self.variables)
@@ -362,9 +372,16 @@ class ForeachStatement(Statement):
         indent_str = '  ' * indent
         vars_str = ", ".join(var.as_ir() for var in self.variables)
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
+
         if self.parameter_range:
-            return f'{indent_str}{self.completion_name.as_ir()} = foreach {vars_str} in [{self.parameter_range.as_ir()}, {self.receive_stream.as_ir()}] {{\n{body_str}\n{indent_str}}}'
-        return f'{indent_str}{self.completion_name.as_ir()} = foreach {vars_str} in [{self.receive_stream.as_ir()}] {{\n{body_str}\n{indent_str}}}'
+            main_str = f'foreach {vars_str} in [{self.parameter_range.as_ir()}, {self.receive_stream.as_ir()}] {{\n{body_str}\n{indent_str}}}'
+        else:
+            main_str = f'foreach {vars_str} in [{self.receive_stream.as_ir()}] {{\n{body_str}\n{indent_str}}}'
+
+        if self.completion_name:
+            return f'{indent_str}{self.completion_name.as_ir()} = {main_str}'
+        else:
+            return f'{indent_str}await {main_str}'
 
 
 # Map Statement (asynchronous)
@@ -458,6 +475,11 @@ class ComputeBlock(SpatialNode):
     variables: list[Identifier]
     subgrid: SubgridExpression
     statements: list[Statement]
+
+    def validate(self) -> None:
+        assert all(isinstance(var, Identifier) for var in self.variables)
+        assert all(isinstance(stmt, Statement) for stmt in self.statements)
+        assert len(self.variables) == 2
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
