@@ -9,9 +9,9 @@ class SpatialNode(BaseNode):
     """
     Base class for all spatial IR nodes.
     """
+
     def as_ir(self, indent: int = 0) -> str:
         raise NotImplementedError()
-
 
 
 # Constant Literals
@@ -154,7 +154,8 @@ class Expression(SpatialNode):
     dtype: ScalarType
 
     def validate(self) -> None:
-        assert isinstance(self.value, (Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator))
+        assert isinstance(self.value,
+                          (Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator))
         assert isinstance(self.dtype, ScalarType)
 
     def as_ir(self, indent: int = 0) -> str:
@@ -180,6 +181,7 @@ class RangeExpression(SpatialNode):
         if self.step:
             return f'{self.start.as_ir()}:{self.stop.as_ir()}:{self.step.as_ir()}'
         return f'{self.start.as_ir()}:{self.stop.as_ir()}'
+
 
 @dataclass
 class SubgridExpression(SpatialNode):
@@ -210,6 +212,7 @@ class FieldDeclaration(SpatialNode):
         indent_str = '  ' * indent
         return f'{indent_str}{self.dtype.as_ir()} {self.field_name.as_ir()}'
 
+
 ###
 # Place Block
 ###
@@ -227,6 +230,7 @@ class PlaceBlock(SpatialNode):
         vars_str = ", ".join(v.as_ir() for v in self.variables)
         stmt_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.statements)
         return f'{indent_str}place {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n{indent_str}}}'
+
 
 @dataclass
 class RoutingHop(SpatialNode):
@@ -275,6 +279,7 @@ class RelativeStreamDeclaration(SpatialNode):
             routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{' ' * indent}}}"
         return f'{indent_str}stream<{self.dtype.element_type.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
 
+
 ###
 # Dataflow Block
 ###
@@ -300,9 +305,11 @@ class DataflowBlock(SpatialNode):
         stmt_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.statements)
         return f'{indent_str}dataflow {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n{indent_str}}}'
 
+
 ###
 # Compute Block
 ###
+
 
 # Base class for all statements in the compute block
 @dataclass
@@ -449,6 +456,7 @@ class AwaitStatement(Statement):
 
 # Assignment Statement
 
+
 @dataclass
 class AssignmentStatement(Statement):
     """
@@ -487,9 +495,11 @@ class ComputeBlock(SpatialNode):
         stmt_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.statements)
         return f'{indent_str}compute {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n{indent_str}}}'
 
+
 ###
 # Phases & Kernels
 ###
+
 
 @dataclass
 class Phase(SpatialNode):
