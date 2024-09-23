@@ -50,6 +50,8 @@ class Identifier(SpatialNode):
     version: int
 
     def as_ir(self, indent: int = 0) -> str:
+        if not self.version:
+            return self.name
         return f'{self.name}#{self.version}'
 
 
@@ -59,10 +61,10 @@ class StreamType(SpatialNode, IRType):
     """
     A stream type that sends elements of type T.
     """
-    dtype: ScalarType
+    element_type: ScalarType
 
     def as_ir(self, indent: int = 0) -> str:
-        return f'stream<{self.dtype.as_ir()}>'
+        return f'stream<{self.element_type.as_ir()}>'
 
 
 # Arrays
