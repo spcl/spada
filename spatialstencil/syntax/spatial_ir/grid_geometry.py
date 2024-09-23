@@ -7,6 +7,47 @@ class Rectangle[T]:
     y_range: tuple[int, int]
     metadata: T
 
+    def contains_point(self, x: int, y: int) -> bool:
+        """
+        Return True if the point (x, y) is contained in the rectangle.
+
+        :param x:
+        :param y:
+        :return:
+        """
+        return self.x_range[0] <= x < self.x_range[1] and self.y_range[0] <= y < self.y_range[1]
+
+    def is_subset_of(self, other: 'Rectangle') -> bool:
+        """
+        Return True if this rectangle is a subset of another rectangle.
+
+        :param other:
+        :return:
+        """
+        return other.x_range[0] <= self.x_range[0] and other.x_range[1] >= self.x_range[1] and \
+               other.y_range[0] <= self.y_range[0] and other.y_range[1] >= self.y_range[1]
+
+    def is_equal(self, other: 'Rectangle') -> bool:
+        """
+        Return True if the two rectangles are equal, i.e., have the same x and y ranges.
+
+        :param other: The other rectangle
+        :return: True if the rectangles are equal, False otherwise
+        """
+        return self.x_range == other.x_range and self.y_range == other.y_range
+
+    def intersects(self, other: 'Rectangle') -> bool:
+        """
+        Check if this rectangle intersects with another rectangle.
+
+        :param other: The other rectangle
+        :return: True if the rectangles intersect, False otherwise
+        """
+        return _rectangles_intersect(self, other)
+
+    def __str__(self):
+        return f"[{self.x_range[0]}, {self.x_range[1]}) x [{self.y_range[0]}, {self.y_range[1]}) - {self.metadata}"
+
 
 ###
 # RECTANGLE SPLITTING
@@ -67,11 +108,6 @@ def split_rectangle(rect1: Rectangle, rect2: Rectangle) -> list[Rectangle]:
             y_range=y_overlap,
             metadata=rect1.metadata
         ))
-        new_rectangles.append(Rectangle(
-            x_range=x_overlap,
-            y_range=y_overlap,
-            metadata=rect2.metadata
-        ))
 
     # Now create the remaining parts of rect1 that do not overlap
     if rect1.x_range[0] < x_overlap[0]:
@@ -112,30 +148,35 @@ def split_rectangles(rectangles: list[Rectangle]) -> list[Rectangle]:
     :param rectangles: A list of rectangles to split
     :return: A list of non-overlapping rectangles (preserving metadata)
     """
+    result = rectangles.copy()
     i = 0
-    while i < len(rectangles):
-        rect1 = rectangles[i]
+    while i < len(result):
         has_split = False
-        for j in range(len(rectangles)):
+        rect1 = result[i]
+        for j in range(len(result)):
             if i != j:
-                rect2 = rectangles[j]
-                if _rectangles_intersect(rect1, rect2) and not _rectangles_equal(rect1, rect2):
+                rect2 = result[j]
+                if rect1.intersects(rect2) and not rect1.is_equal(rect2):
                     # Split rect1 by rect2
                     split_result = split_rectangle(rect1, rect2)
                     # Replace rect1 with the resulting smaller rectangles
-                    rectangles.pop(i)
-                    rectangles.extend(split_result)
+                    result.pop(i)
+                    result.extend(split_result)
                     has_split = True
                     break
+
         if not has_split:
+            # Loop invariant: No non-equal intersections between rectangles for indices <= i
+            assert all(not result[k].intersects(result[j]) or result[k].is_equal(result[j])
+                       for j in range(len(result)) for k in range(i+1))
             i += 1
 
-    # Postcondition:
+    # Post-condition:
     # Assert that there are no intersections left (except for equal rectangles)
-    assert all(not _rectangles_intersect(rect1, rect2) or _rectangles_equal(rect1, rect2)
-               for rect1 in rectangles for rect2 in rectangles)
+    assert all(not rect1.intersects(rect2) or rect1.is_equal(rect2)
+               for rect1 in result for rect2 in result)
 
-    return rectangles
+    return result
 
 
 ###
