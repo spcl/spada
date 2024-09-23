@@ -193,6 +193,15 @@ class SubgridExpression(SpatialNode):
     x_range: RangeExpression
     y_range: RangeExpression
 
+    def get_grid_size(self) -> tuple[int, int]:
+        expr_x, expr_y = self.x_range.stop.value, self.y_range.stop.value
+        if not isinstance(expr_x, ConstantLiteral):
+            raise TypeError(f'Cannot obtain concrete grid size. x range value "{expr_x.as_ir()}" is not constant')
+        if not isinstance(expr_y, ConstantLiteral):
+            raise TypeError(f'Cannot obtain concrete grid size. y range value "{expr_y.as_ir()}" is not constant')
+
+        return expr_x.value, expr_y.value
+
     def as_ir(self, indent: int = 0) -> str:
         return f'[{self.x_range.as_ir()} , {self.y_range.as_ir()}]'
 
@@ -226,6 +235,9 @@ class PlaceBlock(SpatialNode):
     variables: list[Identifier]
     subgrid: SubgridExpression
     statements: list[FieldDeclaration]
+
+    def get_grid_size(self) -> tuple[int, int]:
+        return self.subgrid.get_grid_size()
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -300,6 +312,9 @@ class DataflowBlock(SpatialNode):
         assert all(isinstance(var, Identifier) for var in self.variables)
         assert all(isinstance(stmt, RelativeStreamDeclaration) for stmt in self.statements)
         assert len(self.variables) == 2
+
+    def get_grid_size(self) -> tuple[int, int]:
+        return self.subgrid.get_grid_size()
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -491,6 +506,9 @@ class ComputeBlock(SpatialNode):
         assert all(isinstance(stmt, Statement) for stmt in self.statements)
         assert len(self.variables) == 2
 
+    def get_grid_size(self) -> tuple[int, int]:
+        return self.subgrid.get_grid_size()
+
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         vars_str = ", ".join(var.as_ir() for var in self.variables)
@@ -511,6 +529,23 @@ class Phase(SpatialNode):
     place: list[PlaceBlock]
     dataflow: list[DataflowBlock]
     compute: list[ComputeBlock]
+
+    def get_grid_size(self) -> tuple[int, int]:
+        max_grid_size = [0, 0]
+        for block in self.place:
+            gs = block.get_grid_size()
+            max_grid_size[0] = max(max_grid_size[0], gs[0])
+            max_grid_size[1] = max(max_grid_size[1], gs[1])
+        for block in self.dataflow:
+            gs = block.get_grid_size()
+            max_grid_size[0] = max(max_grid_size[0], gs[0])
+            max_grid_size[1] = max(max_grid_size[1], gs[1])
+        for block in self.compute:
+            gs = block.get_grid_size()
+            max_grid_size[0] = max(max_grid_size[0], gs[0])
+            max_grid_size[1] = max(max_grid_size[1], gs[1])
+
+        return tuple(max_grid_size)
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -574,6 +609,15 @@ class Kernel(SpatialNode):
         assert all(isinstance(arg, KernelArgument) for arg in self.arguments)
         assert all(isinstance(stmt, (Phase, ComputeBlock, DataflowBlock, PlaceBlock)) for stmt in self.body)
         assert self.validate_schema()
+
+    def get_grid_size(self) -> tuple[int, int]:
+        max_grid_size = [0, 0]
+        for block in self.body:
+            gs = block.get_grid_size()
+            max_grid_size[0] = max(max_grid_size[0], gs[0])
+            max_grid_size[1] = max(max_grid_size[1], gs[1])
+
+        return tuple(max_grid_size)
 
     def as_ir(self, indent: int = 0) -> str:
         param_str = ", ".join(p.as_ir() for p in self.parameters)
