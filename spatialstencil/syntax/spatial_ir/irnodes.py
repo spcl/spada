@@ -257,7 +257,7 @@ class RoutingDeclaration(SpatialNode):
         indent_str = '  ' * indent
         hops_str = "auto" if self.hops == "auto" else f"[{', '.join(hop.as_ir() for hop in self.hops)}]"
         channel_str = "auto" if self.channel == "auto" else str(self.channel)
-        return f"{indent_str}hops = {hops_str}, \n{indent_str}channel = {channel_str}"
+        return f"{indent_str}hops = {hops_str},\n{indent_str}channel = {channel_str}"
 
 
 @dataclass
