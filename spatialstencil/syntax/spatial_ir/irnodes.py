@@ -59,10 +59,10 @@ class StreamType(SpatialNode, IRType):
     """
     A stream type that sends elements of type T.
     """
-    dtype: ScalarType
+    element_type: ScalarType
 
     def as_ir(self, indent: int = 0) -> str:
-        return f'stream<{self.dtype.as_ir()}>'
+        return f'stream<{self.element_type.as_ir()}>'
 
 
 # Arrays
@@ -202,6 +202,7 @@ class SubgridExpression(SpatialNode):
                                     RangeExpression(range_y, range_y_end))
         return subgrid
 
+
     def as_ir(self, indent: int = 0) -> str:
         return f'[{self.x_range.as_ir()} , {self.y_range.as_ir()}]'
 
@@ -291,7 +292,7 @@ class RelativeStreamDeclaration(SpatialNode):
         routing_str = ""
         if self.routing:
             routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{' ' * indent}}}"
-        return f'{indent_str}stream<{self.dtype.dtype.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
+        return f'{indent_str}stream<{self.dtype.element_type.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
 
 
 ###

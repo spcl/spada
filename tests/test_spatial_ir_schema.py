@@ -3,7 +3,8 @@ import unittest
 from spatialstencil.syntax.spatial_ir.irnodes import Kernel
 
 
-class TestStencilIR(unittest.TestCase):
+class TestSpatialIR(unittest.TestCase):
+
     def test_validate_stencil_schema(self):
         Kernel.validate_schema()
 
