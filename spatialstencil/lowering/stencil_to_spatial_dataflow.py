@@ -1,3 +1,4 @@
+from collections import defaultdict
 from dataclasses import dataclass
 
 import spatialstencil.syntax.stencil_ir.irnodes as sast
@@ -25,70 +26,120 @@ class StreamMetadata:
 AbstractStream = Rectangle[StreamMetadata]
 
 
-def declare_dataflow_for_computation(comp: sast.ComputationBlock,
-                                     versioning: Versioning[spa.Identifier],
-                                     offset_domain: tuple[int, int]) -> list[spa.DataflowBlock]:
+class ProgramDataflow:
 
-    # For every statement generate a stream for each non-zero extent
+    domain_collector: DomainCollector
+    versioning: Versioning[spa.Identifier]
+    # Maps [input_field][output_field][offset] -> stream
+    # the destination field is the first 
+    _stream_map: dict[sast.Identifier, dict[sast.Identifier, dict[sast.Offset, spa.Identifier]]]
 
-    abstract_streams = []
+    def __init__(self, domain_collector: DomainCollector, versioning: Versioning[spa.Identifier]):
+        self.versioning = versioning
+        self.domain_collector = domain_collector
+        self.offset_domain = domain_collector.get_shift()[0:2]
+        self._stream_map = defaultdict(lambda: defaultdict(dict))
 
-    for stmt in comp.body:
-        if isinstance(stmt, sast.StatementBlock):
-            for acess, access_type in zip(stmt.inputs, stmt.operation_type.source):
-                if isinstance(access_type, sast.ViewType):
-                    for extent in access_type.extent.extents:
-                        dx = -extent.values[0]
-                        dy = -extent.values[1]
-                        assert isinstance(dx, int)
-                        assert isinstance(dy, int)
-                        if dx or dy:
-                            stream_type = spa.StreamType(access_type.dtype)
-                            identifier = versioning.next_version(f'_stream_{acess.name}')
+    def get_stream(self,
+                   input_id: sast.Identifier,
+                   output_id: sast.Identifier,
+                   offset: sast.Offset) -> spa.Identifier | None:
+        if input_id not in self._stream_map:
+            return None
+        if output_id not in self._stream_map[input_id]:
+            return None
+        if offset not in self._stream_map[input_id][output_id]:
+            return None
+        return self._stream_map[input_id][output_id][offset]
 
-                            metadata = StreamMetadata(
-                                stream_type,
-                                identifier,
-                                dx,
-                                dy
-                            )
-                            # Generate stream
-                            assert isinstance(access_type.domain, sast.Cartesian)
-                            x_range = (access_type.domain.x[0]+offset_domain[0], access_type.domain.x[1]+offset_domain[1])
-                            y_range = (access_type.domain.y[0]+offset_domain[0], access_type.domain.y[1]+offset_domain[1])
-                            astream = AbstractStream(x_range, y_range, metadata)
-                            abstract_streams.append(astream)
+    def _set_stream(self,
+                    input_id: sast.Identifier,
+                    output_id: sast.Identifier,
+                    offset: sast.Offset,
+                    stream: spa.Identifier):
+        self._stream_map[input_id][output_id][offset] = stream
+        print(f"Set stream {stream} from {input_id} to {output_id} with offset {offset}")
 
-    abstract_streams = split_rectangles(abstract_streams)
-    grouped = group_rectangles_by_domain(abstract_streams)
+    def declare_dataflow_for_computation(self,
+                                         comp: sast.ComputationBlock) -> list[spa.DataflowBlock]:
+        """
+        Generate dataflow blocks for a computation block.
 
-    blocks = []
+        :param comp:
+        :return:
+        """
 
-    for group in grouped:
-        # Generate a dataflow block from the abstract declaration
-        declarations = []
+        # TODO: Keep track of a mapping from statements (or views) to participating streams
+        # For every statement generate a stream for each non-zero extent
 
-        x_range = group[0].x_range
-        y_range = group[0].y_range
+        abstract_streams = []
 
-        for rect in group:
+        for stmt in comp.body:
+            if isinstance(stmt, sast.StatementBlock):
+                for access, access_type in zip(stmt.inputs, stmt.operation_type.source):
+                    if isinstance(access_type, sast.ViewType):
+                        for extent in access_type.extent.extents:
+                            dx = -extent.values[0]
+                            dy = -extent.values[1]
+                            assert isinstance(dx, int)
+                            assert isinstance(dy, int)
+                            if dx or dy:
+                                stream_type = spa.StreamType(access_type.dtype)
+                                identifier = self.versioning.next_version(f'_stream_{access.name}')
 
-            stream = spa.RelativeStreamDeclaration(
-                dtype=rect.metadata.stream_type,
-                stream_name=rect.metadata.identifier,
-                dx=spa.Expression(spa.ConstantLiteral(rect.metadata.dx, dtype=ScalarType.i32), ScalarType.i32),
-                dy=spa.Expression(spa.ConstantLiteral(rect.metadata.dy, dtype=ScalarType.i32), ScalarType.i32)
-            )
-            declarations.append(stream)
+                                metadata = StreamMetadata(
+                                    stream_type,
+                                    identifier,
+                                    dx,
+                                    dy
+                                )
 
-        var_i = versioning.next_version("_i")
-        var_j = versioning.next_version("_j")
+                                self._set_stream(access, stmt.outputs[0], extent, identifier)
 
-        subgrid = spa.SubgridExpression.from_tuple(x_range, y_range)
+                                # Generate stream
+                                assert isinstance(access_type.domain, sast.Cartesian)
+                                x_range = (access_type.domain.x[0]+self.offset_domain[0],
+                                           access_type.domain.x[1]+self.offset_domain[1])
+                                y_range = (access_type.domain.y[0]+self.offset_domain[0],
+                                           access_type.domain.y[1]+self.offset_domain[1])
+                                astream = AbstractStream(x_range, y_range, metadata)
+                                abstract_streams.append(astream)
 
-        block = spa.DataflowBlock(variables=[var_i, var_j],
-                                  subgrid=subgrid,
-                                  statements=declarations)
-        blocks.append(block)
+        blocks = self._abstract_declarations_to_block(abstract_streams)
 
-    return blocks
+        return blocks
+
+    def _abstract_declarations_to_block(self, abstract_streams: list[AbstractStream]) -> list[spa.DataflowBlock]:
+
+        abstract_streams = split_rectangles(abstract_streams)
+        grouped = group_rectangles_by_domain(abstract_streams)
+
+        blocks = []
+        # Generate dataflow blocks from the abstract declarations
+        for group in grouped:
+            declarations = []
+
+            x_range = group[0].x_range
+            y_range = group[0].y_range
+
+            for rect in group:
+
+                stream = spa.RelativeStreamDeclaration(
+                    dtype=rect.metadata.stream_type,
+                    stream_name=rect.metadata.identifier,
+                    dx=spa.Expression(spa.ConstantLiteral(rect.metadata.dx, dtype=ScalarType.i32), ScalarType.i32),
+                    dy=spa.Expression(spa.ConstantLiteral(rect.metadata.dy, dtype=ScalarType.i32), ScalarType.i32)
+                )
+                declarations.append(stream)
+
+            var_i = self.versioning.next_version("_i")
+            var_j = self.versioning.next_version("_j")
+
+            subgrid = spa.SubgridExpression.from_tuple(x_range, y_range)
+
+            block = spa.DataflowBlock(variables=[var_i, var_j],
+                                      subgrid=subgrid,
+                                      statements=declarations)
+            blocks.append(block)
+
+        return blocks

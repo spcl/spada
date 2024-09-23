@@ -1,6 +1,6 @@
 import spatialstencil.syntax.stencil_ir.irnodes as sast
 import spatialstencil.syntax.spatial_ir.irnodes as spa
-from spatialstencil.lowering.stencil_to_spatial_dataflow import declare_dataflow_for_computation
+from spatialstencil.lowering.stencil_to_spatial_dataflow import ProgramDataflow
 from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
 
 from spatialstencil.lowering.versioning import Versioning
@@ -30,7 +30,7 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
 
     versioning = Versioning[spa.Identifier](spa.Identifier)
     placement = ProgramPlacement(domain_collector, versioning)
-
+    dataflow = ProgramDataflow(domain_collector, versioning)
     body = []
     body.extend(placement.place_program(stencil))
 
@@ -40,19 +40,19 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
 
     body.extend(compute)
 
-    x_y_shift = domain_collector.get_shift()[0:2]
-
     for comp in stencil.computations:
 
         if isinstance(comp, sast.ComputationBlock):
             place = placement.place_computation(comp)
-            dataflow = declare_dataflow_for_computation(comp, versioning, x_y_shift)
+            flow = dataflow.declare_dataflow_for_computation(comp)
             compute = generate_computation(comp)
-            phase = spa.Phase(place=place, dataflow=dataflow, compute=compute)
+            phase = spa.Phase(place=place, dataflow=flow, compute=compute)
 
             body.append(phase)
+            # TODO Pass that applies rectangle splitting to the whole phase across block types
 
     kernel = spa.Kernel(name="", parameters=[], arguments=arguments, body=body)
+
     return kernel
 
 
