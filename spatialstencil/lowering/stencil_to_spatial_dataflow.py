@@ -58,7 +58,6 @@ def declare_dataflow_for_computation(comp: sast.ComputationBlock,
                             y_range = (access_type.domain.y[0]+offset_domain[0], access_type.domain.y[1]+offset_domain[1])
                             astream = AbstractStream(x_range, y_range, metadata)
                             abstract_streams.append(astream)
-                            print(astream)
 
     abstract_streams = split_rectangles(abstract_streams)
     grouped = group_rectangles_by_domain(abstract_streams)
@@ -67,7 +66,6 @@ def declare_dataflow_for_computation(comp: sast.ComputationBlock,
 
     for group in grouped:
         # Generate a dataflow block from the abstract declaration
-        print(group)
         declarations = []
 
         x_range = group[0].x_range

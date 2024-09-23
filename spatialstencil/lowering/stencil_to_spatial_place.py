@@ -59,7 +59,8 @@ class ProgramPlacement:
                 domain = self.domains.get_shifted_domain(op.result, comp)
                 assert domain is not None, f"Domain for result {op.result} not found in computation {comp}"
                 # Allocate a field for the result
-                field = self._allocate_field(op.result, op.operation_type.destination[0].dtype, domain)
+                multiplicity = len(op.operation_type.destination[0].extent.extents)
+                field = self._allocate_field(op.result, op.operation_type.destination[0].dtype, domain, multiplicity)
                 fields.append(field)
 
         blocks = self._abstract_fields_to_place_blocks(fields)
@@ -84,10 +85,14 @@ class ProgramPlacement:
     def _allocate_field(self,
                         identifier: sast.Identifier,
                         data_type: sast.DataType,
-                        domain: sast.Cartesian) -> AbstractFieldDeclaration:
+                        domain: sast.Cartesian,
+                        multiplicity: int = 1) -> AbstractFieldDeclaration:
         # Allocate a field for the input
         # TODO: Extend to scalar types
-        field_type = spa.ArrayType(data_type, [domain.z[1] - domain.z[0]])
+        if multiplicity > 1:
+            field_type = spa.ArrayType(data_type,  [multiplicity, domain.z[1] - domain.z[0]])
+        else:
+            field_type = spa.ArrayType(data_type, [domain.z[1] - domain.z[0]])
         identifier = spa.Identifier(identifier.name, 0)
         meta = FieldMetadata(field_type, identifier)
         place = AbstractFieldDeclaration((domain.x[0], domain.x[1]), (domain.y[0], domain.y[1]), meta)
