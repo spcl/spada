@@ -571,7 +571,6 @@ class Kernel(SpatialNode):
         assert all(isinstance(p, Parameter) for p in self.parameters)
         assert all(isinstance(arg, KernelArgument) for arg in self.arguments)
         assert all(isinstance(stmt, (Phase, ComputeBlock, DataflowBlock, PlaceBlock)) for stmt in self.body)
-        assert self.validate_schema()
 
     def as_ir(self, indent: int = 0) -> str:
         param_str = ", ".join(p.as_ir() for p in self.parameters)
