@@ -44,7 +44,6 @@ class ProgramPlacement:
             out = out.value
             assert isinstance(out, sast.Identifier)
             domain = self.domains.get_shifted_domain(out, program)
-            assert domain is not None, f"Domain for output {out} not found in program {program}"
             # Allocate a field for the output
             field = self._allocate_field(out, out_t.dtype, domain)
             fields.extend(field)
@@ -60,11 +59,19 @@ class ProgramPlacement:
         for op in comp.walk():
             if isinstance(op, sast.StatementBlock):
                 # TODO Implement
-                continue
+                # Place the outputs of the statement block
+                for out, out_t in zip(op.outputs, op.operation_type.destination):
+                    assert isinstance(out_t, sast.ViewType)
+                    domain = out_t.domain
+                    assert isinstance(domain, sast.Cartesian)
+                    domain = domain.add(self.domains.get_shift())
+                    # Allocate a field for the output
+                    field = self._allocate_field(out, out_t.dtype, domain, out_t.extent.extents)
+                    fields.extend(field)
+                # Place the intermediate results of the statement block (if any)
 
             elif isinstance(op, sast.MaterializeOp):
                 domain = self.domains.get_shifted_domain(op.result, comp)
-                assert domain is not None, f"Domain for result {op.result} not found in computation {comp}"
                 # Allocate a field for the result
                 # TODO: Discuss multiplicity
 
@@ -82,7 +89,6 @@ class ProgramPlacement:
         place_blocks = []
         for inp, inp_t in zip(scope.inputs, scope.operation_type.source):
             domain = domains.get_shifted_domain(inp, scope)
-            assert domain is not None, f"Domain for input {inp} not found in scope {scope}"
             # Allocate a field for the input
             # TODO: Extend to scalar types
             field = self._allocate_field(inp, inp_t.dtype, domain)
@@ -112,6 +118,7 @@ class ProgramPlacement:
                         offsets: list[sast.Offset] = None) -> list[AbstractFieldDeclaration]:
         # Allocate a field for the input
         # TODO: Extend to scalar types
+        assert domain is not None, f"Domain for input {identifier} not found"
         if offsets is None:
             offsets = [sast.Offset.zero()]
 
@@ -145,7 +152,7 @@ class ProgramPlacement:
         y_range = fields[0].y_range
 
         for field in fields:
-            identifier = spa.Identifier(field.metadata.identifier.name, 0)
+            identifier = spa.Identifier(field.metadata.identifier.name, field.metadata.identifier.version)
             field_type = field.metadata.field_type
             declaration = spa.FieldDeclaration(field_type, identifier)
             declarations.append(declaration)

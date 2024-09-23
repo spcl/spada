@@ -43,7 +43,7 @@ class DomainCollector(sast.ScopedNodeVisitor):
         self._union_domain = domain
         return domain
 
-    def get_shift(self):
+    def get_shift(self) -> tuple[int, int, int]:
         union_domain = self.get_union_domain()
 
         shift_x = -union_domain.x[0] if union_domain.x[0] < 0 else 0
@@ -65,13 +65,7 @@ class DomainCollector(sast.ScopedNodeVisitor):
         if domain is None:
             return None
 
-        shift_x, shift_y, shift_z = self.get_shift()
-
-        return sast.Cartesian(
-            x=sast.Interval(domain.x[0] + shift_x, domain.x[1] + shift_x),
-            y=sast.Interval(domain.y[0] + shift_y, domain.y[1] + shift_y),
-            z=sast.Interval(domain.z[0] + shift_z, domain.z[1] + shift_z)
-        )
+        return domain.add(self.get_shift())
 
 
     def get_domain(self, identifier: sast.Identifier,
