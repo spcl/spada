@@ -9,9 +9,9 @@ class SpatialNode(BaseNode):
     """
     Base class for all spatial IR nodes.
     """
+
     def as_ir(self, indent: int = 0) -> str:
         raise NotImplementedError()
-
 
 
 # Constant Literals
@@ -154,7 +154,8 @@ class Expression(SpatialNode):
     dtype: ScalarType
 
     def validate(self) -> None:
-        assert isinstance(self.value, (Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator))
+        assert isinstance(self.value,
+                          (Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator))
         assert isinstance(self.dtype, ScalarType)
 
     def as_ir(self, indent: int = 0) -> str:
@@ -173,13 +174,14 @@ class RangeExpression(SpatialNode):
     def validate(self) -> None:
         assert isinstance(self.start, Expression)
         assert isinstance(self.stop, Expression)
-        if self.step:
+        if self.step is not None:
             assert isinstance(self.step, Expression)
 
     def as_ir(self, indent: int = 0) -> str:
         if self.step:
             return f'{self.start.as_ir()}:{self.stop.as_ir()}:{self.step.as_ir()}'
         return f'{self.start.as_ir()}:{self.stop.as_ir()}'
+
 
 @dataclass
 class SubgridExpression(SpatialNode):
@@ -220,6 +222,7 @@ class FieldDeclaration(SpatialNode):
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         return f'{indent_str}{self.dtype.as_ir()} {self.field_name.as_ir()}'
+
 
 ###
 # Place Block
@@ -268,7 +271,7 @@ class RoutingDeclaration(SpatialNode):
         indent_str = '  ' * indent
         hops_str = "auto" if self.hops == "auto" else f"[{', '.join(hop.as_ir() for hop in self.hops)}]"
         channel_str = "auto" if self.channel == "auto" else str(self.channel)
-        return f"{indent_str}hops = {hops_str}, \n{indent_str}channel = {channel_str}"
+        return f"{indent_str}hops = {hops_str},\n{indent_str}channel = {channel_str}"
 
 
 @dataclass
@@ -289,6 +292,7 @@ class RelativeStreamDeclaration(SpatialNode):
         if self.routing:
             routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{' ' * indent}}}"
         return f'{indent_str}stream<{self.dtype.dtype.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
+
 
 ###
 # Dataflow Block
@@ -315,9 +319,11 @@ class DataflowBlock(SpatialNode):
         stmt_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.statements)
         return f'{indent_str}dataflow {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n{indent_str}}}'
 
+
 ###
 # Compute Block
 ###
+
 
 # Base class for all statements in the compute block
 @dataclass
@@ -464,6 +470,7 @@ class AwaitStatement(Statement):
 
 # Assignment Statement
 
+
 @dataclass
 class AssignmentStatement(Statement):
     """
@@ -502,9 +509,11 @@ class ComputeBlock(SpatialNode):
         stmt_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.statements)
         return f'{indent_str}compute {vars_str} in {self.subgrid.as_ir()} {{\n{stmt_str}\n{indent_str}}}'
 
+
 ###
 # Phases & Kernels
 ###
+
 
 @dataclass
 class Phase(SpatialNode):
@@ -576,7 +585,6 @@ class Kernel(SpatialNode):
         assert all(isinstance(p, Parameter) for p in self.parameters)
         assert all(isinstance(arg, KernelArgument) for arg in self.arguments)
         assert all(isinstance(stmt, (Phase, ComputeBlock, DataflowBlock, PlaceBlock)) for stmt in self.body)
-        assert self.validate_schema()
 
     def as_ir(self, indent: int = 0) -> str:
         param_str = ", ".join(p.as_ir() for p in self.parameters)

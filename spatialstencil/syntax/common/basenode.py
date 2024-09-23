@@ -33,7 +33,7 @@ class BaseNode:
     """
 
     @classmethod
-    def validate_schema(cls, visited: set[type['BaseNode']] = None) -> bool:
+    def validate_schema(cls, visited: set[type['BaseNode']] = None):
         """
         Validates that the node type and all its child node types abide by
         the rules defined on ``BaseNode``.
@@ -94,7 +94,6 @@ class BaseNode:
             else:
                 if not isinstance(field_type, type) or not issubclass(field_type, (int, float, str, type(None), Enum)):
                     raise TypeError(f'Unsupported terminator type {field_type} for field {field_name} of {cls}')
-        return True
 
     def validate(self) -> None:
         """
