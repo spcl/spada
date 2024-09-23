@@ -24,7 +24,7 @@ AbstractFieldDeclaration = Rectangle[FieldMetadata]
 
 class ProgramPlacement:
 
-    _storage_map: dict[sast.Identifier, dict[sast.Offset, tuple[int, spa.Identifier]]]
+    _storage_map: dict[sast.Identifier, dict[sast.Offset, spa.Identifier]]
 
     def __init__(self, domains: DomainCollector, versioning: Versioning[spa.Identifier]):
         self.domains = domains
@@ -47,7 +47,7 @@ class ProgramPlacement:
             assert domain is not None, f"Domain for output {out} not found in program {program}"
             # Allocate a field for the output
             field = self._allocate_field(out, out_t.dtype, domain)
-            fields.append(field)
+            fields.extend(field)
 
         blocks = self._abstract_fields_to_place_blocks(fields)
 
@@ -58,14 +58,18 @@ class ProgramPlacement:
         fields = []
         # Place materialized operations:
         for op in comp.walk():
-            if isinstance(op, sast.MaterializeOp):
+            if isinstance(op, sast.StatementBlock):
+                # TODO Implement
+                continue
+
+            elif isinstance(op, sast.MaterializeOp):
                 domain = self.domains.get_shifted_domain(op.result, comp)
                 assert domain is not None, f"Domain for result {op.result} not found in computation {comp}"
                 # Allocate a field for the result
                 # TODO: Discuss multiplicity
 
                 field = self._allocate_field(op.result, op.operation_type.destination[0].dtype, domain, op.operation_type.destination[0].extent.extents)
-                fields.append(field)
+                fields.extend(field)
 
         blocks = self._abstract_fields_to_place_blocks(fields)
 
@@ -82,21 +86,20 @@ class ProgramPlacement:
             # Allocate a field for the input
             # TODO: Extend to scalar types
             field = self._allocate_field(inp, inp_t.dtype, domain)
-            place_blocks.append(field)
+            place_blocks.extend(field)
 
         return place_blocks
 
     def _set_storage(self,
                      identifier: sast.Identifier,
                      offset: sast.Offset,
-                     row: int,
                      storage: spa.Identifier):
-        self._storage_map[identifier][offset] = (row, storage)
-        print(f"Set storage {storage} for {identifier} with offset {offset} at row {row}")
+        self._storage_map[identifier][offset] = storage
+        print(f"Set storage {storage} for {identifier} with offset {offset}")
 
     def get_storage(self,
                     identifier: sast.Identifier,
-                    offset: sast.Offset) -> tuple[int, spa.Identifier] | None:
+                    offset: sast.Offset) -> spa.Identifier | None:
         if identifier in self._storage_map:
             if offset in self._storage_map[identifier]:
                 return self._storage_map[identifier][offset]
@@ -106,37 +109,25 @@ class ProgramPlacement:
                         identifier: sast.Identifier,
                         data_type: ScalarType,
                         domain: sast.Cartesian,
-                        offsets: list[sast.Offset] = None) -> AbstractFieldDeclaration:
+                        offsets: list[sast.Offset] = None) -> list[AbstractFieldDeclaration]:
         # Allocate a field for the input
         # TODO: Extend to scalar types
-        spa_identifier = spa.Identifier(identifier.name, 0)
-
-        # TODO: Discuss: always allocate 0,0,0 offset?
         if offsets is None:
             offsets = [sast.Offset.zero()]
-        # If 0,0,0 is not in there, add it:
-        has_zero = False
-        for o in offsets:
-            if o.l1_norm() == 0:
-                has_zero = True
-                break
-        if not has_zero:
-            offsets.append(sast.Offset.zero())
 
-        #multiplicity = len([e for e in offsets if e.l1_norm() > 0]) + 1
-        multiplicity = len(offsets)
-        if multiplicity > 1:
-            field_type = spa.ArrayType(data_type,  [len(offsets), domain.z[1] - domain.z[0]])
-        else:
+        result = []
+        for offset in offsets:
+            spa_identifier = self.versioning.next_version(f'{identifier.name}_{offset[0]}_{offset[1]}_{offset[2]}')
+
             field_type = spa.ArrayType(data_type, [domain.z[1] - domain.z[0]])
 
-        for i in range(multiplicity):
-            offset = offsets[i] if offsets is not None else sast.Offset.zero()
-            self._set_storage(identifier, offset, i, spa_identifier)
+            self._set_storage(identifier, offset, spa_identifier)
 
-        meta = FieldMetadata(field_type, spa_identifier)
-        place = AbstractFieldDeclaration((domain.x[0], domain.x[1]), (domain.y[0], domain.y[1]), meta)
-        return place
+            meta = FieldMetadata(field_type, spa_identifier)
+            place = AbstractFieldDeclaration((domain.x[0], domain.x[1]), (domain.y[0], domain.y[1]), meta)
+            result.append(place)
+
+        return result
 
     def _abstract_fields_group_to_place_blocks(self, fields: list[AbstractFieldDeclaration]) -> spa.PlaceBlock:
         """
