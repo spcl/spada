@@ -121,11 +121,10 @@ class BaseNode:
             except AttributeError:
                 pass
 
-    def iter_child_nodes(self, ir_node_class: type['BaseNode'] = None):
+    def iter_child_nodes(self):
         """
         Yield all direct child AST/IR nodes of node.
         """
-        ir_node_class = ir_node_class or BaseNode
         for _, field in self.iter_fields():
             if isinstance(field, BaseNode):
                 yield field
