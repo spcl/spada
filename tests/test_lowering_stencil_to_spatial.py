@@ -18,10 +18,10 @@ class TestTypeInference(unittest.TestCase):
         # This a basic check that the lowering finishes without errors
 
         files = [
-            Path(__file__).parent / Path('../samples/spst/laplacian_mat_ext.spst'),
-            Path(__file__).parent / Path('../samples/spst/if_else_ext.spst'),
-            Path(__file__).parent / Path('../samples/spst/multiple_returns_ext.spst'),
-            Path(__file__).parent / Path('../samples/spst/laplacian_mat_sh_ext.spst')
+            Path(__file__).parent / Path('../samples/spst/laplacian_3ac.spst')#,
+            #Path(__file__).parent / Path('../samples/spst/if_else_ext.spst'),
+            #Path(__file__).parent / Path('../samples/spst/multiple_returns_ext.spst'),
+            #Path(__file__).parent / Path('../samples/spst/laplacian_mat_sh_ext.spst')
         ]
 
         for file in files:

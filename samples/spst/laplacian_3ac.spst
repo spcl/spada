@@ -1,0 +1,39 @@
+
+// Fully type-inferred version, Three-address code version
+
+
+%pres = spst.program (%in) {} :
+    spst.field<spst.cartesian<-1:129,-1:130,0:80>, f32>
+    -> spst.field<spst.cartesian<0:128,0:128,0:80>, f32>
+{
+    %res = spst.computation (%in)
+    {
+        schedule = PARALLEL,
+        interval = [spst.interval<0, None> , spst.interval<0, None>, spst.interval<0, None>]
+    } : spst.view<spst.cartesian<-1:129,-1:130,0:80>, spst.extent<(?, ?, ?)>, f32>
+      -> spst.view<spst.cartesian<0:128,0:128,0:80>, spst.extent<(0, 0, 0)>, f32>
+    {
+        %out_1 = spst.statement(%in)
+                : spst.view<spst.cartesian<-1:129,-1:130,0:80>,
+                   spst.extent<(0, 0, 0), (-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0)>, f32>
+                -> spst.view<spst.cartesian<0:128,0:129,0:80>, spst.extent<(0, 0, 0)>, f32>
+            {
+                %a = -4.0 * %in[0, 0, 0] : f32
+                %b = %a + %in[-1, 0, 0] : f32
+                %c = %b + %in[1, 0, 0] : f32
+                %d = %c + %in[0, -1, 0] : f32
+                spst.return %d + %in[0, 1, 0] : f32
+            }
+        %out_mat = spst.materialize(%out_1) : spst.view<spst.cartesian<0:128,0:129,0:80>, {(0, 0, 0)}, f32>
+                                             -> spst.view<spst.cartesian<0:128,0:128,0:80>, {(0, 1, 0)}, f32>
+
+        %out_2 = spst.statement(%out_1, %out_mat)
+            : spst.view<spst.cartesian<0:128,0:128,0:80>, spst.extent<(0, 0, 0)>, f32>,
+              spst.view<spst.cartesian<0:128,0:128,0:80>, spst.extent<(0, 1, 0)>, f32>
+            -> spst.view<spst.cartesian<0:128,0:128,0:80>, spst.extent<(0, 0, 0)>, f32> {
+                spst.return %out_1[0, 0, 0] + %out_mat[0, 1, 0] : f32
+            }
+        spst.return %out_2 : spst.view<spst.cartesian<0:128,0:128,0:80>, spst.extent<(0, 0, 0)>, f32>
+    }
+    return %res : spst.view<spst.cartesian<0:128,0:128,0:80>, spst.extent<(0, 0, 0)>, f32>
+}

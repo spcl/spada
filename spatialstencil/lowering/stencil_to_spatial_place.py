@@ -58,24 +58,33 @@ class ProgramPlacement:
         # Place materialized operations:
         for op in comp.walk():
             if isinstance(op, sast.StatementBlock):
-                # TODO Implement
+                # Note: all outputs must have the same domain
+                out_t = op.operation_type.destination[0]
+                assert isinstance(out_t, sast.ViewType)
+                assert isinstance(out_t.domain, sast.Cartesian)
+                domain = out_t.domain.add(self.domains.get_shift())
                 # Place the outputs of the statement block
-                for out, out_t in zip(op.outputs, op.operation_type.destination):
-                    assert isinstance(out_t, sast.ViewType)
-                    domain = out_t.domain
-                    assert isinstance(domain, sast.Cartesian)
-                    domain = domain.add(self.domains.get_shift())
+                for out in op.outputs:
                     # Allocate a field for the output
                     field = self._allocate_field(out, out_t.dtype, domain, out_t.extent.extents)
                     fields.extend(field)
                 # Place the intermediate results of the statement block (if any)
+                # TODO (assuming three-address code)
+                for stmt in op.body:
+                    if isinstance(stmt, sast.AssignOp):
+                        assert stmt.value.depth() <= 2, "At most two levels of nesting supported per assignment"
+                        assert stmt.value.number_of_subscripts() <= 2, "At most two subscripts supported per assignment"
+                        field = self._allocate_field(stmt.result, stmt.operation_type.source[0], domain)
+                        fields.extend(field)
+                    elif isinstance(stmt, sast.ReturnOp):
+                        # Return does not need storage, because it stores into the output of the statement
+                        pass
 
             elif isinstance(op, sast.MaterializeOp):
-                domain = self.domains.get_shifted_domain(op.result, comp)
+                out_t = op.operation_type.destination[0]
+                domain = out_t.domain.add(self.domains.get_shift())
                 # Allocate a field for the result
-                # TODO: Discuss multiplicity
-
-                field = self._allocate_field(op.result, op.operation_type.destination[0].dtype, domain, op.operation_type.destination[0].extent.extents)
+                field = self._allocate_field(op.result, out_t.dtype, domain, out_t.extent.extents)
                 fields.extend(field)
 
         blocks = self._abstract_fields_to_place_blocks(fields)
@@ -101,7 +110,6 @@ class ProgramPlacement:
                      offset: sast.Offset,
                      storage: spa.Identifier):
         self._storage_map[identifier][offset] = storage
-        print(f"Set storage {storage} for {identifier} with offset {offset}")
 
     def get_storage(self,
                     identifier: sast.Identifier,

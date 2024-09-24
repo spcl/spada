@@ -58,7 +58,6 @@ class ProgramDataflow:
                     offset: sast.Offset,
                     stream: spa.Identifier):
         self._stream_map[input_id][output_id][offset] = stream
-        print(f"Set stream {stream} from {input_id} to {output_id} with offset {offset}")
 
     def declare_dataflow_for_computation(self,
                                          comp: sast.ComputationBlock) -> list[spa.DataflowBlock]:

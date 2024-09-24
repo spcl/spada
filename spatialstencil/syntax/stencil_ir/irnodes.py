@@ -561,6 +561,39 @@ class Expression(Node):
             return self.value.as_ir(indent)
         return f'({self.value.as_ir(indent)})'
 
+    def depth(self) -> int:
+        """
+        Returns the depth of the expression tree.
+        """
+        if isinstance(self.value, (int, float, Identifier, Subscript, MathCall)):
+            return 0
+        if isinstance(self.value, UnaryOperator):
+            print(self.value.value, "Unary")
+            return 1 + self.value.value.depth()
+        if isinstance(self.value, BinaryOperator):
+            return 1 + max(self.value.left.depth(), self.value.right.depth())
+        if isinstance(self.value, TernaryOperator):
+            return 1 + max(self.value.true_value.depth(), self.value.test.depth(), self.value.false_value.depth())
+
+    def number_of_subscripts(self) -> int:
+        """
+        Counts the number of subscripts in the expression.
+
+        :return: the number of subscripts
+        """
+        if isinstance(self.value, Subscript):
+            return 1
+        if isinstance(self.value, UnaryOperator):
+            return self.value.value.number_of_subscripts()
+        if isinstance(self.value, BinaryOperator):
+            return self.value.left.number_of_subscripts() + self.value.right.number_of_subscripts()
+        if isinstance(self.value, TernaryOperator):
+            return (self.value.true_value.number_of_subscripts() +
+                    self.value.test.number_of_subscripts() +
+                    self.value.false_value.number_of_subscripts())
+        if isinstance(self.value, MathCall):
+            return sum(a.number_of_subscripts() for a in self.value.arguments)
+        return 0
 
 class Operation:
     """
