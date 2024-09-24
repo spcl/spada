@@ -1,5 +1,6 @@
 import spatialstencil.syntax.stencil_ir.irnodes as sast
 import spatialstencil.syntax.spatial_ir.irnodes as spa
+from spatialstencil.lowering.stencil_to_spatial_compute import ProgramCompute
 from spatialstencil.lowering.stencil_to_spatial_dataflow import ProgramDataflow
 from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
 
@@ -29,10 +30,11 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
     domain_collector.visit(stencil)
 
     versioning = Versioning[spa.Identifier](spa.Identifier)
-    placement = ProgramPlacement(domain_collector, versioning)
-    dataflow = ProgramDataflow(domain_collector, versioning)
+    placement_gen = ProgramPlacement(domain_collector, versioning)
+    dataflow_gen = ProgramDataflow(domain_collector, versioning)
+    compute_gen = ProgramCompute(domain_collector, versioning, dataflow_gen, placement_gen)
     body = []
-    body.extend(placement.place_program(stencil))
+    body.extend(placement_gen.place_program(stencil))
 
     # Input generation:
     arguments = kernel_arguments(stencil, domain_collector)
@@ -43,13 +45,14 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
     for comp in stencil.computations:
 
         if isinstance(comp, sast.ComputationBlock):
-            place = placement.place_computation(comp)
-            flow = dataflow.declare_dataflow_for_computation(comp)
-            compute = generate_computation(comp)
+            place = placement_gen.place_computation(comp)
+            flow = dataflow_gen.declare_dataflow_for_computation(comp)
+            compute = compute_gen.generate_computation(comp)
             phase = spa.Phase(place=place, dataflow=flow, compute=compute)
 
             body.append(phase)
-            # TODO Pass that applies rectangle splitting to the whole phase across block types
+
+    # TODO Pass that applies rectangle splitting to the whole phase across block types
 
     kernel = spa.Kernel(name="", parameters=[], arguments=arguments, body=body)
 
@@ -130,12 +133,6 @@ def input_phase(body: list[spa.PlaceBlock],
                                             statements=statements))
 
     return compute
-
-
-
-def generate_computation(comp: sast.ComputationBlock) -> list[spa.ComputeBlock]:
-    # TODO: Implement
-    return []
 
 
 
