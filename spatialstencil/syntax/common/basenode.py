@@ -161,7 +161,7 @@ class Wildcard(Generic[T], BaseNode):
     Represents a wildcard in the tree.
     """
 
-    def __init__(self, name: str):
+    def __init__(self, name: str = ''):
         self.name = name
 
     def __str__(self):

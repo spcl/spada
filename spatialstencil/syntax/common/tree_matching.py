@@ -14,7 +14,6 @@ class PatternMatcher(Generic[BaseNodeT]):
 
     def __init__(self, pattern: BaseNodeT):
         pattern_tree = MatchingBaseNode.from_base_node(pattern)
-        print(pattern_tree)
         trie, paths = _build_trie(pattern_tree)
         self.trie = trie
         self.paths = paths
@@ -25,7 +24,6 @@ class PatternMatcher(Generic[BaseNodeT]):
 
     def _match_pattern(self, subject: BaseNode) -> set[TreeNode]:
         subject_tree = MatchingBaseNode.from_base_node(subject)
-        print(subject_tree)
         matches = _match_pattern(None, subject_tree, self.paths, self.trie)
         return matches
 
@@ -66,9 +64,6 @@ def _match_pattern(pattern: TreeNode | None, subject: TreeNode, paths=None, trie
             node = entry.node
             counter[node] = counter[node] + 1
             has_match[node] = (counter[node] == len(paths))
-            # If this node is a match, print the label of the root node
-            if has_match[node]:
-                print(f"Match found at root: {node.get_label()}")
 
     # Populate stack with initial transition
     subject_root = subject
@@ -112,13 +107,13 @@ def _build_trie(pattern: TreeNode) -> tuple[Trie[Symbol], list[list[Symbol]]]:
     paths = root_to_leaf_paths(pattern)
     builder = TrieBuilder[Symbol]()
     for path in paths:
-        print([str(p) for p in path])
         assert all(isinstance(p, Symbol) for p in path)
         builder.add(path)
 
     # Build Aho-Corasick automaton
     trie = builder.build()
     return trie, paths
+
 
 @dataclass
 class Entry:
