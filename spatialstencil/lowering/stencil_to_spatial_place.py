@@ -24,7 +24,7 @@ AbstractFieldDeclaration = Rectangle[FieldMetadata]
 
 class ProgramPlacement:
 
-    _storage_map: dict[sast.Identifier, dict[sast.Offset, spa.Identifier]]
+    _storage_map: dict[sast.Identifier, dict[sast.Offset, tuple[spa.Identifier, spa.ArrayType]]]
 
     def __init__(self, domains: DomainCollector, versioning: Versioning[spa.Identifier]):
         self.domains = domains
@@ -108,16 +108,17 @@ class ProgramPlacement:
     def _set_storage(self,
                      identifier: sast.Identifier,
                      offset: sast.Offset,
-                     storage: spa.Identifier):
-        self._storage_map[identifier][offset] = storage
+                     storage: spa.Identifier,
+                     dtype: spa.ArrayType) -> None:
+        self._storage_map[identifier][offset] = (storage, dtype)
 
     def get_storage(self,
                     identifier: sast.Identifier,
-                    offset: sast.Offset) -> spa.Identifier | None:
+                    offset: sast.Offset = sast.Offset.zero()) -> tuple[spa.Identifier, spa.ArrayType]:
         if identifier in self._storage_map:
             if offset in self._storage_map[identifier]:
                 return self._storage_map[identifier][offset]
-        return None
+        raise ValueError(f"Storage for {identifier} not found")
 
     def _allocate_field(self,
                         identifier: sast.Identifier,
@@ -136,7 +137,7 @@ class ProgramPlacement:
 
             field_type = spa.ArrayType(data_type, [domain.z[1] - domain.z[0]])
 
-            self._set_storage(identifier, offset, spa_identifier)
+            self._set_storage(identifier, offset, spa_identifier, field_type)
 
             meta = FieldMetadata(field_type, spa_identifier)
             place = AbstractFieldDeclaration((domain.x[0], domain.x[1]), (domain.y[0], domain.y[1]), meta)
