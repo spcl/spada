@@ -125,6 +125,9 @@ class ArraySlice(SpatialNode):
     For single index access: array[i]
     For range access: array[start:end]
     For stride access: array[start:end:stride]
+
+    array: Identifier
+    indices: list[Union[int, Identifier, 'RangeExpression']]  # Handles single-index or ranges
     """
     array: Identifier
     indices: list[Union[int, Identifier, 'RangeExpression']]  # Handles single-index or ranges
@@ -182,6 +185,15 @@ class RangeExpression(SpatialNode):
             return f'{self.start.as_ir()}:{self.stop.as_ir()}:{self.step.as_ir()}'
         return f'{self.start.as_ir()}:{self.stop.as_ir()}'
 
+    @staticmethod
+    def from_args(start: int, stop: int, step: int = None) -> 'RangeExpression':
+        start_expr = Expression(ConstantLiteral(start, ScalarType.i32), ScalarType.i32)
+        stop_expr = Expression(ConstantLiteral(stop, ScalarType.i32), ScalarType.i32)
+        if step is not None:
+            step_expr = Expression(ConstantLiteral(step, ScalarType.i32), ScalarType.i32)
+            return RangeExpression(start_expr, stop_expr, step_expr)
+        return RangeExpression(start_expr, stop_expr)
+
 
 @dataclass
 class SubgridExpression(SpatialNode):
@@ -201,7 +213,6 @@ class SubgridExpression(SpatialNode):
         subgrid = SubgridExpression(RangeExpression(range_x, range_x_end),
                                     RangeExpression(range_y, range_y_end))
         return subgrid
-
 
     def as_ir(self, indent: int = 0) -> str:
         return f'[{self.x_range.as_ir()} , {self.y_range.as_ir()}]'
@@ -421,7 +432,10 @@ class MapStatement(Statement):
         indent_str = '  ' * indent
         vars_str = ", ".join(var.as_ir() for var in self.variables)
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
-        return f'{indent_str}{self.completion_name.as_ir()} = map {vars_str} in [{self.range_expression.as_ir()}] {{\n{body_str}\n{indent_str}}}'
+        if self.completion_name:
+            return f'{indent_str}{self.completion_name.as_ir()} = map {vars_str} in [{self.range_expression.as_ir()}] {{\n{body_str}\n{indent_str}}}'
+        else:
+            return f'{indent_str}await map {vars_str} in [{self.range_expression.as_ir()}] {{\n{body_str}\n{indent_str}}}'
 
 
 # Sequential For Loop
@@ -476,6 +490,9 @@ class AwaitStatement(Statement):
 class AssignmentStatement(Statement):
     """
     Assigns the result of an expression to a field or variable
+
+    source: Expression
+    destination: ArraySlice | Identifier
     """
     source: Expression
     destination: ArraySlice | Identifier
