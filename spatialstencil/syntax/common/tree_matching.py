@@ -1,11 +1,36 @@
 from dataclasses import dataclass
+from typing import TypeVar, Generic
 
-from spatialstencil.syntax.common.match_tree import root_to_leaf_paths, TreeNode, Symbol, Index, Label
-from spatialstencil.syntax.common.trie import TrieBuilder, TrieNode
+from spatialstencil.syntax.common.basenode import BaseNode
+from spatialstencil.syntax.common.match_tree import root_to_leaf_paths, TreeNode, Symbol, Index, Label, MatchingBaseNode
+from spatialstencil.syntax.common.trie import TrieBuilder, TrieNode, Trie
 from collections import deque, defaultdict
 
 
-def match_pattern(pattern: TreeNode, subject: TreeNode) -> set[TreeNode]:
+BaseNodeT = TypeVar('BaseNodeT', bound=BaseNode)
+
+
+class PatternMatcher(Generic[BaseNodeT]):
+
+    def __init__(self, pattern: BaseNodeT):
+        pattern_tree = MatchingBaseNode.from_base_node(pattern)
+        print(pattern_tree)
+        trie, paths = _build_trie(pattern_tree)
+        self.trie = trie
+        self.paths = paths
+
+    def match_pattern(self, subject: BaseNode) -> set[BaseNode]:
+        matches = self._match_pattern(subject)
+        return [m.base_node for m in matches]
+
+    def _match_pattern(self, subject: BaseNode) -> set[TreeNode]:
+        subject_tree = MatchingBaseNode.from_base_node(subject)
+        print(subject_tree)
+        matches = _match_pattern(None, subject_tree, self.paths, self.trie)
+        return matches
+
+
+def _match_pattern(pattern: TreeNode | None, subject: TreeNode, paths=None, trie=None) -> set[TreeNode]:
     """
     Math a pattern tree to a subject tree using the approach by Hoffmann and O’Donnell
     described in "Pattern Matching in Trees".
@@ -19,17 +44,11 @@ def match_pattern(pattern: TreeNode, subject: TreeNode) -> set[TreeNode]:
     """
 
     # Pattern must be rooted at a labeled node for initial transition
-    assert isinstance(pattern, TreeNode)
     assert isinstance(subject, TreeNode)
 
-    # Construct Aho-Corasick automaton from pattern tree
-    paths = root_to_leaf_paths(pattern)
-    builder = TrieBuilder[Symbol]()
-    for path in paths:
-        builder.add(path)
-
-    # Build Aho-Corasick automaton
-    trie = builder.build()
+    if trie is None:
+        # Build Aho-Corasick automaton
+        trie, paths = _build_trie(pattern)
 
     # Algorithm D stack entry for pre-order book-keeping
     stack = deque[Entry]()
@@ -85,6 +104,21 @@ def match_pattern(pattern: TreeNode, subject: TreeNode) -> set[TreeNode]:
 
     return {t for t in counter.keys() if has_match[t]}
 
+def _build_trie(pattern: TreeNode) -> tuple[Trie[Symbol], list[list[Symbol]]]:
+
+    assert isinstance(pattern, TreeNode)
+    assert isinstance(pattern, TreeNode)
+    # Construct Aho-Corasick automaton from pattern tree
+    paths = root_to_leaf_paths(pattern)
+    builder = TrieBuilder[Symbol]()
+    for path in paths:
+        print([str(p) for p in path])
+        assert all(isinstance(p, Symbol) for p in path)
+        builder.add(path)
+
+    # Build Aho-Corasick automaton
+    trie = builder.build()
+    return trie, paths
 
 @dataclass
 class Entry:

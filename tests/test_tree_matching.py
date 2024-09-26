@@ -1,11 +1,13 @@
 from dataclasses import dataclass
 
 import unittest
-from spatialstencil.syntax.common.match_tree import TreeNode, WildcardNode, MatchTree, MatchingBaseNode
-from spatialstencil.syntax.common.tree_matching import match_pattern
-from typing import Tuple, List
+from spatialstencil.syntax.common.match_tree import TreeNode, TreeWildcard, MatchTree, MatchingBaseNode
+from spatialstencil.syntax.common.tree_matching import _match_pattern, PatternMatcher
+from typing import Tuple, List, TypeVar, Generic
 
 import spatialstencil.syntax.stencil_ir.irnodes as sast
+from spatialstencil.syntax.common.basenode import Wildcard
+
 
 # Assume Tree, Node, Wildcard classes are already defined from previous translations.
 class Parser:
@@ -48,7 +50,7 @@ class Parser:
                 return TreeNode(''.join(builder), []), i
 
             elif current == '_':
-                return WildcardNode(), i + 1
+                return TreeWildcard(), i + 1
 
         # Shouldn't reach here, return None
         return None, i
@@ -80,7 +82,7 @@ class TestTreeMatching(unittest.TestCase):
         print(subject)
         pattern_tree = Parser.parse(pattern)
         subject_tree = Parser.parse(subject)
-        has_match = match_pattern(pattern_tree, subject_tree)
+        has_match = _match_pattern(pattern_tree, subject_tree)
 
         # Print the match
         self._print_match(subject_tree, has_match)
@@ -101,38 +103,78 @@ class TestTreeMatching(unittest.TestCase):
         print("\u001B[0m")
         return match_count
 
-
     def test_expression_matching(self):
 
         e = sast.Expression(sast.BinaryOperator(sast.Expression(sast.Identifier("a", 0)),
                                                 "+",
                                                 sast.Expression(sast.Identifier("b", 1))))
 
-        tree = MatchingBaseNode.from_base_node(e)
+        pattern = sast.BinaryOperator(Wildcard("left"), "+", Wildcard("right"))  # type: ignore
 
-        pattern = MatchingBaseNode("BinaryOperator", ["+", WildcardNode(), WildcardNode()])
+        matcher = PatternMatcher(pattern)
 
-        match = match_pattern(pattern, tree)
+        match = matcher.match_pattern(e)
 
         assert len(match) == 1
 
-        assert match is not None
-
-        self._print_match(tree, match)
-
         e = sast.Expression(sast.BinaryOperator(sast.Expression(sast.Identifier("a", 0)),
                                                 "+",
-                                                sast.Expression(sast.BinaryOperator(sast.Expression(sast.Identifier("b", 0)),
-                                                "+",
-                                                sast.Expression(sast.Identifier("c", 1))))))
+                                                sast.Expression(
+                                                    sast.BinaryOperator(sast.Expression(sast.Identifier("b", 0)),
+                                                                        "+",
+                                                                        sast.Expression(1)))))
 
-        tree = MatchingBaseNode.from_base_node(e)
-
-        match = match_pattern(pattern, tree)
+        match = matcher.match_pattern(e)
 
         assert len(match) == 2
 
-        self._print_match(tree, match)
+        pattern = sast.BinaryOperator(sast.Expression(sast.Identifier("b", 0)),
+                                      "+",
+                                      sast.Expression(Wildcard[int]("right")))  # type: ignore
+
+        matcher = PatternMatcher(pattern)
+
+        match = matcher.match_pattern(e)
+
+        assert len(match) == 1
+
+        pattern = sast.BinaryOperator(sast.Expression(sast.Identifier("b", 0)),
+                                      "+",
+                                      sast.Expression(Wildcard[float]("right")))  # type: ignore
+
+        matcher = PatternMatcher(pattern)
+
+        match = matcher.match_pattern(e)
+
+        assert len(match) == 0
+
+        pattern = sast.BinaryOperator(Wildcard("left"), "+", sast.Expression(sast.Identifier("b", 0)))  # type: ignore
+
+        matcher = PatternMatcher(pattern)
+
+        match = matcher.match_pattern(e)
+
+        assert len(match) == 0
+
+    def test_patterns(self):
+
+        return_pattern = sast.ReturnOp(
+            [sast.Expression(sast.Identifier(Wildcard[str]("dest_name"), Wildcard[str]("dest_version")))]
+        )
+
+        print(return_pattern)
+
+        assign_pattern = sast.AssignOp(
+            sast.Identifier(Wildcard('dest_name'), Wildcard[int]("dest_version")),
+            sast.Expression(
+                sast.BinaryOperator(
+                    sast.Expression(sast.Identifier(Wildcard("source_name"), Wildcard("source_version"))),
+                    Wildcard("operator"),
+                    sast.Expression(Wildcard[int]("int_literal")),
+                )
+            ))
+
+        print(assign_pattern)
 
 
 if __name__ == '__main__':

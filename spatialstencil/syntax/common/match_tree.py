@@ -1,8 +1,10 @@
 from collections import deque
 from dataclasses import dataclass
-from typing import List, Union, Deque, TypeVar
+from typing import List, Union, Deque, TypeVar, Any
 
 from spatialstencil.syntax.common.basenode import BaseNode
+
+import spatialstencil.syntax.common.basenode as syntax
 
 V = TypeVar('V')
 
@@ -42,7 +44,7 @@ class TreeNode(MatchTree[V]):
 
 
 # Wildcard class representing a wildcard in the tree
-class WildcardNode(MatchTree):
+class TreeWildcard(MatchTree):
     def __str__(self):
         return "_"
 
@@ -70,16 +72,33 @@ class MatchingBaseNode[NVar](TreeNode[str]):
         label = node.__class__.__name__
         children = []
         for f in node.iter_fields():
-            if isinstance(f[1], BaseNode):
+            if isinstance(f[1], syntax.Wildcard):
+                grandchild = TreeWildcard()
+                # add a type label to the wildcard
+                type = f[1].get_type()
+                if type != Any:
+                    type_label = type.__name__
+                    child = MatchingBaseNode(f"{type_label}", [grandchild])
+                else:
+                    child = grandchild
+
+                children.append(child)
+            elif isinstance(f[1], BaseNode):
                 children.append(MatchingBaseNode.from_base_node(f[1]))
             elif isinstance(f[1], (list, tuple)):
-                for elem in f[1]:
+                for i, elem in enumerate(f[1]):
+                    # Make sure the order is respected
                     if isinstance(elem, BaseNode):
-                        children.append(MatchingBaseNode.from_base_node(elem))
+                        grandchild = MatchingBaseNode.from_base_node(elem)
                     else:
-                        children.append(MatchingBaseNode[NVar](str(elem), []))
+                        grandchild = MatchingBaseNode[NVar](str(elem), [])
+                    child = MatchingBaseNode(str(i), [grandchild])
+                    children.append(child)
             else:
-                children.append(MatchingBaseNode[NVar](str(f[1]), []))
+                class_name = f[1].__class__.__name__
+                grandchild = MatchingBaseNode[NVar](str(f[1]), [])
+                child = MatchingBaseNode(class_name, [grandchild])
+                children.append(child)
 
         return MatchingBaseNode[NVar](label, children, node)
 
@@ -123,12 +142,12 @@ class Label(Symbol[V]):
 
 
 # Wildcard class representing a wildcard in the tree
-class Wildcard(Symbol):
+class SymbolWildcard(Symbol):
     def __init__(self):
         pass
 
     def __eq__(self, other):
-        return isinstance(other, Wildcard)
+        return isinstance(other, SymbolWildcard)
 
     def __hash__(self):
         return hash('Wildcard')
@@ -156,7 +175,7 @@ def _root_to_leaf(root: MatchTree, acc: Deque[Union[Label, Index]],
             acc.popleft()
             acc.popleft()
 
-    elif isinstance(root, WildcardNode):
+    elif isinstance(root, TreeWildcard):
         # wildcards are leafs, collect up to them
         path = deque(acc)
         paths.append(list(reversed(path)))
