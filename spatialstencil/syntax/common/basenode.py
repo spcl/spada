@@ -170,7 +170,32 @@ class Wildcard(Generic[T], BaseNode):
     def __repr__(self):
         return str(self)
 
+    def bind(self) -> typing.Any:
+        """
+        Masks the wildcard type, allowing it to be used
+        as part of the base node structure.
+
+        :return:
+        """
+        return self
+
+    def __call__(self, *args, **kwargs) -> typing.Any:
+        """
+        Masks the wildcard type, allowing it to be used
+        as part of the base node structure.
+
+        :return:
+        """
+        return self
+
     def get_type(self):
+        """
+        Gets the type restriction of the wildcard.
+        If no type restriction is provided, defaults to Any.
+
+        :return: The type restriction of the wildcard.
+        """
+
         if hasattr(self, '__orig_class__'):
             return self.__orig_class__.__args__[0]
         else:

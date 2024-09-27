@@ -1,4 +1,5 @@
 import typing
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TypeVar, Generic
 
@@ -9,6 +10,7 @@ from collections import deque, defaultdict
 
 
 BaseNodeT = TypeVar('BaseNodeT', bound=BaseNode)
+BaseNodeK = TypeVar('BaseNodeK', bound=BaseNode)
 
 
 @dataclass(frozen=True)
@@ -46,7 +48,7 @@ class PatternMatcher(Generic[BaseNodeT]):
     def _collect_named_wildcards(self, pattern_node: BaseNode, subject: BaseNode | float | int | str | bool | tuple | list, wildcard_matches: dict):
         if isinstance(pattern_node, Wildcard):
             wildcard_name = pattern_node.name
-            if wildcard_name:
+            if wildcard_name and len(wildcard_name):
                 wildcard_matches[wildcard_name] = subject
         elif isinstance(subject, BaseNode):
             # Collect all the fields of the pattern and subject:
@@ -60,6 +62,34 @@ class PatternMatcher(Generic[BaseNodeT]):
         subject_tree = MatchingBaseNode.from_base_node(subject)
         matches = _match_pattern(None, subject_tree, self.paths, self.trie)
         return matches  # type: ignore
+
+
+# Abstract PatternTransformer class
+class PatternTransformer(Generic[BaseNodeT, BaseNodeK]):
+    def __init__(self, patterns: list[BaseNodeT]):
+        self.patterns = patterns
+        self.matchers = [PatternMatcher(pattern) for pattern in patterns]
+
+    def apply(self, subject: BaseNodeT) -> list[BaseNodeK]:
+
+        matches = []
+
+        for matcher in self.matchers:
+            matches.extend(matcher.match_pattern(subject))
+        # Create a PatternMatcher and match the pattern
+
+        # For each match, call the transform function
+        result = []
+        for match in matches:
+            result.append(self.transform(match.root, **match.wildcards))
+        return result
+
+    def transform(self, root: BaseNodeT, **wildcards) -> BaseNodeK:
+        """
+        This method must be implemented by subclasses to provide
+        specific transformations for the pattern.
+        """
+        pass
 
 
 def _match_pattern(pattern: TreeNode | None, subject: TreeNode, paths=None, trie=None) -> set[TreeNode]:
@@ -142,6 +172,7 @@ def _build_trie(pattern: TreeNode) -> tuple[Trie[Symbol], list[list[Symbol]]]:
     builder = TrieBuilder[Symbol]()
     for path in paths:
         assert all(isinstance(p, Symbol) for p in path)
+        print([str(p) for p in path])
         builder.add(path)
 
     # Build Aho-Corasick automaton

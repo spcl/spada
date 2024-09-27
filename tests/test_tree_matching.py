@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import unittest
 from spatialstencil.syntax.common.match_tree import TreeNode, TreeWildcard, MatchTree, MatchingBaseNode
-from spatialstencil.syntax.common.tree_matching import _match_pattern, PatternMatcher
+from spatialstencil.syntax.common.tree_matching import _match_pattern, PatternMatcher, PatternTransformer
 from typing import Tuple, List, TypeVar, Generic
 
 import spatialstencil.syntax.stencil_ir.irnodes as sast
@@ -72,6 +72,17 @@ class Parser:
         return children, i
 
 
+class IdentifierIncrementerTransformer(PatternTransformer[sast.BaseNode, sast.Identifier]):
+
+    def __init__(self):
+        pattern = sast.Expression(sast.Identifier(Wildcard[str]()(), Wildcard[int]("version")()))
+        super().__init__([pattern])
+
+    def transform(self, root: sast.Expression, version: int = None, **wildcards) -> sast.Identifier:
+        assert version is not None
+        return sast.Identifier(root.value.name, version + 1)
+
+
 class TestTreeMatching(unittest.TestCase):
 
     def test_match(self):
@@ -109,7 +120,7 @@ class TestTreeMatching(unittest.TestCase):
                                                 "+",
                                                 sast.Expression(sast.Identifier("b", 1))))
 
-        pattern = sast.BinaryOperator(Wildcard("left"), "+", Wildcard("right"))  # type: ignore
+        pattern = sast.BinaryOperator(Wildcard("left")(), "+", Wildcard("right")())
 
         matcher = PatternMatcher(pattern)
 
@@ -140,7 +151,7 @@ class TestTreeMatching(unittest.TestCase):
 
         pattern = sast.BinaryOperator(sast.Expression(sast.Identifier("b", 0)),
                                       "+",
-                                      sast.Expression(Wildcard[int]("right")))  # type: ignore
+                                      sast.Expression(Wildcard[int]("right").bind()))
 
         matcher = PatternMatcher(pattern)
 
@@ -151,9 +162,11 @@ class TestTreeMatching(unittest.TestCase):
         assert "right" in match[0].wildcards
         assert match[0].wildcards["right"] == 1
 
-        pattern = sast.BinaryOperator(sast.Expression(Wildcard("left")),
+        pattern = sast.BinaryOperator(sast.Expression(Wildcard("left").bind()),
                                       "+",
-                                      sast.Expression(Wildcard[int]("right")))  # type: ignore
+                                      sast.Expression(Wildcard[int]("right").bind()))
+
+        print(pattern)
 
         matcher = PatternMatcher(pattern)
 
@@ -168,7 +181,7 @@ class TestTreeMatching(unittest.TestCase):
         assert match[0].wildcards["left"].name == "b"
         assert match[0].wildcards["left"].version == 0
 
-        pattern = sast.Identifier(Wildcard("id"), 0)
+        pattern = sast.Identifier(Wildcard("id").bind(), 0)
 
         matcher = PatternMatcher(pattern)
 
@@ -179,6 +192,27 @@ class TestTreeMatching(unittest.TestCase):
         for m in match:
             assert m.wildcards["id"] == "a" or m.wildcards["id"] == "b"
 
+    def test_expression_transform(self):
+
+        e = sast.Expression(sast.BinaryOperator(sast.Expression(sast.Identifier("a", 0)),
+                                                "+",
+                                                sast.Expression(
+                                                    sast.BinaryOperator(sast.Expression(sast.Identifier("b", 4)),
+                                                                        "+",
+                                                                        sast.Expression(1)))))
+
+        transformer = IdentifierIncrementerTransformer()
+
+        result = transformer.apply(e)
+
+        print(result)
+
+        for r in result:
+            assert r.name == "a" or r.name == "b"
+            if r.name == "a":
+                assert r.version == 1
+            else:
+                assert r.version == 5
 
     def test_expresison_ordering(self):
 
@@ -188,7 +222,7 @@ class TestTreeMatching(unittest.TestCase):
 
         pattern = sast.BinaryOperator(sast.Expression(sast.Identifier("b", 0)),
                                       "+",
-                                      sast.Expression(Wildcard[float]("right")))  # type: ignore
+                                      sast.Expression(Wildcard[float]("right").bind()))
 
         matcher = PatternMatcher(pattern)
 
@@ -196,7 +230,7 @@ class TestTreeMatching(unittest.TestCase):
 
         assert len(match) == 0
 
-        pattern = sast.BinaryOperator(Wildcard("left"), "+", sast.Expression(sast.Identifier("b", 0)))  # type: ignore
+        pattern = sast.BinaryOperator(Wildcard("left").bind(), "+", sast.Expression(sast.Identifier("b", 0)))
 
         matcher = PatternMatcher(pattern)
 
@@ -208,20 +242,24 @@ class TestTreeMatching(unittest.TestCase):
     def test_patterns(self):
 
         return_pattern = sast.ReturnOp(
-            [sast.Expression(sast.Identifier(Wildcard[str]("dest_name"), Wildcard[str]("dest_version")))]
+            [sast.Expression(sast.Identifier(Wildcard[str]("dest_name").bind(), Wildcard[str]("dest_version").bind()))]
         )
 
         print(return_pattern)
 
+        pattern_matcher = PatternMatcher(return_pattern)
+
         assign_pattern = sast.AssignOp(
-            sast.Identifier(Wildcard('dest_name'), Wildcard[int]("dest_version")),
+            sast.Identifier(Wildcard('dest_name').bind(), Wildcard[int]("dest_version").bind()),
             sast.Expression(
                 sast.BinaryOperator(
-                    sast.Expression(sast.Identifier(Wildcard("source_name"), Wildcard("source_version"))),
-                    Wildcard("operator"),
-                    sast.Expression(Wildcard[int]("int_literal")),
+                    sast.Expression(sast.Identifier(Wildcard("source_name").bind(), Wildcard("source_version").bind())),
+                    Wildcard("operator").bind(),
+                    sast.Expression(Wildcard[int]("int_literal").bind()),
                 )
             ))
+
+        pattern_matcher = PatternMatcher(assign_pattern)
 
         print(assign_pattern)
 
