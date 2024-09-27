@@ -1,5 +1,6 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Union, Tuple, Optional, Literal
+from spatialstencil.syntax.common import visitor
 from spatialstencil.syntax.common.basenode import BaseNode
 from spatialstencil.syntax.common.types import ScalarType, IRType
 
@@ -114,7 +115,21 @@ class BinaryOperator(SpatialNode):
         assert self.op in ('+', '-', '*', '/', '//', '%', '==', '!=', '<', '<=', '>', '>=')
 
     def as_ir(self, indent: int = 0) -> str:
-        return f'{self.left.as_ir()} {self.op} {self.right.as_ir()}'
+        return f'({self.left.as_ir()} {self.op} {self.right.as_ir()})'
+
+
+# Ternary Operator
+@dataclass
+class TernaryOperator(SpatialNode):
+    """
+    A ternary operator (``x ? y : z`` in C or ``y if x else z`` in Python).
+    """
+    cond: 'Expression'
+    if_true: 'Expression'
+    if_false: 'Expression'
+
+    def as_ir(self, indent: int = 0) -> str:
+        return f'({self.if_true.as_ir()} if {self.cond.as_ir()} else {self.if_false.as_ir()})'
 
 
 # ArraySlice to handle both subscripts (single index access) and array slices (start:end)
@@ -150,12 +165,13 @@ class Expression(SpatialNode):
     """
     A general expression that can take the form of an identifier, literal, array slice, unary/binary operator, etc.
     """
-    value: Union[Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator]
+    value: Union[Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator, TernaryOperator]
     dtype: ScalarType
 
     def validate(self) -> None:
-        assert isinstance(self.value,
-                          (Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator))
+        assert isinstance(
+            self.value,
+            (Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator, TernaryOperator))
         assert isinstance(self.dtype, ScalarType)
 
     def as_ir(self, indent: int = 0) -> str:
@@ -578,3 +594,40 @@ class Kernel(SpatialNode):
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
         return f'kernel @{self.name}<{param_str}>({arg_str}) {{\n{body_str}\n}}' if self.name \
             else f'kernel<{param_str}>({arg_str}) {{\n{body_str}\n}}'
+
+
+# Specialized visitors
+
+
+class NodeVisitor(visitor.IRNodeVisitor[SpatialNode]):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(SpatialNode, *args, **kwargs)
+
+
+class ScopedNodeVisitor(visitor.ScopedIRNodeVisitor[SpatialNode]):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(SpatialNode, *args, **kwargs)
+        self._setup_scope_nodes(Kernel, Phase, ComputeBlock, DataflowBlock, PlaceBlock)
+
+    def visit_Kernel(self, node: Kernel):
+        return self._visit_ScopeNode(node)
+
+    def visit_Phase(self, node: Phase):
+        return self._visit_ScopeNode(node)
+
+    def visit_ComputeBlock(self, node: ComputeBlock):
+        return self._visit_ScopeNode(node)
+
+    def visit_DataflowBlock(self, node: DataflowBlock):
+        return self._visit_ScopeNode(node)
+
+    def visit_PlaceBlock(self, node: PlaceBlock):
+        return self._visit_ScopeNode(node)
+
+
+class NodeTransformer(visitor.IRNodeTransformer[SpatialNode]):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(SpatialNode, *args, **kwargs)
