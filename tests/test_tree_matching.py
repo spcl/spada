@@ -128,6 +128,16 @@ class TestTreeMatching(unittest.TestCase):
 
         assert len(match) == 2
 
+
+    def test_expression_wildcard(self):
+
+        e = sast.Expression(sast.BinaryOperator(sast.Expression(sast.Identifier("a", 0)),
+                                                "+",
+                                                sast.Expression(
+                                                    sast.BinaryOperator(sast.Expression(sast.Identifier("b", 0)),
+                                                                        "+",
+                                                                        sast.Expression(1)))))
+
         pattern = sast.BinaryOperator(sast.Expression(sast.Identifier("b", 0)),
                                       "+",
                                       sast.Expression(Wildcard[int]("right")))  # type: ignore
@@ -137,6 +147,44 @@ class TestTreeMatching(unittest.TestCase):
         match = matcher.match_pattern(e)
 
         assert len(match) == 1
+
+        assert "right" in match[0].wildcards
+        assert match[0].wildcards["right"] == 1
+
+        pattern = sast.BinaryOperator(sast.Expression(Wildcard("left")),
+                                      "+",
+                                      sast.Expression(Wildcard[int]("right")))  # type: ignore
+
+        matcher = PatternMatcher(pattern)
+
+        match = matcher.match_pattern(e)
+
+        assert len(match) == 1
+
+        assert "right" in match[0].wildcards
+        assert match[0].wildcards["right"] == 1
+
+        assert "left" in match[0].wildcards
+        assert match[0].wildcards["left"].name == "b"
+        assert match[0].wildcards["left"].version == 0
+
+        pattern = sast.Identifier(Wildcard("id"), 0)
+
+        matcher = PatternMatcher(pattern)
+
+        match = matcher.match_pattern(e)
+
+        assert len(match) == 2
+
+        for m in match:
+            assert m.wildcards["id"] == "a" or m.wildcards["id"] == "b"
+
+
+    def test_expresison_ordering(self):
+
+        e = sast.Expression(sast.BinaryOperator(sast.Expression(sast.Identifier("a", 0)),
+                                                "+",
+                                                sast.Expression(sast.Identifier("b", 1))))
 
         pattern = sast.BinaryOperator(sast.Expression(sast.Identifier("b", 0)),
                                       "+",
@@ -155,6 +203,7 @@ class TestTreeMatching(unittest.TestCase):
         match = matcher.match_pattern(e)
 
         assert len(match) == 0
+
 
     def test_patterns(self):
 

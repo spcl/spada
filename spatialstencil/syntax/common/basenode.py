@@ -165,7 +165,7 @@ class Wildcard(Generic[T], BaseNode):
         self.name = name
 
     def __str__(self):
-        return f'*[{self.get_type().__name__}]({self.name})'
+        return f'Wildcard[{self.get_type().__name__}]({self.name})'
 
     def __repr__(self):
         return str(self)

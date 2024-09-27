@@ -1,7 +1,8 @@
+import typing
 from dataclasses import dataclass
 from typing import TypeVar, Generic
 
-from spatialstencil.syntax.common.basenode import BaseNode
+from spatialstencil.syntax.common.basenode import BaseNode, Wildcard
 from spatialstencil.syntax.common.match_tree import root_to_leaf_paths, TreeNode, Symbol, Index, Label, MatchingBaseNode
 from spatialstencil.syntax.common.trie import TrieBuilder, TrieNode, Trie
 from collections import deque, defaultdict
@@ -10,22 +11,55 @@ from collections import deque, defaultdict
 BaseNodeT = TypeVar('BaseNodeT', bound=BaseNode)
 
 
+@dataclass(frozen=True)
+class Match:
+    root: BaseNode
+    wildcards: dict[str, BaseNode]
+
+
 class PatternMatcher(Generic[BaseNodeT]):
 
     def __init__(self, pattern: BaseNodeT):
+        assert not isinstance(pattern, Wildcard), "Root node cannot be a wildcard (for now)"
+
         pattern_tree = MatchingBaseNode.from_base_node(pattern)
         trie, paths = _build_trie(pattern_tree)
         self.trie = trie
         self.paths = paths
+        self.pattern = pattern
 
-    def match_pattern(self, subject: BaseNode) -> set[BaseNode]:
+    def match_pattern(self, subject: BaseNode) -> list[Match]:
         matches = self._match_pattern(subject)
-        return [m.base_node for m in matches]
 
-    def _match_pattern(self, subject: BaseNode) -> set[TreeNode]:
+        result = []
+        for match in matches:
+            wildcard_matches = self._collect_wildcards(self.pattern, match.base_node)
+            result.append(Match(root=match.base_node, wildcards=wildcard_matches))
+
+        return result
+
+    def _collect_wildcards(self, pattern_node: BaseNode, subject_node: BaseNode) -> dict[str, BaseNode]:
+        wildcard_matches = {}
+        self._collect_named_wildcards(pattern_node, subject_node, wildcard_matches)
+        return wildcard_matches
+
+    def _collect_named_wildcards(self, pattern_node: BaseNode, subject: BaseNode | float | int | str | bool | tuple | list, wildcard_matches: dict):
+        if isinstance(pattern_node, Wildcard):
+            wildcard_name = pattern_node.name
+            if wildcard_name:
+                wildcard_matches[wildcard_name] = subject
+        elif isinstance(subject, BaseNode):
+            # Collect all the fields of the pattern and subject:
+            subject_dict = {field_name: field for field_name, field in subject.iter_fields()}
+            for field_name, pattern_field in pattern_node.iter_fields():
+                if field_name in subject_dict:
+                    subject_field = subject_dict[field_name]
+                    self._collect_named_wildcards(pattern_field, subject_field, wildcard_matches)
+
+    def _match_pattern(self, subject: BaseNode) -> set[MatchingBaseNode]:
         subject_tree = MatchingBaseNode.from_base_node(subject)
         matches = _match_pattern(None, subject_tree, self.paths, self.trie)
-        return matches
+        return matches  # type: ignore
 
 
 def _match_pattern(pattern: TreeNode | None, subject: TreeNode, paths=None, trie=None) -> set[TreeNode]:
