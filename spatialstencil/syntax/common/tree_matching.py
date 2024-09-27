@@ -172,7 +172,6 @@ def _build_trie(pattern: TreeNode) -> tuple[Trie[Symbol], list[list[Symbol]]]:
     builder = TrieBuilder[Symbol]()
     for path in paths:
         assert all(isinstance(p, Symbol) for p in path)
-        print([str(p) for p in path])
         builder.add(path)
 
     # Build Aho-Corasick automaton
