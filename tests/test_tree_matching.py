@@ -7,6 +7,7 @@ from typing import Tuple, List, TypeVar, Generic
 
 import spatialstencil.syntax.stencil_ir.irnodes as sast
 from spatialstencil.syntax.common.basenode import Wildcard
+from spatialstencil.syntax.common.types import ScalarType
 
 
 # Assume Tree, Node, Wildcard classes are already defined from previous translations.
@@ -139,7 +140,6 @@ class TestTreeMatching(unittest.TestCase):
 
         assert len(match) == 2
 
-
     def test_expression_wildcard(self):
 
         e = sast.Expression(sast.BinaryOperator(sast.Expression(sast.Identifier("a", 0)),
@@ -238,6 +238,54 @@ class TestTreeMatching(unittest.TestCase):
 
         assert len(match) == 0
 
+    def test_assign_bind(self):
+
+        pattern = sast.AssignOp(Wildcard("dst")(), sast.Expression(1), Wildcard()())
+
+        e = sast.AssignOp(sast.Identifier("a", 0), sast.Expression(1))
+
+        matcher = PatternMatcher(pattern)
+
+        match = matcher.match_pattern(e)
+
+        assert len(match) == 1
+
+        assert "dst" in match[0].wildcards
+        assert match[0].wildcards["dst"].name == "a"
+
+        e = sast.Expression(
+            sast.BinaryOperator(
+                sast.Expression(sast.UnaryOperator(Wildcard("u_op")(), sast.Expression(Wildcard[float]("value")()))),
+                Wildcard("op")(),
+                sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
+            ))
+        pattern = sast.AssignOp(Wildcard("dst")(), e, Wildcard()())
+
+        e = sast.AssignOp(result=sast.Identifier(name='a', version=0), value=sast.Expression(
+            value=sast.BinaryOperator(
+                left=sast.Expression(value=sast.UnaryOperator(op='-', value=sast.Expression(value=4.0))), op='*',
+                right=sast.Expression(
+                    value=sast.Subscript(value=sast.Identifier(name='in', version=0), subscript=[0, 0, 0])))),
+                          operation_type=sast.OperationType([ScalarType.f32], destination=None))
+
+        matcher = PatternMatcher(pattern)
+
+        match = matcher.match_pattern(e)
+
+        assert len(match) == 1
+        assert "dst" in match[0].wildcards
+        assert "u_op" in match[0].wildcards
+        assert "op" in match[0].wildcards
+        assert "src" in match[0].wildcards
+        assert "value" in match[0].wildcards
+
+        assert match[0].wildcards["dst"].name == "a"
+        assert match[0].wildcards["dst"].version == 0
+        assert match[0].wildcards["u_op"] == "-"
+        assert match[0].wildcards["op"] == "*"
+        assert match[0].wildcards["src"].name == "in"
+        assert match[0].wildcards["src"].version == 0
+        assert match[0].wildcards["value"] == 4.0
 
     def test_patterns(self):
 

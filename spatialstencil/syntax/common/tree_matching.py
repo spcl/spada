@@ -70,7 +70,26 @@ class PatternTransformer(Generic[BaseNodeT, BaseNodeK]):
         self.patterns = patterns
         self.matchers = [PatternMatcher(pattern) for pattern in patterns]
 
+    def first(self, subject: BaseNodeT) -> BaseNodeK | None:
+        """
+        Apply the first pattern that matches the subject
+
+        :param subject: match against this subject
+        :return: transformed node or None if no pattern matches
+        """
+        for matcher in self.matchers:
+            matches = matcher.match_pattern(subject)
+            if matches:
+                return self.transform(matches[0].root, **matches[0].wildcards)
+        return None
+
     def apply(self, subject: BaseNodeT) -> list[BaseNodeK]:
+        """
+        Apply all patterns that match the subject
+
+        :param subject:
+        :return: list of transformed nodes
+        """
 
         matches = []
 
@@ -171,6 +190,7 @@ def _build_trie(pattern: TreeNode) -> tuple[Trie[Symbol], list[list[Symbol]]]:
     paths = root_to_leaf_paths(pattern)
     builder = TrieBuilder[Symbol]()
     for path in paths:
+        # print([str(p) for p in path])
         assert all(isinstance(p, Symbol) for p in path)
         builder.add(path)
 
