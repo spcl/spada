@@ -20,7 +20,7 @@ class Parser:
         with open(larkfile, 'r') as fp:
             ebnf = fp.read()
 
-        # Create a parsr
+        # Create a parser
         self.parser = lark.Lark(ebnf, parser='earley')
         self.transformer = lark_to_ast.TreeToAST()
 

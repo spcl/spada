@@ -91,9 +91,8 @@ class Offset(Node):
     def add(self, other: 'Offset') -> 'Offset':
         assert all(isinstance(v, int) for v in self.values)
         assert all(isinstance(v, int) for v in other.values)
-        return Offset((self.values[0] + other.values[0],
-                       self.values[1] + other.values[1],
-                       self.values[2] + other.values[2]))
+        return Offset(
+            (self.values[0] + other.values[0], self.values[1] + other.values[1], self.values[2] + other.values[2]))
 
     def is_unknown(self) -> bool:
         return all(dim == "?" for dim in self.values)
@@ -104,7 +103,7 @@ class Offset(Node):
     def __sub__(self, other: 'Offset') -> 'Offset':
         assert all(isinstance(v, int) for v in self.values)
         assert all(isinstance(v, int) for v in other.values)
-        return Offset(tuple(self.values[i]-other.values[i] for i in range(3)))
+        return Offset(tuple(self.values[i] - other.values[i] for i in range(3)))
 
     def l1_norm(self) -> int:
         assert all(isinstance(v, int) for v in self.values)
@@ -132,9 +131,9 @@ class Offset(Node):
             if self_value != other_value:
                 return self_value < other_value
         return False
+
     def __getitem__(self, item):
         return self.values[item]
-
 
 
 @dataclass
@@ -182,6 +181,7 @@ class ViewType(Node, IRType):
     def as_ir(self, indent: int = 0) -> str:
         return f'spst.view<{self.domain.as_ir()}, {self.extent.as_ir()}, {self.dtype.as_ir()}>'
 
+
 @dataclass
 class FieldType(Node, IRType):
     domain: Domain
@@ -192,9 +192,7 @@ class FieldType(Node, IRType):
         """
         Creates an empty (not type/shape-inferred) field type.
         """
-        return FieldType(
-            domain=Cartesian(Interval(), Interval(), Interval()),
-            dtype=ScalarType.UNKNOWN)
+        return FieldType(domain=Cartesian(Interval(), Interval(), Interval()), dtype=ScalarType.UNKNOWN)
 
     def validate(self) -> None:
         assert self.dtype != ScalarType.f64
@@ -228,7 +226,6 @@ class OperationType(Node):
 
 @dataclass
 class Interval(Node, IRType):
-
     """
     Interval domain type in one dimension.
 
@@ -418,9 +415,10 @@ class Cartesian(Domain):
         assert len(tuple) == 3
         assert all(x is not None for x in tuple)
         assert not self.is_unknown()
-        return Cartesian(Interval(self.x.start + tuple[0], self.x.end + tuple[0]),
-                         Interval(self.y.start + tuple[1], self.y.end + tuple[1]),
-                         Interval(self.z.start + tuple[2], self.z.end + tuple[2]))
+        return Cartesian(
+            Interval(self.x.start + tuple[0], self.x.end + tuple[0]),
+            Interval(self.y.start + tuple[1], self.y.end + tuple[1]),
+            Interval(self.z.start + tuple[2], self.z.end + tuple[2]))
 
 
 @dataclass
@@ -780,10 +778,8 @@ class Program(Node, Operation, Block):
     computations: list[ComputationBlock | ReturnOp]
 
     def validate(self) -> None:
-        assert all((isinstance(comp, ComputationBlock) or
-                    isinstance(comp, ReturnOp) and
-                    all(isinstance(v.value, Identifier)
-                    for v in comp.values)) for comp in self.computations)
+        assert all((isinstance(comp, ComputationBlock) or isinstance(comp, ReturnOp) and all(
+            isinstance(v.value, Identifier) for v in comp.values)) for comp in self.computations)
         # Program arguments must be fields (not views)
         assert all(isinstance(i, (FieldType, ScalarType, AnyType)) for i in self.operation_type.source)
         assert all(isinstance(i, (FieldType, ScalarType, AnyType)) for i in self.operation_type.destination)
@@ -810,75 +806,15 @@ class NodeVisitor(visitor.IRNodeVisitor[Node]):
 
 
 class ScopedNodeVisitor(visitor.ScopedIRNodeVisitor[Node]):
+
     def __init__(self, *args, **kwargs):
         super().__init__(Node, *args, **kwargs)
 
+    def visit_Program(self, node: Program):
+        return self._visit_ScopeNode(node)
 
-    def visit_Program(self, program: Program):
-        """
-        Visits a program.
-
-        :param program:
-        :return:
-        """
-        self.push_scope(program)
-        self.do_visit_Program(program)
-        self.pop_scope()
-
-    def do_visit_Program(self, program: Program):
-        """
-        Called after entering the scope of the program.
-        If you want to recurse into the program, call self.generic_visit(program).
-
-        :param program:
-        :return:
-        """
-        self.generic_visit(program)
-
-    def visit_ComputationBlock(self, computation: ComputationBlock):
-        """
-        Visits a computation block.
-        Override pre_visit_ComputationBlock, do_visit_ComputationBlock, and post_visit_ComputationBlock
-        to implement the visitor.
-
-        :param computation:
-        :return:
-        """
-        self.pre_visit_ComputationBlock(computation)
-        self.push_scope(computation)
-        self.do_visit_ComputationBlock(computation)
-        self.pop_scope()
-        self.post_visit_ComputationBlock(computation)
-
-
-    def pre_visit_ComputationBlock(self, computation: ComputationBlock):
-        """
-        Called before entering the scope of the computation block.
-
-        :param computation:
-        :return:
-        """
-        pass
-
-    def do_visit_ComputationBlock(self, computation: ComputationBlock):
-        """
-        Called after entering the scope of the computation block.
-        If you want to recurse into the computation block, call self.generic_visit(computation).
-
-        :param computation:
-        :return:
-        """
-        self.generic_visit(computation)
-
-    def post_visit_ComputationBlock(self, computation: ComputationBlock):
-        """
-        Called after leaving the scope of the computation block.
-
-        :param computation:
-        :return:
-        """
-        pass
-
+    def visit_ComputationBlock(self, node: ComputationBlock):
+        return self._visit_ScopeNode(node)
 
 class NodeTransformer(visitor.IRNodeTransformer[Node]):
 

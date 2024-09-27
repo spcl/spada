@@ -63,12 +63,44 @@ class IRNodeVisitor(Generic[BaseNodeT]):
 
 
 class ScopedIRNodeVisitor(IRNodeVisitor[BaseNodeT]):
+    """
+    A scoped version of the IR node visitor that contains methods to locate the current scope,
+    add pre/post visitors for each scope, as well as a visitor for the contents of each scope.
+
+    Extending a scope visitor can be done by extending ``visit_<NODE TYPE>`` normally, but for
+    each scope node type, more methods are exposed for scope analysis: ``pre_visit_<NODE TYPE>``,
+    ``do_visit_<NODE TYPE>``, and ``post_visit_<NODE TYPE>``. For proper scope management,
+    only override ``do_visit_<NODE TYPE>`` for scope node types.
+    """
 
     _current_scope: list[BaseNodeT]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._current_scope = []
+
+    def _do_nothing(self, node):
+        pass
+
+    def _visit_ScopeNode(self, node: BaseNodeT):
+        """
+        A generic method that visits a scope of a specific type.
+        """
+        typestr = type(node).__name__
+
+        # Pre-visit, if exists
+        getattr(self, f'pre_visit_{typestr}', self._do_nothing)(node)
+        # Setup scope
+        self.push_scope(node)
+        # Visit scope contents
+        result = getattr(self, f'do_visit_{typestr}', self.generic_visit)(node)
+        # Pop scope
+        self.pop_scope()
+        # Post-visit, if exists
+        getattr(self, f'post_visit_{typestr}', self._do_nothing)(node)
+
+        # Return result from visiting scope contents
+        return result
 
     def get_scope(self) -> BaseNodeT:
         return self._current_scope[-1]
