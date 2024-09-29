@@ -1,5 +1,5 @@
-kernel laplacian<I,J,K> (stream<f32>[I+2, J+2] readonly in_field,
-                         stream<f32>[I, J] writeonly lap_field) {
+kernel @laplacian<I,J,K> (f32[K] readonly in_field,
+                          f32[K] writeonly lap_field) {
     
   ////////////////////////////////
   // Data placement
@@ -13,14 +13,15 @@ kernel laplacian<I,J,K> (stream<f32>[I+2, J+2] readonly in_field,
   
   // Copy input data
   phase {
-  
+    /*
     dataflow i, j in [0:I+2, 0:J+2] {
       stream<f32> in_field_l = in_field[i, j];
     }
+    */
   
     compute i, j in [0:I+2, 0:J+2] {
-      foreach k, x in [0:K, receive(in_field_l)] {
-        local_input[k] = x;
+      map i32 k in [0:K] {
+        local_input[k] = in_field[k];
       }
     }
   }
@@ -36,18 +37,20 @@ kernel laplacian<I,J,K> (stream<f32>[I+2, J+2] readonly in_field,
        
     }
 
+    /*
     dataflow i, i in [1:I+1, 1:J+1] {
         stream<f32> lap_field_l = lap_field[i, j];
     }
+    */
   
     // Edge senders
-    compute i, j in [0, 1:J] {
+    compute i, j in [0:1, 1:J] {
         // Streaming send to the right
         send(local_input, eastwards);
         // We receive nothing
     }
     
-    compute i, j in [I+1, 1:J] {
+    compute i, j in [I+1:I+2, 1:J] {
         // Streaming send to the left
         send(tosend, westwards);
         // We receive nothing
@@ -82,7 +85,9 @@ kernel laplacian<I,J,K> (stream<f32>[I+2, J+2] readonly in_field,
         // ...
 
         // after all computation has finished:
-        await send(local_result, lap_field_l);   
+        await map i32 k in [0:K] {
+          out_field[k] = local_result[k];
+        }   
     }  
   }
 }

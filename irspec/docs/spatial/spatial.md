@@ -475,7 +475,7 @@ completion completion_name = foreach variables in [receive(stream_name)] {
 }
 
 // Receive a fixed number of elements
-completion completion_name = foreach variables in [parameter_rage_expressions, receive(stream_name)] {
+completion completion_name = foreach variables in [parameter_range_expressions, receive(stream_name)] {
   // Assignment statements
 }
 ```

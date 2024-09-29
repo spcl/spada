@@ -31,13 +31,14 @@ identifier : suffix_id ("#" digits)?
 !int_type : "i8" | "i16" | "i32"
 !uint_type : "u8" | "u16" | "u32"
 !bool_type : "bool"
-!object_type : "completion" | "stream" | "relative_stream"
+!object_type : "completion" | "relative_stream"
 !var_type : "var"
 ?scalar_type : float_type | int_type | uint_type | bool_type
-?standard_type : scalar_type | object_type | var_type
+stream_type : "stream" "<" scalar_type ">"
+?standard_type : scalar_type | object_type | var_type | stream_type
 
 // Array types
-?array_type : standard_type "[" (integer_literal | bare_id) ("," (integer_literal | bare_id))* "]"
+?array_type : standard_type "[" value_expr ("," value_expr)* "]"
 
 // Annotations
 annotation : "readonly" | "writeonly" | "compiletime"
@@ -89,7 +90,7 @@ annotations : annotation (annotation)*
       | atom_expr
 
 ?atom_expr: bare_id "(" [call_arguments] ")"         -> call
-          | identifier "[" subscript_slice "]"  -> subscript
+          | identifier "[" subscript_slice "]"  -> subscript_expr
           | atom_expr "." bare_id               -> getattr
           | atom
 
@@ -100,14 +101,15 @@ annotations : annotation (annotation)*
 value_expr : test     // Basic value type. See operator precedence for more information
 
 call_arguments: test ("," test)*
-subscript_slice : posneg_integer_literal ("," posneg_integer_literal)*
+subscript_slice : value_expr ("," value_expr)*
+subscript : identifier "[" subscript_slice "]"
 
 ///////////////////////////////////////////////////
 // Grid/Subgrid expressions
 
 range_expression : value_expr ":" value_expr (":" value_expr)?
-subgrid_expression : range_expression "," range_expression  // 2D at the moment, might expand
-
+subgrid_expression : "[" range_expression ("," range_expression)* "]"
+range_and_stream : "[" (range_expression ("," range_expression)* ",")? "receive" "(" identifier ")" "]"
 ///////////////////////////////////////////////////
 // Declarations and routing
 
@@ -116,8 +118,11 @@ hop : "(" posneg_integer_literal "," posneg_integer_literal ")"  // 2D at the mo
 hops : "[" hop ("," hop)* "]"
 routing : "hops" "=" (auto | hops) "," "channel" "=" (auto | integer_literal)
 
-field_declaration : builtin_type identifier
-stream_declaration : "stream" "<" scalar_type ">" bare_id "=" "relative_stream" "(" value_expr "," value_expr ")" ("{" routing "}")?
+field_declaration : builtin_type identifier  (";")? //(";" | NEWLINE)
+stream_declaration : "stream" "<" scalar_type ">" bare_id "=" "relative_stream" "(" value_expr "," value_expr ")" ("{" routing "}")?  (";")?
+vars : identifier ("," identifier)*
+typed_var : scalar_type identifier
+typed_vars : typed_var ("," typed_var)*
 
 ///////////////////////////////////////////////////
 // Scope contents
@@ -125,7 +130,7 @@ stream_declaration : "stream" "<" scalar_type ">" bare_id "=" "relative_stream" 
 // TODO
 function_call: bare_id "(" [call_arguments] ")" 
 
-await_stmt : "await" (identifier | foreach_stmt)
+await_stmt : "await" (identifier | foreach_stmt | map_stmt | function_call)
 
 if_stmt : "if"
 //if_op : "if" "(" identifier ")" type_info? computation_body (elif_block)* (else_block)?
@@ -133,17 +138,17 @@ if_stmt : "if"
 //else_block : "else" computation_body
 
 for_stmt : "for"
-map_stmt : "map"
-foreach_stmt : "foreach"
-async_stmt : "async"
+map_stmt : "map" typed_vars "in" subgrid_expression "{" (statement)* "}"
+foreach_stmt : "foreach" typed_vars "in" range_and_stream "{" (statement)* "}"
+async_stmt : "async" "{" (statement)* "}"
 
-?base_stmt : (value_expr | function_call | await_stmt)
+?base_stmt : (function_call | await_stmt | map_stmt | foreach_stmt | async_stmt | for_stmt | if_stmt)
+?rhs : (value_expr | function_call | map_stmt | foreach_stmt | async_stmt)
 
+definition : builtin_type identifier "=" rhs
+assignment : (subscript | identifier) "=" rhs
 
-definition : builtin_type identifier "=" base_stmt
-assignment : identifier "=" base_stmt
-
-statement : (definition | assignment | base_stmt)
+statement : (definition | assignment | base_stmt) (";")?
 
 
 ////////////////////////////////////////////////////
