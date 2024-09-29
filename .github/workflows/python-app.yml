@@ -36,7 +36,7 @@ jobs:
         echo "Using Ubuntu version $UBUNTU_CODENAME"
         sudo apt-get update
         sudo apt-get install -y build-essential libssl-dev uuid-dev libgpgme11-dev squashfs-tools
-        wget -O singularity.deb https://github.com/sylabs/singularity/releases/download/v4.2.1/singularity-ce_4.2.1-${UBUNTU_CODENAME}_amd64.deb
+        wget -q -O singularity.deb https://github.com/sylabs/singularity/releases/download/v4.2.1/singularity-ce_4.2.1-${UBUNTU_CODENAME}_amd64.deb
         sudo apt install ./singularity.deb
         singularity --version
 
@@ -52,7 +52,7 @@ jobs:
       run: |
         mkdir cerebras-sdk
         cd cerebras-sdk
-        wget -O sdk-1.2.0.tar.gz 'https://www.dropbox.com/scl/fi/qapgr3xsz70x6uhs8p3gh/Cerebras-SDK-1.2.0-202406260214-4-70afe120.tar.gz?rlkey=nb9pqad1f81jklgvwzri63e0z&st=vl43ui70&dl=1'
+        wget -q -O sdk-1.2.0.tar.gz 'https://www.dropbox.com/scl/fi/qapgr3xsz70x6uhs8p3gh/Cerebras-SDK-1.2.0-202406260214-4-70afe120.tar.gz?rlkey=nb9pqad1f81jklgvwzri63e0z&st=vl43ui70&dl=1'
         tar xf sdk-1.2.0.tar.gz
         rm sdk-1.2.0.tar.gz
         cd ..
