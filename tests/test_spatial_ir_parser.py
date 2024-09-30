@@ -2,7 +2,7 @@ from spatialstencil.syntax.spatial_ir import irnodes as spast, parser
 import os
 
 
-def test_spatial_roundtrip_hdiff():
+def test_spatial_roundtrip_laplacian():
     """
     Tests a roundtrip IR->parse->IR->parse->IR for differences.
     """
@@ -62,5 +62,5 @@ class StreamCollector(spast.NodeVisitor):
 
 
 if __name__ == '__main__':
-    test_spatial_roundtrip_hdiff()
+    test_spatial_roundtrip_laplacian()
     test_spatial_visitor()
