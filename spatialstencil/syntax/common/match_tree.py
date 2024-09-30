@@ -112,7 +112,7 @@ class MatchingBaseNode(Generic[NVar], TreeNode[str]):
 
 
 # Abstract base class for Symbol
-class Symbol[V]:
+class Symbol(Generic[V]):
     pass
 
 
