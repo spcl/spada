@@ -142,12 +142,12 @@ if_stmt : "if"
 //elif_block : "elif" "(" identifier ")" computation_body
 //else_block : "else" computation_body
 
-scope_stmt_body :  "{" (statement)* "}" 
+?statements: statement? ((";" | NEWLINE)+ statement)* (";" | NEWLINE)*
 
-for_stmt : "for" typed_vars "in" subgrid_expression scope_stmt_body
-map_stmt : "map" typed_vars "in" subgrid_expression scope_stmt_body
-foreach_stmt : "foreach" typed_vars "in" range_and_stream scope_stmt_body
-async_stmt : "async" scope_stmt_body
+for_stmt : "for" typed_vars "in" subgrid_expression compute_body
+map_stmt : "map" typed_vars "in" subgrid_expression compute_body
+foreach_stmt : "foreach" typed_vars "in" range_and_stream compute_body
+async_stmt : "async" compute_body
 
 ?base_stmt : (function_call | await | map_stmt | foreach_stmt | async_stmt | for_stmt | if_stmt)
 ?rhs : (value_expr | function_call | map_stmt | foreach_stmt | async_stmt)
@@ -155,7 +155,7 @@ async_stmt : "async" scope_stmt_body
 definition : builtin_type identifier "=" rhs
 assignment : (subscript | identifier) "=" rhs
 
-?statement : (definition | assignment | base_stmt) (";")?
+?statement : (definition | assignment | base_stmt)
 
 
 ////////////////////////////////////////////////////
@@ -178,7 +178,7 @@ phase : "phase" phase_body
 kernel_body : "{" (place_block | dataflow_block | compute_block | phase)* "}"
 place_body : "{" field_declaration* "}"
 dataflow_body : "{" stream_declaration* "}"
-compute_body : "{" statement* "}"
+compute_body : "{" statements "}"
 phase_body : "{" (place_block | dataflow_block | compute_block)* "}"
 
 ?start: kernel

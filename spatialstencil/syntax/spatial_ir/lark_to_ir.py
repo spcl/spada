@@ -20,6 +20,8 @@ class TreeToSpatialIR(lark.Transformer):
     underscore = lambda self, val: str(val[0])
     true = lambda self, _: True
     false = lambda self, _: False
+    def NEWLINE(self, args):
+        return None
 
     # Literals
     @lark.v_args(inline=True)
@@ -213,7 +215,6 @@ class TreeToSpatialIR(lark.Transformer):
     call_arguments = list
     subscript_slice = list
     subgrid_expression = list
-    scope_stmt_body = list
     hops = list
     vars = list
     typed_vars = list
@@ -221,9 +222,16 @@ class TreeToSpatialIR(lark.Transformer):
     kernel_body = list
     place_body = list
     dataflow_body = list
-    compute_body = list
     phase_body = list
 
+    def compute_body(self, args):
+        if len(args) == 1 and isinstance(args[0], list):
+            return args[0]
+        return list(args)
+
+    # Statements is a special list where newlines can appear as tokens
+    def statements(self, args):
+        return [a for a in args if a is not None]
 
 # Helper functions
 
