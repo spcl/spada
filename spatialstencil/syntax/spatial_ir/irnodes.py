@@ -676,7 +676,6 @@ class ScopedNodeVisitor(visitor.ScopedIRNodeVisitor[SpatialNode]):
 
     def __init__(self, *args, **kwargs):
         super().__init__(SpatialNode, *args, **kwargs)
-        self._setup_scope_nodes(Kernel, Phase, ComputeBlock, DataflowBlock, PlaceBlock)
 
     def visit_Kernel(self, node: Kernel):
         return self._visit_ScopeNode(node)
