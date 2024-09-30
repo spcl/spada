@@ -65,6 +65,7 @@ class StreamType(SpatialNode, IRType):
         return f'stream<{self.element_type.as_ir()}>'
 
 
+
 # Arrays
 @dataclass
 class ArrayType(SpatialNode, IRType):
@@ -126,8 +127,6 @@ class ArraySlice(SpatialNode):
     For range access: array[start:end]
     For stride access: array[start:end:stride]
 
-    array: Identifier
-    indices: list[Union[int, Identifier, 'RangeExpression']]  # Handles single-index or ranges
     """
     array: Identifier
     indices: list[Union[int, Identifier, 'RangeExpression']]  # Handles single-index or ranges
@@ -197,6 +196,7 @@ class RangeExpression(SpatialNode):
             step_expr = Expression(ConstantLiteral(step, ScalarType.i32), ScalarType.i32)
             return RangeExpression(start_expr, stop_expr, step_expr)
         return RangeExpression(start_expr, stop_expr)
+
 
 
 @dataclass
@@ -442,6 +442,7 @@ class MapStatement(Statement):
             return f'{indent_str}await map {vars_str} in [{self.range_expression.as_ir()}] {{\n{body_str}\n{indent_str}}}'
 
 
+
 # Sequential For Loop
 @dataclass
 class ForStatement(Statement):
@@ -494,9 +495,6 @@ class AwaitStatement(Statement):
 class AssignmentStatement(Statement):
     """
     Assigns the result of an expression to a field or variable
-
-    source: Expression
-    destination: ArraySlice | Identifier
     """
     source: Expression
     destination: ArraySlice | Identifier

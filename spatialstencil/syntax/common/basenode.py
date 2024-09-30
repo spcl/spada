@@ -11,6 +11,7 @@ from enum import Enum
 from typing import Generic
 
 
+
 @dataclass
 class BaseNode:
     """
@@ -104,7 +105,6 @@ class BaseNode:
         pass  # Nothing to validate
 
     def __post_init__(self):
-
         # Check if there are any wildcards in the node, if so, skip validation
         for _, field in self.iter_fields():
             if isinstance(field, Wildcard):
