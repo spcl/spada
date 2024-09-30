@@ -370,7 +370,7 @@ class SendStatement(Statement):
     Send statement for sending data asynchronously through a stream.
     """
     local_array: Union[Identifier, ArraySlice]
-    stream_name: Identifier
+    stream_name: Identifier | ArraySlice
     completion_name: Optional[Completion] = None
 
     def as_ir(self, indent: int = 0) -> str:
@@ -386,7 +386,7 @@ class Receive(SpatialNode):
     """
     Receive data from a stream.
     """
-    stream_name: Identifier
+    stream_name: Identifier | ArraySlice
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent

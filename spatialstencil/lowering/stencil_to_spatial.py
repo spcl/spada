@@ -1,6 +1,6 @@
 import spatialstencil.syntax.stencil_ir.irnodes as sast
 import spatialstencil.syntax.spatial_ir.irnodes as spa
-from spatialstencil.lowering.stencil_to_spatial_compute import ProgramCompute
+from spatialstencil.lowering.stencil_to_spatial_compute import ProgramCompute, AbstractStatement
 from spatialstencil.lowering.stencil_to_spatial_dataflow import ProgramDataflow
 from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
 
@@ -8,6 +8,9 @@ from spatialstencil.lowering.versioning import Versioning
 from spatialstencil.syntax.common.types import ScalarType
 
 from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
+
+
+
 
 
 def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
@@ -34,10 +37,12 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
     dataflow_gen = ProgramDataflow(domain_collector, versioning)
     compute_gen = ProgramCompute(domain_collector, versioning, dataflow_gen, placement_gen)
     body = []
-    body.extend(placement_gen.place_program(stencil))
+
+    placement_blocks = placement_gen.place_program(stencil)
+    body.extend(placement_blocks)
 
     # Input generation:
-    arguments = kernel_arguments(stencil, domain_collector)
+    arguments = kernel_arguments(stencil)
     compute = input_phase(body, arguments, versioning)
 
     body.extend(compute)
@@ -52,38 +57,48 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
 
             body.append(phase)
         elif isinstance(comp, sast.ReturnOp):
-            # TODO Output phase
-            pass
+            output_compute = output_phase(comp, arguments, versioning, placement_gen)
+            body.append(spa.Phase([], [], output_compute))
 
-    # TODO Pass that applies rectangle splitting to the whole phase across block types
+    # TODO Pass that applies rectangle splitting to all phases across block types
     kernel = spa.Kernel(name=stencil.name or "", parameters=[], arguments=arguments, body=body)
 
     return kernel
 
 
-def kernel_arguments(stencil: sast.Program,
-                     domains: DomainCollector) -> list[spa.KernelArgument]:
+def kernel_arguments(stencil: sast.Program) -> list[spa.KernelArgument]:
 
     arguments = []
     for inp, inp_t in zip(stencil.inputs, stencil.operation_type.source):
-        domain = domains.get_domain(inp, stencil)
-        assert domain is not None, f"Domain for input {inp} not found in program {stencil}"
+        arguments.append(_construct_arg(inp.name, inp_t))
 
-        # TODO: Extent to scalar types & constants, detect write-only / readonly fields
-        array_size_x = domain.x[1] - domain.x[0]
-        array_size_y = domain.y[1] - domain.y[0]
-        stream_type = spa.StreamType(inp_t.dtype)
-
-        array_type = spa.ArrayType(stream_type, [array_size_x, array_size_y])
-        identifier = spa.Identifier(f'_{inp.name}', 0)
-        arguments.append(spa.KernelArgument(array_type, identifier))
+    for i, out_t in enumerate(stencil.operation_type.destination):
+        arguments.append(_construct_arg(_ith_output_name(i), out_t))
 
     return arguments
 
 
+def _ith_output_name(i: int) -> str:
+    return f'kernel_out_{i}'
+
+
+def _construct_arg(name: str, arg_t: sast.FieldType) -> spa.KernelArgument:
+    assert isinstance(arg_t, sast.FieldType)
+    domain = arg_t.domain
+    assert isinstance(domain, sast.Cartesian)
+
+    # TODO: Extent to scalar types & constants, detect write-only / readonly fields
+    array_size_x = domain.x[1] - domain.x[0]
+    array_size_y = domain.y[1] - domain.y[0]
+    stream_type = spa.StreamType(arg_t.dtype)
+
+    array_type = spa.ArrayType(stream_type, [array_size_x, array_size_y])
+    identifier = spa.Identifier(f'_{name}', 0)
+    return spa.KernelArgument(array_type, identifier)
+
 
 def input_phase(body: list[spa.PlaceBlock],
-                kernel_arguments: list[spa.KernelArgument],
+                arguments: list[spa.KernelArgument],
                 versioning: Versioning[spa.Identifier]) -> list[spa.ComputeBlock]:
 
     compute = []
@@ -91,13 +106,13 @@ def input_phase(body: list[spa.PlaceBlock],
     for block in body:
         statements = []
 
-        var_i = versioning.next_version('_i')
-        var_j = versioning.next_version('_j')
+        var_i = versioning.next_version('i')
+        var_j = versioning.next_version('j')
 
         for field in block.statements:
             # Check if it is an input field by looking at the arguments and checking if there is
             # a field with the same name but with a _ prefix
-            for arg in kernel_arguments:
+            for arg in arguments:
                 if field.field_name.name == f'{arg.identifier.name[1:]}_0_0_0':
                     # Generate input phase
 
@@ -105,8 +120,8 @@ def input_phase(body: list[spa.PlaceBlock],
                     receive_stream = spa.ArraySlice(array=arg.identifier, indices=[var_i, var_j])
 
                     receive = spa.Receive(receive_stream)
-                    dat_var = versioning.next_version('_x')
-                    iter_var = versioning.next_version('_k')
+                    dat_var = versioning.next_version('x')
+                    iter_var = versioning.next_version('k')
 
                     assignment = spa.AssignmentStatement(
                         source=spa.Expression(value=dat_var, dtype=field.dtype.base_type),
@@ -136,6 +151,40 @@ def input_phase(body: list[spa.PlaceBlock],
 
     return compute
 
+def output_phase(op: sast.ReturnOp,
+                 arguments: list[spa.KernelArgument],
+                 versioning: Versioning[spa.Identifier],
+                 placement: ProgramPlacement) -> list[spa.ComputeBlock]:
+    # For each return value, find the corresponding argument and generate the output phase
+    # TODO Handle different domain sizes for output fields
 
+    compute = []
+    shift = placement.get_shift()
 
+    for i, (arg, arg_t) in enumerate(zip(op.values, op.operation_type.source)):
+        x_range = [arg_t.domain.x[0] + shift[0], arg_t.domain.x[1] + shift[0]]
+        y_range = [arg_t.domain.y[0] + shift[1], arg_t.domain.y[1] + shift[1]]
 
+        # Create a send statement for each output
+
+        buf, buf_t = placement.get_storage(arg.value)
+
+        var_i = versioning.next_version('i')
+        var_j = versioning.next_version('j')
+
+        target = spa.ArraySlice(
+            array=spa.Identifier(_ith_output_name(i), 0),
+            indices=[var_i, var_j]
+        )
+
+        stmt = spa.SendStatement(buf, target)
+
+        comp = spa.ComputeBlock(
+            variables=[var_i, var_j],
+            subgrid=spa.SubgridExpression(spa.RangeExpression.from_args(x_range[0], x_range[1]),
+                                          spa.RangeExpression.from_args(y_range[0], y_range[1])),
+            statements=[stmt]
+        )
+        compute.append(comp)
+
+    return compute
