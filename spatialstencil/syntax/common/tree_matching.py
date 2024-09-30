@@ -243,6 +243,7 @@ def _match_pattern(pattern: TreeNode | None, subject: TreeNode, paths=None, trie
 
     return {t for t in counter.keys() if has_match[t]}
 
+
 def _build_trie(pattern: TreeNode) -> tuple[Trie[Symbol], list[list[Symbol]]]:
 
     assert isinstance(pattern, TreeNode)

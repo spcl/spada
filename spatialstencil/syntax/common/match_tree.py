@@ -1,6 +1,6 @@
 from collections import deque
 from dataclasses import dataclass
-from typing import List, Union, Deque, TypeVar, Any
+from typing import List, Union, Deque, TypeVar, Any, Generic
 
 from spatialstencil.syntax.common.basenode import BaseNode
 
@@ -10,7 +10,7 @@ V = TypeVar('V')
 
 
 # Abstract Tree class
-class MatchTree[V]:
+class MatchTree(Generic[V]):
     pass
 
 
@@ -52,7 +52,7 @@ class TreeWildcard(MatchTree):
 NVar = TypeVar('NVar', bound=BaseNode)
 
 
-class MatchingBaseNode[NVar](TreeNode[str]):
+class MatchingBaseNode(Generic[NVar], TreeNode[str]):
 
     # The base node that this match tree represents
     base_node: NVar = None
