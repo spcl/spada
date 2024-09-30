@@ -41,11 +41,29 @@ class PatternMatcher(Generic[BaseNodeT]):
         return result
 
     def _collect_wildcards(self, pattern_node: BaseNode, subject_node: BaseNode) -> dict[str, BaseNode]:
+        """
+        Collect named wildcards from a pattern and a subject node.
+
+        :param pattern_node:
+        :param subject_node:
+        :return:
+        """
         wildcard_matches = {}
         self._collect_named_wildcards(pattern_node, subject_node, wildcard_matches)
         return wildcard_matches
 
-    def _collect_named_wildcards(self, pattern_node: BaseNode, subject: BaseNode | float | int | str | bool | tuple | list, wildcard_matches: dict):
+    def _collect_named_wildcards(self,
+                                 pattern_node: BaseNode | typing.Sequence[BaseNode],
+                                 subject: BaseNode | float | int | str | bool | list | tuple,
+                                 wildcard_matches: dict) -> None:
+        """
+        Recursively collect named wildcards from a pattern and a subject node.
+
+        :param pattern_node:
+        :param subject:
+        :param wildcard_matches:
+        :return:
+        """
         if isinstance(pattern_node, Wildcard):
             wildcard_name = pattern_node.name
             if wildcard_name and len(wildcard_name):
@@ -57,6 +75,11 @@ class PatternMatcher(Generic[BaseNodeT]):
                 if field_name in subject_dict:
                     subject_field = subject_dict[field_name]
                     self._collect_named_wildcards(pattern_field, subject_field, wildcard_matches)
+        elif isinstance(subject, (list, tuple)):
+            assert isinstance(pattern_node, typing.Sequence)
+            # Collect wildcards from each element of the sequence
+            for pattern_field, subject_field in zip(pattern_node, subject):
+                self._collect_named_wildcards(pattern_field, subject_field, wildcard_matches)
 
     def _match_pattern(self, subject: BaseNode) -> set[MatchingBaseNode]:
         subject_tree = MatchingBaseNode.from_base_node(subject)
@@ -82,6 +105,20 @@ class PatternTransformer(Generic[BaseNodeT, BaseNodeK]):
             if matches:
                 return self.transform(matches[0].root, **matches[0].wildcards)
         return None
+
+    def match(self, subject: BaseNodeT) -> list[Match]:
+        """
+        Match all patterns that match the subject, returning the nodes
+        at which a transformation is possible.
+
+        :param subject:
+        :return: list of matches
+        """
+
+        matches = []
+        for matcher in self.matchers:
+            matches.extend(matcher.match_pattern(subject))
+        return matches
 
     def apply(self, subject: BaseNodeT) -> list[BaseNodeK]:
         """
@@ -123,6 +160,10 @@ def _match_pattern(pattern: TreeNode | None, subject: TreeNode, paths=None, trie
     :param subject:
     :return:
     """
+    #_paths = root_to_leaf_paths(subject)
+    #print("Subject paths:")
+    #for path in _paths:
+    #    print([str(p) for p in path])
 
     # Pattern must be rooted at a labeled node for initial transition
     assert isinstance(subject, TreeNode)
@@ -190,7 +231,7 @@ def _build_trie(pattern: TreeNode) -> tuple[Trie[Symbol], list[list[Symbol]]]:
     paths = root_to_leaf_paths(pattern)
     builder = TrieBuilder[Symbol]()
     for path in paths:
-        # print([str(p) for p in path])
+        #print([str(p) for p in path])
         assert all(isinstance(p, Symbol) for p in path)
         builder.add(path)
 

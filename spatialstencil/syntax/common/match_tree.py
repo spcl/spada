@@ -69,35 +69,43 @@ class MatchingBaseNode[NVar](TreeNode[str]):
         # for each list of basenodes, create a child node for each element recursively
         # for each list of strings, ints, or enums, create a child node for each element directly
         # the label of the node is the name of the class of the node
+
+        def _create_wildcard_node(_wildcard: syntax.Wildcard) -> TreeNode[str]:
+            _grandchild = TreeWildcard()
+            _type = _wildcard.get_type()
+            if _type != Any:
+                _type_label = _type.__name__
+                _child = MatchingBaseNode(f"{_type_label}", [_grandchild])
+            else:
+                _child = _grandchild
+            return _child
+
+        def _create_primitive_node(_value: Any) -> TreeNode[str]:
+            _class_name = _value.__class__.__name__
+            _grandchild = TreeNode(str(_value), [])
+            return TreeNode(_class_name, [_grandchild])
+
         label = node.__class__.__name__
         children = []
         for f in node.iter_fields():
             if isinstance(f[1], syntax.Wildcard):
-                grandchild = TreeWildcard()
-                # add a type label to the wildcard
-                type = f[1].get_type()
-                if type != Any:
-                    type_label = type.__name__
-                    child = MatchingBaseNode(f"{type_label}", [grandchild])
-                else:
-                    child = grandchild
-
+                child = _create_wildcard_node(f[1])
                 children.append(child)
             elif isinstance(f[1], BaseNode):
                 children.append(MatchingBaseNode.from_base_node(f[1]))
             elif isinstance(f[1], (list, tuple)):
                 for i, elem in enumerate(f[1]):
                     # Make sure the order is respected
-                    if isinstance(elem, BaseNode):
+                    if isinstance(elem, syntax.Wildcard):
+                        grandchild = _create_wildcard_node(elem)
+                    elif isinstance(elem, BaseNode):
                         grandchild = MatchingBaseNode.from_base_node(elem)
                     else:
-                        grandchild = MatchingBaseNode[NVar](str(elem), [])
+                        grandchild = _create_primitive_node(elem)
                     child = MatchingBaseNode(str(i), [grandchild])
                     children.append(child)
             else:
-                class_name = f[1].__class__.__name__
-                grandchild = MatchingBaseNode[NVar](str(f[1]), [])
-                child = MatchingBaseNode(class_name, [grandchild])
+                child = _create_primitive_node(f[1])
                 children.append(child)
 
         return MatchingBaseNode[NVar](label, children, node)
