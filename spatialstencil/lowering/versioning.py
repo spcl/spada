@@ -1,7 +1,11 @@
 from collections import defaultdict
+from typing import Generic, TypeVar
 
 
-class Versioning[T]:
+T = TypeVar('T')
+
+
+class Versioning(Generic[T]):
     # Mapping from variable names to the number of fields allocated for that variable
     # Used to generate unique names for variables
     _var_counter: dict[str, int]

@@ -1,8 +1,11 @@
 from dataclasses import dataclass
+from typing import Generic, TypeVar
+
+T = TypeVar('T')
 
 
 @dataclass(frozen=True)
-class Rectangle[T]:
+class Rectangle(Generic[T]):
     x_range: tuple[int, int]
     y_range: tuple[int, int]
     metadata: T
