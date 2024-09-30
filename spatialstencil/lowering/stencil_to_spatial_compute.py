@@ -21,9 +21,11 @@ class ProgramCompute:
         self.versioning = versioning
         self.dataflow = dataflow
         self.placement = placement
+        self.offset_domain = domains.get_shift()[0:2]
 
         self.statement_transformers = [UnaryMapTransformer(self.placement, self.versioning),
-                                       MapTransformer(self.placement, self.versioning)]
+                                       MapTransformer(self.placement, self.versioning),
+                                       HorizontalStencilTransformer(self.placement, self.versioning)]
 
     def generate_computation(self, comp: sast.ComputationBlock) -> list[spa.ComputeBlock]:
         """
@@ -43,18 +45,42 @@ class ProgramCompute:
             elif isinstance(op, sast.ReturnOp):
                 body.extend(self._generate_return_op(op))
 
-        return []
+        return body
 
-    def _generate_statement_block(self, op: sast.StatementBlock) -> list:
+    def _generate_statement_block(self, op: sast.StatementBlock) -> list[spa.ComputeBlock]:
         blocks = []
 
+        access_type = op.operation_type.destination[0]
+        assert isinstance(access_type, (sast.ViewType, sast.FieldType))
+        assert isinstance(access_type.domain, sast.Cartesian)
+        x_range = (access_type.domain.x[0] + self.offset_domain[0],
+                   access_type.domain.x[1] + self.offset_domain[1])
+        y_range = (access_type.domain.y[0] + self.offset_domain[0],
+                   access_type.domain.y[1] + self.offset_domain[1])
+
         for stmt in op.body:
-            blocks.extend(self._apply_statement_transformers(stmt))
+            statements = self._apply_statement_transformers(stmt)
+            #assert len(statements) > 0, f"Could not match statement {stmt.as_ir()}"
+
+            var_i = self.versioning.next_version('i')
+            var_j = self.versioning.next_version('j')
+            variables = [var_i, var_j]
+
+            subgrid = spa.SubgridExpression.from_tuple(
+                x_range, y_range
+            )
+            block = spa.ComputeBlock(
+                variables,
+                subgrid,
+                statements
+            )
+            blocks.append(block)
 
         return blocks
 
     def _apply_statement_transformers(self, op: sast.AssignOp) -> list[spa.Statement]:
         blocks = []
+        print(op)
         for transformer in self.statement_transformers:
             res = transformer.first(op)
             if res is not None:
@@ -75,19 +101,19 @@ class MapTransformer(PatternTransformer[sast.AssignOp, spa.MapStatement]):
         self.versioning = versioning
         # x (op) a[0, 0, 0]
         e = sast.Expression(
-                sast.BinaryOperator(
-                    sast.Expression(Wildcard[float]("value")()),
-                    Wildcard("op")(),
-                    sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
-                ))
+            sast.BinaryOperator(
+                sast.Expression(Wildcard[float]("value")()),
+                Wildcard("op")(),
+                sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
+            ))
         assignment_f = sast.AssignOp(Wildcard("dst")(), e, Wildcard()())
 
         e = sast.Expression(
-                sast.BinaryOperator(
-                    sast.Expression(Wildcard[int]("value")()),
-                    Wildcard("op")(),
-                    sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
-                ))
+            sast.BinaryOperator(
+                sast.Expression(Wildcard[int]("value")()),
+                Wildcard("op")(),
+                sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
+            ))
         assignment_i = sast.AssignOp(Wildcard("dst")(), e, Wildcard()())
 
         super().__init__([assignment_i, assignment_f])
@@ -146,18 +172,18 @@ class UnaryMapTransformer(PatternTransformer[sast.AssignOp, spa.MapStatement]):
         self.versioning = versioning
         # (u_op) x (op) a[0, 0, 0]
         e = sast.Expression(
-                sast.BinaryOperator(
-                    sast.Expression(sast.UnaryOperator(Wildcard("u_op")(), sast.Expression(Wildcard[float]("value")()))),
-                    Wildcard("op")(),
-                    sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
-                ))
+            sast.BinaryOperator(
+                sast.Expression(sast.UnaryOperator(Wildcard("u_op")(), sast.Expression(Wildcard[float]("value")()))),
+                Wildcard("op")(),
+                sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
+            ))
         assignment_f = sast.AssignOp(Wildcard("dst")(), e, Wildcard()())
         e = sast.Expression(
-                sast.BinaryOperator(
-                    sast.Expression(sast.UnaryOperator(Wildcard("u_op")(), sast.Expression(Wildcard[int]("value")()))),
-                    Wildcard("op")(),
-                    sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
-                ))
+            sast.BinaryOperator(
+                sast.Expression(sast.UnaryOperator(Wildcard("u_op")(), sast.Expression(Wildcard[int]("value")()))),
+                Wildcard("op")(),
+                sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
+            ))
         assignment_i = sast.AssignOp(Wildcard("dst")(), e, Wildcard()())
 
         super().__init__([assignment_i, assignment_f])
@@ -210,3 +236,42 @@ class UnaryMapTransformer(PatternTransformer[sast.AssignOp, spa.MapStatement]):
         )
         print(stmt.as_ir())
         return stmt
+
+
+class HorizontalStencilTransformer(PatternTransformer[sast.AssignOp, spa.ForeachStatement]):
+
+    def __init__(self, placement: ProgramPlacement, versioning: Versioning[spa.Identifier]):
+        self.placement = placement
+        self.versioning = versioning
+        # %c = (%a + %b[dx, dy, 0]) : f32
+
+        e = sast.Expression(
+            value=sast.BinaryOperator(left=sast.Expression(value=Wildcard('local')()),
+                                      op=Wildcard("op")(),
+                                      right=sast.Expression(
+                                          sast.Subscript(Wildcard('remote')(),
+                                                         [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0]))))
+
+        assignment_0 = sast.AssignOp(Wildcard[sast.Identifier]("dst")(), e, Wildcard()())
+
+        super().__init__([assignment_0])
+
+    def transform(self,
+                  root: sast.AssignOp,
+                  op: str = None,
+                  local: sast.Identifier = None,
+                  remote: sast.Identifier = None,
+                  dst: sast.Identifier = None,
+                  dx: int = None,
+                  dy: int = None,
+                  **wildcards) -> spa.MapStatement:
+        assert op is not None
+        assert local is not None
+        assert remote is not None
+        assert dst is not None
+
+        res_id, res_dtype = self.placement.get_storage(dst)
+        print(f"Matched  %c = (%a + %b[dx, dy, 0]) as {res_id} = {local} {op} {remote}[{dx}, {dy}, 0]")
+        var_k = self.versioning.next_version('k')
+
+        return None

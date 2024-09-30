@@ -1,6 +1,10 @@
 from dataclasses import dataclass
 
 import unittest
+
+from spatialstencil.lowering.stencil_to_spatial_compute import HorizontalStencilTransformer
+from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
+from spatialstencil.lowering.versioning import Versioning
 from spatialstencil.syntax.common.match_tree import TreeNode, TreeWildcard, MatchTree, MatchingBaseNode
 from spatialstencil.syntax.common.tree_matching import _match_pattern, PatternMatcher, PatternTransformer
 from typing import Tuple, List, TypeVar, Generic
@@ -8,6 +12,7 @@ from typing import Tuple, List, TypeVar, Generic
 import spatialstencil.syntax.stencil_ir.irnodes as sast
 from spatialstencil.syntax.common.basenode import Wildcard
 from spatialstencil.syntax.common.types import ScalarType
+import spatialstencil.syntax.spatial_ir.irnodes as spa
 
 
 # Assume Tree, Node, Wildcard classes are already defined from previous translations.
@@ -82,6 +87,15 @@ class IdentifierIncrementerTransformer(PatternTransformer[sast.BaseNode, sast.Id
     def transform(self, root: sast.Expression, version: int = None, **wildcards) -> sast.Identifier:
         assert version is not None
         return sast.Identifier(root.value.name, version + 1)
+
+
+class DummyProgramPlacement(ProgramPlacement):
+
+    def get_storage(self,
+                    identifier: sast.Identifier,
+                    offset: sast.Offset = sast.Offset.zero()) -> tuple[spa.Identifier, spa.ArrayType]:
+        return spa.Identifier(f'{identifier.name}_{offset[0]}_{offset[1]}_{offset[2]}',
+                              identifier.version), spa.ArrayType(ScalarType.f32, [80])
 
 
 class TestTreeMatching(unittest.TestCase):
@@ -310,6 +324,44 @@ class TestTreeMatching(unittest.TestCase):
         pattern_matcher = PatternMatcher(assign_pattern)
 
         print(assign_pattern)
+
+    def test_horizontal_stencil_transformer(self):
+
+        versioning = Versioning[sast.Identifier](sast.Identifier.__class__)
+        placement = DummyProgramPlacement(None, versioning)
+
+        horizontal_stencil_transformer = HorizontalStencilTransformer(placement, versioning)
+
+        a = sast.AssignOp(result=sast.Identifier(name='d', version=0),
+                          value=sast.Expression(value=sast.BinaryOperator(
+                              left=sast.Expression(value=sast.Identifier(name='c', version=0)),
+                              op='+',
+                              right=sast.Expression(value=sast.Subscript(value=sast.Identifier(name='in', version=0),
+                                                                         subscript=[0, -1, 0])))),
+                          operation_type=sast.OperationType(source=[ScalarType.f32], destination=None))
+
+        r = horizontal_stencil_transformer.match(a)
+        print(r)
+        assert len(r) > 0, "No match found"
+
+        assert "dst" in r[0].wildcards
+        assert "local" in r[0].wildcards
+        assert "op" in r[0].wildcards
+        assert "dx" in r[0].wildcards
+        assert "dy" in r[0].wildcards
+        assert "remote" in r[0].wildcards
+
+        assert r[0].wildcards["dst"].name == "d"
+        assert r[0].wildcards["dst"].version == 0
+        assert r[0].wildcards["local"].name == "c"
+        assert r[0].wildcards["local"].version == 0
+        assert r[0].wildcards["remote"].name == "in"
+        assert r[0].wildcards["remote"].version == 0
+
+        assert r[0].wildcards["op"] == "+"
+
+        assert r[0].wildcards["dx"] == 0
+        assert r[0].wildcards["dy"] == -1
 
 
 if __name__ == '__main__':
