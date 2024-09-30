@@ -51,10 +51,12 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
             phase = spa.Phase(place=place, dataflow=flow, compute=compute)
 
             body.append(phase)
+        elif isinstance(comp, sast.ReturnOp):
+            # TODO Output phase
+            pass
 
     # TODO Pass that applies rectangle splitting to the whole phase across block types
-
-    kernel = spa.Kernel(name="", parameters=[], arguments=arguments, body=body)
+    kernel = spa.Kernel(name=stencil.name or "", parameters=[], arguments=arguments, body=body)
 
     return kernel
 
@@ -96,7 +98,7 @@ def input_phase(body: list[spa.PlaceBlock],
             # Check if it is an input field by looking at the arguments and checking if there is
             # a field with the same name but with a _ prefix
             for arg in kernel_arguments:
-                if arg.identifier.name == f'_{field.field_name.name}':
+                if field.field_name.name == f'{arg.identifier.name[1:]}_0_0_0':
                     # Generate input phase
 
                     # Receive the input
