@@ -11,6 +11,14 @@ class SpatialNode(BaseNode):
     Base class for all spatial IR nodes.
     """
 
+    @classmethod
+    def from_lark(cls, args):
+        """
+        Simple constructor that calls the IR node object constructor with the
+        IR children in order. See ``lark_to_ir.py`` for usage.
+        """
+        return cls(*args)
+
     def as_ir(self, indent: int = 0) -> str:
         raise NotImplementedError()
 
@@ -51,6 +59,8 @@ class Identifier(SpatialNode):
     version: int
 
     def as_ir(self, indent: int = 0) -> str:
+        if self.version == 0:
+            return self.name
         return f'{self.name}#{self.version}'
 
 
@@ -73,16 +83,31 @@ class ArrayType(SpatialNode, IRType):
     An array type of a scalar or stream, with one or more dimensions.
     """
     base_type: Union[ScalarType, StreamType]
-    shape: list[Union[int, Parameter]]
+    shape: list[Union[int, 'Expression']]
 
     def validate(self) -> None:
         assert isinstance(self.shape, list)
-        assert all(isinstance(dim, (int, Parameter)) for dim in self.shape)
+        assert all(isinstance(dim, (int, Expression)) for dim in self.shape)
         assert len(self.shape) > 0
 
     def as_ir(self, indent: int = 0) -> str:
         dims = ", ".join(str(dim.as_ir() if isinstance(dim, SpatialNode) else dim) for dim in self.shape)
         return f'{self.base_type.as_ir()}[{dims}]'
+
+
+@dataclass
+class TypedIdentifier(SpatialNode):
+    """
+    A variable identifier (e.g., x, y, my_variable) with a type.
+    """
+    dtype: Union[ScalarType, StreamType, ArrayType]
+    name: str
+    version: int
+
+    def as_ir(self, indent: int = 0) -> str:
+        if self.version == 0:
+            return f'{self.dtype.as_ir()} {self.name}'
+        return f'{self.dtype.as_ir()} {self.name}#{self.version}'
 
 
 # Unary Operators
@@ -142,17 +167,17 @@ class ArraySlice(SpatialNode):
     For stride access: array[start:end:stride]
     """
     array: Identifier
-    indices: list[Union[int, Identifier, 'RangeExpression']]  # Handles single-index or ranges
+    indices: list[Union['Expression', 'RangeExpression']]  # Handles single-index or ranges
 
     def validate(self) -> None:
         assert isinstance(self.array, Identifier)
         assert isinstance(self.indices, list)
-        assert all(isinstance(idx, (int, Identifier, RangeExpression)) for idx in self.indices)
+        assert all(isinstance(idx, (Expression, RangeExpression)) for idx in self.indices)
 
     def as_ir(self, indent: int = 0) -> str:
         index_strs = []
         for idx in self.indices:
-            if isinstance(idx, (RangeExpression, Identifier)):
+            if isinstance(idx, (RangeExpression, Expression)):
                 index_strs.append(idx.as_ir())
             elif isinstance(idx, int):
                 index_strs.append(str(idx))
@@ -166,13 +191,11 @@ class Expression(SpatialNode):
     A general expression that can take the form of an identifier, literal, array slice, unary/binary operator, etc.
     """
     value: Union[Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator, TernaryOperator]
-    dtype: ScalarType
 
     def validate(self) -> None:
         assert isinstance(
             self.value,
             (Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator, TernaryOperator))
-        assert isinstance(self.dtype, ScalarType)
 
     def as_ir(self, indent: int = 0) -> str:
         return self.value.as_ir()
@@ -282,7 +305,7 @@ class RelativeStreamDeclaration(SpatialNode):
     A stream declaration inside a dataflow block that declares a communication stream
     to and from PEs at relative positions, with an optional routing declaration.
     """
-    dtype: StreamType
+    dtype: ScalarType
     stream_name: Identifier
     dx: Expression
     dy: Expression
@@ -293,7 +316,7 @@ class RelativeStreamDeclaration(SpatialNode):
         routing_str = ""
         if self.routing:
             routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{' ' * indent}}}"
-        return f'{indent_str}stream<{self.dtype.element_type.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
+        return f'{indent_str}stream<{self.dtype.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
 
 
 ###
@@ -366,11 +389,27 @@ class SendStatement(Statement):
         return f'{indent_str}send({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
 
 
+@dataclass
+class ReceiveStatement(Statement):
+    """
+    Receive statement for receiving data asynchronously through a stream.
+    """
+    local_array: Union[Identifier, ArraySlice]
+    stream_name: Identifier
+    completion_name: Optional[Completion] = None
+
+    def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
+        if self.completion_name:
+            return f'{indent_str}{self.completion_name.as_ir()} = receive({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
+        return f'{indent_str}receive({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
+
+
 # Receive Statement
 @dataclass
 class Receive(SpatialNode):
     """
-    Receive data from a stream.
+    Receive data from a stream, used in a foreach statement.
     """
     stream_name: Identifier
 
@@ -389,17 +428,18 @@ class ForeachStatement(Statement):
     receive_stream: Receive
     body: list[Statement]
     completion_name: Optional[Completion] = None
-    parameter_range: Optional[RangeExpression] = None
+    parameter_range: Optional[list[RangeExpression]] = None
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         vars_str = ", ".join(var.as_ir() for var in self.variables)
+        rng_str = ", ".join(rng.as_ir() for rng in self.parameter_range)
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
 
         if self.parameter_range:
-            main_str = f'foreach {vars_str} in [{self.parameter_range.as_ir()}, {self.receive_stream.as_ir()}] {{\n{body_str}\n{indent_str}}}'
+            main_str = f'foreach {vars_str} in [{rng_str}, receive({self.receive_stream.as_ir()})] {{\n{body_str}\n{indent_str}}}'
         else:
-            main_str = f'foreach {vars_str} in [{self.receive_stream.as_ir()}] {{\n{body_str}\n{indent_str}}}'
+            main_str = f'foreach {vars_str} in [receive({self.receive_stream.as_ir()})] {{\n{body_str}\n{indent_str}}}'
 
         if self.completion_name:
             return f'{indent_str}{self.completion_name.as_ir()} = {main_str}'
@@ -414,15 +454,19 @@ class MapStatement(Statement):
     Map statement for applying an affine computation asynchronously to array elements.
     """
     variables: list[Identifier]
-    range_expression: RangeExpression
+    range_expression: list[RangeExpression]
     body: list[Statement]
     completion_name: Optional[Completion] = None
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         vars_str = ", ".join(var.as_ir() for var in self.variables)
+        rng_str = ", ".join(rng.as_ir() for rng in self.range_expression)
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
-        return f'{indent_str}{self.completion_name.as_ir()} = map {vars_str} in [{self.range_expression.as_ir()}] {{\n{body_str}\n{indent_str}}}'
+        if self.completion_name:
+            return f'{indent_str}{self.completion_name.as_ir()} = map {vars_str} in [{rng_str}] {{\n{body_str}\n{indent_str}}}'
+        else:
+            return f'{indent_str}await map {vars_str} in [{rng_str}] {{\n{body_str}\n{indent_str}}}'
 
 
 # Sequential For Loop
@@ -432,14 +476,15 @@ class ForStatement(Statement):
     Sequential for loop for iterating over a range expression.
     """
     variables: list[Identifier]
-    range_expression: RangeExpression
+    range_expression: list[RangeExpression]
     body: list[Statement]
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         vars_str = ", ".join(var.as_ir() for var in self.variables)
+        rng_str = ", ".join(rng.as_ir() for rng in self.range_expression)
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
-        return f'{indent_str}for {vars_str} in [{self.range_expression.as_ir()}] {{\n{body_str}\n{indent_str}}}'
+        return f'{indent_str}for {vars_str} in [{rng_str}] {{\n{body_str}\n{indent_str}}}'
 
 
 # Asynchronous Block
@@ -454,7 +499,10 @@ class AsyncBlock(Statement):
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
-        return f'{indent_str}{self.completion_name.as_ir()} = async {{\n{body_str}\n{indent_str}}}'
+        if self.completion_name:
+            return f'{indent_str}{self.completion_name.as_ir()} = async {{\n{body_str}\n{indent_str}}}'
+        else:
+            return f'{indent_str}async {{\n{body_str}\n{indent_str}}}'
 
 
 # Await Completion Statement
@@ -467,7 +515,7 @@ class AwaitStatement(Statement):
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
-        return f'{indent_str}await {self.completion.as_ir()}'
+        return f'{indent_str}await {self.completion.name.as_ir()}'
 
 
 # Assignment Statement
@@ -478,8 +526,8 @@ class AssignmentStatement(Statement):
     """
     Assigns the result of an expression to a field or variable
     """
-    source: Expression
     destination: ArraySlice | Identifier
+    source: Expression
 
     def validate(self) -> None:
         assert isinstance(self.source, Expression)
@@ -488,6 +536,25 @@ class AssignmentStatement(Statement):
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         return f'{indent_str}{self.destination.as_ir()} = {self.source.as_ir()}'
+
+
+@dataclass
+class DefinitionStatement(Statement):
+    """
+    Assigns the result of an expression to a field or variable
+    """
+    dtype: Union[ScalarType, StreamType]
+    destination: Identifier
+    source: Expression
+
+    def validate(self) -> None:
+        assert isinstance(self.source, Expression)
+        assert isinstance(self.destination, (ArraySlice, Identifier))
+        assert isinstance(self.dtype, (ScalarType, StreamType))
+
+    def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
+        return f'{indent_str}{self.dtype.as_ir()} {self.destination.as_ir()} = {self.source.as_ir()}'
 
 
 # Compute Block

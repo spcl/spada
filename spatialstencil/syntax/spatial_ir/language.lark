@@ -31,17 +31,16 @@ identifier : suffix_id ("#" digits)?
 !int_type : "i8" | "i16" | "i32"
 !uint_type : "u8" | "u16" | "u32"
 !bool_type : "bool"
-!object_type : "completion" | "relative_stream"
-!var_type : "var"
+!object_type : "completion"
 ?scalar_type : float_type | int_type | uint_type | bool_type
 stream_type : "stream" "<" scalar_type ">"
-?standard_type : scalar_type | object_type | var_type | stream_type
+?standard_type : scalar_type | object_type | stream_type
 
 // Array types
-?array_type : standard_type "[" value_expr ("," value_expr)* "]"
+array_type : standard_type "[" value_expr ("," value_expr)* "]"
 
 // Annotations
-annotation : "readonly" | "writeonly" | "compiletime"
+!annotation : "readonly" | "writeonly" | "compiletime"
 annotations : annotation (annotation)*
 
 ?builtin_type : array_type | standard_type
@@ -109,6 +108,7 @@ subscript : identifier "[" subscript_slice "]"
 
 range_expression : value_expr ":" value_expr (":" value_expr)?
 subgrid_expression : "[" range_expression ("," range_expression)* "]"
+subgrid_expression_2d : "[" range_expression "," range_expression "]"
 range_and_stream : "[" (range_expression ("," range_expression)* ",")? "receive" "(" identifier ")" "]"
 ///////////////////////////////////////////////////
 // Declarations and routing
@@ -119,7 +119,7 @@ hops : "[" hop ("," hop)* "]"
 routing : "hops" "=" (auto | hops) "," "channel" "=" (auto | integer_literal)
 
 field_declaration : builtin_type identifier  (";")? //(";" | NEWLINE)
-stream_declaration : "stream" "<" scalar_type ">" bare_id "=" "relative_stream" "(" value_expr "," value_expr ")" ("{" routing "}")?  (";")?
+stream_declaration : "stream" "<" scalar_type ">" identifier "=" "relative_stream" "(" value_expr "," value_expr ")" ("{" routing "}")?  (";")?
 vars : identifier ("," identifier)*
 typed_var : scalar_type identifier
 typed_vars : typed_var ("," typed_var)*
@@ -127,28 +127,35 @@ typed_vars : typed_var ("," typed_var)*
 ///////////////////////////////////////////////////
 // Scope contents
 
-// TODO
+// Free function call
 function_call: bare_id "(" [call_arguments] ")" 
 
-await_stmt : "await" (identifier | foreach_stmt | map_stmt | function_call)
+await_stmt : "await" identifier
+?await_foreach : "await" foreach_stmt
+?await_map : "await" map_stmt
+?await_function : "await" function_call
+?await : await_stmt | await_foreach | await_map | await_function
 
+// TODO: Define syntax
 if_stmt : "if"
 //if_op : "if" "(" identifier ")" type_info? computation_body (elif_block)* (else_block)?
 //elif_block : "elif" "(" identifier ")" computation_body
 //else_block : "else" computation_body
 
-for_stmt : "for"
-map_stmt : "map" typed_vars "in" subgrid_expression "{" (statement)* "}"
-foreach_stmt : "foreach" typed_vars "in" range_and_stream "{" (statement)* "}"
-async_stmt : "async" "{" (statement)* "}"
+scope_stmt_body :  "{" (statement)* "}" 
 
-?base_stmt : (function_call | await_stmt | map_stmt | foreach_stmt | async_stmt | for_stmt | if_stmt)
+for_stmt : "for" typed_vars "in" subgrid_expression scope_stmt_body
+map_stmt : "map" typed_vars "in" subgrid_expression scope_stmt_body
+foreach_stmt : "foreach" typed_vars "in" range_and_stream scope_stmt_body
+async_stmt : "async" scope_stmt_body
+
+?base_stmt : (function_call | await | map_stmt | foreach_stmt | async_stmt | for_stmt | if_stmt)
 ?rhs : (value_expr | function_call | map_stmt | foreach_stmt | async_stmt)
 
 definition : builtin_type identifier "=" rhs
 assignment : (subscript | identifier) "=" rhs
 
-statement : (definition | assignment | base_stmt) (";")?
+?statement : (definition | assignment | base_stmt) (";")?
 
 
 ////////////////////////////////////////////////////
@@ -156,14 +163,14 @@ statement : (definition | assignment | base_stmt) (";")?
 
 // Kernel
 parameters : "<" (bare_id ("," bare_id)*)? ">"
-typed_argument : builtin_type bare_id annotations?
+typed_argument : builtin_type annotations? bare_id
 arguments : "(" (typed_argument ("," typed_argument)*)? ")"
 kernel : "kernel" ("@" bare_id)? parameters arguments kernel_body
 
 // Kernel contents
-place_block : "place" vars "in" subgrid_expression place_body
-dataflow_block : "dataflow" vars "in" subgrid_expression dataflow_body
-compute_block : "compute" vars "in" subgrid_expression compute_body
+place_block : "place" vars "in" subgrid_expression_2d place_body
+dataflow_block : "dataflow" vars "in" subgrid_expression_2d dataflow_body
+compute_block : "compute" vars "in" subgrid_expression_2d compute_body
 phase : "phase" phase_body
 
 ////////////////////////////////////////////////////
