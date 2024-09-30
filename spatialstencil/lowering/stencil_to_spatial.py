@@ -10,9 +10,6 @@ from spatialstencil.syntax.common.types import ScalarType
 from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
 
 
-
-
-
 def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
     """Lower a stencil to a spatial program.
 
@@ -67,7 +64,6 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
 
 
 def kernel_arguments(stencil: sast.Program) -> list[spa.KernelArgument]:
-
     arguments = []
     for inp, inp_t in zip(stencil.inputs, stencil.operation_type.source):
         arguments.append(_construct_arg(inp.name, inp_t))
@@ -100,7 +96,6 @@ def _construct_arg(name: str, arg_t: sast.FieldType) -> spa.KernelArgument:
 def input_phase(body: list[spa.PlaceBlock],
                 arguments: list[spa.KernelArgument],
                 versioning: Versioning[spa.Identifier]) -> list[spa.ComputeBlock]:
-
     compute = []
 
     for block in body:
@@ -115,7 +110,7 @@ def input_phase(body: list[spa.PlaceBlock],
             for arg in arguments:
                 if field.field_name.name == f'{arg.identifier.name[1:]}_0_0_0':
                     # Generate input phase
-
+                    # TODO: Check / Fix the indices
                     # Receive the input
                     receive_stream = spa.ArraySlice(array=arg.identifier, indices=[var_i, var_j])
 
@@ -151,6 +146,7 @@ def input_phase(body: list[spa.PlaceBlock],
 
     return compute
 
+
 def output_phase(op: sast.ReturnOp,
                  arguments: list[spa.KernelArgument],
                  versioning: Versioning[spa.Identifier],
@@ -162,8 +158,11 @@ def output_phase(op: sast.ReturnOp,
     shift = placement.get_shift()
 
     for i, (arg, arg_t) in enumerate(zip(op.values, op.operation_type.source)):
+        print("DOMAIN", arg_t.domain)
         x_range = [arg_t.domain.x[0] + shift[0], arg_t.domain.x[1] + shift[0]]
         y_range = [arg_t.domain.y[0] + shift[1], arg_t.domain.y[1] + shift[1]]
+
+        print("RANGE", x_range, y_range)
 
         # Create a send statement for each output
 
@@ -172,9 +171,24 @@ def output_phase(op: sast.ReturnOp,
         var_i = versioning.next_version('i')
         var_j = versioning.next_version('j')
 
+        assert shift[0] >= 0
+        assert shift[1] >= 0
+
+        var_i_expr = spa.RangeExpression(spa.Expression(spa.BinaryOperator(spa.Expression(var_i, ScalarType.i32),
+                                                                           '-',
+                                                                           spa.Expression(spa.ConstantLiteral(shift[0], ScalarType.i32),
+                                                                                          ScalarType.i32)),
+                                                        ScalarType.i32))
+
+        var_j_expr = spa.RangeExpression(spa.Expression(spa.BinaryOperator(spa.Expression(var_j, ScalarType.i32),
+                                                                           '-',
+                                                                           spa.Expression(spa.ConstantLiteral(shift[1], ScalarType.i32),
+                                                                                          ScalarType.i32)),
+                                                        ScalarType.i32))
+
         target = spa.ArraySlice(
             array=spa.Identifier(_ith_output_name(i), 0),
-            indices=[var_i, var_j]
+            indices=[var_i_expr, var_j_expr]
         )
 
         stmt = spa.SendStatement(buf, target)

@@ -28,9 +28,9 @@ class TestTypeInference(unittest.TestCase):
             with open(file, 'r') as f:
                 program = parser.parse_file(f)
 
-            type_inference.infer_field_extents(program)
-            domain = sast.Cartesian(x=sast.Interval(0, 250), y=sast.Interval(0, 250), z=sast.Interval(0, 80))
-            type_inference.infer_field_domains(program, domain)
+            #type_inference.infer_field_extents(program)
+            #domain = sast.Cartesian(x=sast.Interval(0, 128), y=sast.Interval(0, 128), z=sast.Interval(0, 80))
+            #type_inference.infer_field_domains(program, domain)
             print(program.as_ir())
             spatial_program = lower_stencil_to_spatial(program)
             print(spatial_program.as_ir())
