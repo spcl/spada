@@ -87,24 +87,48 @@ class PatternMatcher(Generic[BaseNodeT]):
         return matches  # type: ignore
 
 
+ContextT = TypeVar('ContextT')
+
+
 # Abstract PatternTransformer class
-class PatternTransformer(Generic[BaseNodeT, BaseNodeK]):
+class PatternTransformer(Generic[BaseNodeT, BaseNodeK, ContextT], ABC):
+
+    context: ContextT
+
     def __init__(self, patterns: list[BaseNodeT]):
         self.patterns = patterns
         self.matchers = [PatternMatcher(pattern) for pattern in patterns]
 
-    def first(self, subject: BaseNodeT) -> BaseNodeK | None:
+    def set_context(self, context: ContextT) -> None:
+        """
+        Set the context for the transformer. This can be used to pass
+        additional information to the transform method.
+
+        :param context:
+        :return:
+        """
+        self.context = context
+
+    def get_context(self) -> ContextT:
+        """
+        Get the context for the transformer.
+
+        :return:
+        """
+        return self.context
+
+    def first(self, subject: BaseNodeT) -> list[BaseNodeK]:
         """
         Apply the first pattern that matches the subject
 
         :param subject: match against this subject
-        :return: transformed node or None if no pattern matches
+        :return: transformed nodes (if any, otherwise empty list)
         """
         for matcher in self.matchers:
             matches = matcher.match_pattern(subject)
             if matches:
                 return self.transform(matches[0].root, **matches[0].wildcards)
-        return None
+        return []
 
     def match(self, subject: BaseNodeT) -> list[Match]:
         """
@@ -120,7 +144,7 @@ class PatternTransformer(Generic[BaseNodeT, BaseNodeK]):
             matches.extend(matcher.match_pattern(subject))
         return matches
 
-    def apply(self, subject: BaseNodeT) -> list[BaseNodeK]:
+    def apply(self, subject: BaseNodeT) -> list[list[BaseNodeK]]:
         """
         Apply all patterns that match the subject
 
@@ -140,7 +164,7 @@ class PatternTransformer(Generic[BaseNodeT, BaseNodeK]):
             result.append(self.transform(match.root, **match.wildcards))
         return result
 
-    def transform(self, root: BaseNodeT, **wildcards) -> BaseNodeK:
+    def transform(self, root: BaseNodeT, **wildcards) -> list[BaseNodeK]:
         """
         This method must be implemented by subclasses to provide
         specific transformations for the pattern.

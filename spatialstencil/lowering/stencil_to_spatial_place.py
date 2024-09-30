@@ -112,6 +112,13 @@ class ProgramPlacement:
                      dtype: spa.ArrayType) -> None:
         self._storage_map[identifier][offset] = (storage, dtype)
 
+    def get_shift(self) -> tuple[int, int, int]:
+        """
+        Get the translation shift of the domains.
+        :return:
+        """
+        return self.domains.get_shift()
+
     def get_storage(self,
                     identifier: sast.Identifier,
                     offset: sast.Offset = sast.Offset.zero()) -> tuple[spa.Identifier, spa.ArrayType]:

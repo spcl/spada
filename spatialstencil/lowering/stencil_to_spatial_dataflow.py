@@ -57,6 +57,7 @@ class ProgramDataflow:
                     output_id: sast.Identifier,
                     offset: sast.Offset,
                     stream: spa.Identifier):
+        print(f"Setting stream from {input_id} to {output_id} with offset {offset} to {stream}")
         self._stream_map[input_id][output_id][offset] = stream
 
     def declare_dataflow_for_computation(self,
@@ -74,9 +75,36 @@ class ProgramDataflow:
         abstract_streams = []
 
         for stmt in comp.body:
+            if isinstance(stmt, sast.MaterializeOp):
+                for extent in stmt.operation_type.destination[0].extent.extents:
+                    dx = -extent.values[0]
+                    dy = -extent.values[1]
+                    assert isinstance(dx, int)
+                    assert isinstance(dy, int)
+                    if dx or dy:
+                        stream_type = spa.StreamType(stmt.operation_type.destination[0].dtype)
+                        identifier = self.versioning.next_version(f'_stream_{stmt.result.name}')
+
+                        metadata = StreamMetadata(
+                            stream_type,
+                            identifier,
+                            dx,
+                            dy
+                        )
+                        self._set_stream(stmt.value, stmt.result, extent, identifier)
+
+                        # Generate stream
+                        assert isinstance(stmt.operation_type.destination[0].domain, sast.Cartesian)
+                        x_range = (stmt.operation_type.destination[0].domain.x[0]+self.offset_domain[0],
+                                   stmt.operation_type.destination[0].domain.x[1]+self.offset_domain[1])
+                        y_range = (stmt.operation_type.destination[0].domain.y[0]+self.offset_domain[0],
+                                   stmt.operation_type.destination[0].domain.y[1]+self.offset_domain[1])
+                        astream = AbstractStream(x_range, y_range, metadata)
+                        abstract_streams.append(astream)
+
             if isinstance(stmt, sast.StatementBlock):
                 for access, access_type in zip(stmt.inputs, stmt.operation_type.source):
-                    if isinstance(access_type, sast.ViewType):
+                    if isinstance(access_type, sast.ViewType) and any(access == inp for inp in comp.inputs):
                         for extent in access_type.extent.extents:
                             dx = -extent.values[0]
                             dy = -extent.values[1]

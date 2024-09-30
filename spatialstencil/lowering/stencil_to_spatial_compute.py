@@ -1,3 +1,5 @@
+import copy
+from dataclasses import dataclass
 from typing import TypeVar, Generic
 
 from spatialstencil.lowering.stencil_to_spatial_dataflow import ProgramDataflow
@@ -5,9 +7,12 @@ from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
 from spatialstencil.lowering.versioning import Versioning
 from spatialstencil.syntax.common.basenode import Wildcard
 from spatialstencil.syntax.common.tree_matching import PatternMatcher, PatternTransformer
+from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle, group_rectangles_by_domain, split_rectangles
 from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
 import spatialstencil.syntax.spatial_ir.irnodes as spa
 import spatialstencil.syntax.stencil_ir.irnodes as sast
+
+AbstractStatement = Rectangle[tuple[int, spa.Statement]]
 
 
 class ProgramCompute:
@@ -23,9 +28,9 @@ class ProgramCompute:
         self.placement = placement
         self.offset_domain = domains.get_shift()[0:2]
 
-        self.statement_transformers = [UnaryMapTransformer(self.placement, self.versioning),
-                                       MapTransformer(self.placement, self.versioning),
-                                       HorizontalStencilTransformer(self.placement, self.versioning)]
+        self.statement_transformers = [UnaryMapTransformer(placement, versioning),
+                                       MapTransformer(placement, versioning),
+                                       HorizontalStencilTransformer(placement, versioning, dataflow)]
 
     def generate_computation(self, comp: sast.ComputationBlock) -> list[spa.ComputeBlock]:
         """
@@ -39,62 +44,167 @@ class ProgramCompute:
 
         for op in comp.walk():
             if isinstance(op, sast.StatementBlock):
-                body.extend(self._generate_statement_block(op))
+                body.extend(self._generate_statement_block(op, comp))
             elif isinstance(op, sast.MaterializeOp):
                 body.extend(self._generate_materialize_operation(op))
             elif isinstance(op, sast.ReturnOp):
-                body.extend(self._generate_return_op(op))
+                # TODO Only do this when returning from the computation!
+                body.extend(self._generate_return_op(op, comp))
 
-        return body
+        # Merge all statements into a compute blocks
 
-    def _generate_statement_block(self, op: sast.StatementBlock) -> list[spa.ComputeBlock]:
+        split = split_rectangles(body)
+        merged = group_rectangles_by_domain(split)
+
+        # Convert to Compute blocks
+        compute_blocks = []
+        for block in merged:
+            compute_blocks.append(self._convert_to_compute_block(block))
+
+        return compute_blocks
+
+    def _convert_to_compute_block(self, block: list[AbstractStatement]) -> spa.ComputeBlock:
+        var_i = self.versioning.next_version('i')
+        var_j = self.versioning.next_version('j')
+
+        variables = [var_i, var_j]
+
+        subgrid = spa.SubgridExpression.from_tuple(
+            block[0].x_range, block[0].y_range
+        )
+
+        stmts = sorted(block, key=lambda x: x.metadata[0])
+
+        block = spa.ComputeBlock(
+            variables,
+            subgrid,
+            [stmt.metadata[1] for stmt in stmts]
+        )
+
+        return block
+
+    def _generate_statement_block(self, op: sast.StatementBlock, comp: sast.ComputationBlock) -> list[
+        AbstractStatement]:
         blocks = []
 
-        access_type = op.operation_type.destination[0]
-        assert isinstance(access_type, (sast.ViewType, sast.FieldType))
-        assert isinstance(access_type.domain, sast.Cartesian)
-        x_range = (access_type.domain.x[0] + self.offset_domain[0],
-                   access_type.domain.x[1] + self.offset_domain[1])
-        y_range = (access_type.domain.y[0] + self.offset_domain[0],
-                   access_type.domain.y[1] + self.offset_domain[1])
+        for transformer in self.statement_transformers:
+            transformer.set_context((comp, op))
 
         for stmt in op.body:
             statements = self._apply_statement_transformers(stmt)
             #assert len(statements) > 0, f"Could not match statement {stmt.as_ir()}"
 
-            var_i = self.versioning.next_version('i')
-            var_j = self.versioning.next_version('j')
-            variables = [var_i, var_j]
-
-            subgrid = spa.SubgridExpression.from_tuple(
-                x_range, y_range
-            )
-            block = spa.ComputeBlock(
-                variables,
-                subgrid,
-                statements
-            )
-            blocks.append(block)
+            blocks.extend(statements)
 
         return blocks
 
-    def _apply_statement_transformers(self, op: sast.AssignOp) -> list[spa.Statement]:
+    def _apply_statement_transformers(self, op: sast.AssignOp) -> list[AbstractStatement]:
         blocks = []
         print(op)
         for transformer in self.statement_transformers:
             res = transformer.first(op)
-            if res is not None:
-                blocks.append(res)
+            if len(res):
+                blocks.extend(res)
+                break
         return blocks
 
     def _generate_materialize_operation(self, op: sast.MaterializeOp) -> list:
+
+        # The materialize operation creates data movement for each offset in its output offsets
+        # that is not zero
+        dst = op.result
+        src = op.value
+        result = []
+        for extent in op.operation_type.destination[0].extent.extents:
+            if extent != sast.Offset.zero():
+                print(f"Materialize {op} with offset {extent}")
+
+                dst_buf, dst_dtype = self.placement.get_storage(dst, extent)
+
+                # Approach: Communicate the remote values and aggregate them into the local value
+                # For this, we need:
+
+                # (2) local buffer
+                src_buf, src_dtype = self.placement.get_storage(src)
+
+                # (3) remote buffer
+                # Determine if its an input type or an intermediate type
+                out_t = op.operation_type.destination[0]
+                shift = self.placement.get_shift()
+                xy_range = _get_range(out_t, shift)
+
+                # (4) stream used to communicate the remote buffer
+                stream = self.dataflow.get_stream(src, dst, extent)
+                assert stream
+
+                # Loop variables
+                var_k = self.versioning.next_version('k')
+                var_x = self.versioning.next_version('x')
+
+                recv = spa.Receive(
+                    stream
+                )
+
+                src_expr = spa.Expression(var_x, src_dtype.base_type)
+
+                assign_stmt = spa.AssignmentStatement(
+                    source=src_expr,
+                    destination=spa.ArraySlice(
+                        dst_buf,
+                        [var_k]
+                    )
+                )
+
+                body = [assign_stmt]
+
+                recv_completion = spa.Completion(self.versioning.next_version('_recv_comp'))
+                recv_foreach = spa.ForeachStatement(
+                    variables=[var_k, var_x],
+                    receive_stream=recv,
+                    body=body,
+                    completion_name=recv_completion,
+                    parameter_range=spa.RangeExpression.from_args(0, dst_dtype.shape[0]),
+                )
+
+                line_nr = self.versioning.next_version("___line___").version
+                receive = AbstractStatement(xy_range[0], xy_range[1], (line_nr, recv_foreach))
+
+                send_completion = spa.Completion(self.versioning.next_version('_send_comp'))
+                send = spa.SendStatement(
+                    src_buf,
+                    stream,
+                    send_completion
+                )
+
+                send_domain = out_t.domain.union(out_t.domain.add(extent.values))
+                send_x_range = (send_domain.x[0] + shift[0], send_domain.x[1] + shift[0])
+                send_y_range = (send_domain.y[0] + shift[1], send_domain.y[1] + shift[1])
+
+                line_nr = self.versioning.next_version("___line___").version
+                send_stmt = AbstractStatement(send_x_range, send_y_range, (line_nr, send))
+
+                line_nr = self.versioning.next_version("___line___").version
+                await_send = AbstractStatement(send_x_range, send_y_range,
+                                               (line_nr, spa.AwaitStatement(copy.deepcopy(send_completion))))
+
+                line_nr = self.versioning.next_version("___line___").version
+                await_recv = AbstractStatement(xy_range[0], xy_range[1],
+                                               (line_nr, spa.AwaitStatement(copy.deepcopy(recv_completion))))
+
+                result.extend([receive, send_stmt, await_send, await_recv])
+        return result
+
+    def _generate_return_op(self, op: sast.ReturnOp, comp: sast.ComputationBlock) -> list:
+        # Generates a map 'copy' operation for each output
+
+        for return_value, return_value_t, comp_field in zip(op.values, op.operation_type.source, comp.outputs):
+            print(f"Return {return_value} with type {return_value_t} to {comp_field}")
+
         return []
 
-    def _generate_return_op(self, op: sast.ReturnOp) -> list:
-        return []
 
-
-class MapTransformer(PatternTransformer[sast.AssignOp, spa.MapStatement]):
+class MapTransformer(
+    PatternTransformer[sast.AssignOp, AbstractStatement, tuple[sast.ComputationBlock, sast.StatementBlock]]):
 
     def __init__(self, placement: ProgramPlacement, versioning: Versioning[spa.Identifier]):
         self.placement = placement
@@ -124,7 +234,7 @@ class MapTransformer(PatternTransformer[sast.AssignOp, spa.MapStatement]):
                   value=None,
                   src: sast.Identifier = None,
                   dst: sast.Identifier = None,
-                  **wildcards) -> spa.MapStatement:
+                  **wildcards) -> list[AbstractStatement]:
         assert op is not None
         assert src is not None
         assert dst is not None
@@ -162,10 +272,16 @@ class MapTransformer(PatternTransformer[sast.AssignOp, spa.MapStatement]):
             ]
         )
         print(stmt.as_ir())
-        return stmt
+
+        stmt_block = self.get_context()[1]
+        out_t = stmt_block.operation_type.destination[0]
+        xy_range = _get_range(out_t, self.placement.get_shift())
+
+        return [AbstractStatement(xy_range[0], xy_range[1], stmt)]
 
 
-class UnaryMapTransformer(PatternTransformer[sast.AssignOp, spa.MapStatement]):
+class UnaryMapTransformer(
+    PatternTransformer[sast.AssignOp, AbstractStatement, tuple[sast.ComputationBlock, sast.StatementBlock]]):
 
     def __init__(self, placement: ProgramPlacement, versioning: Versioning[spa.Identifier]):
         self.placement = placement
@@ -195,7 +311,7 @@ class UnaryMapTransformer(PatternTransformer[sast.AssignOp, spa.MapStatement]):
                   value=None,
                   src: sast.Identifier = None,
                   dst: sast.Identifier = None,
-                  **wildcards) -> spa.MapStatement:
+                  **wildcards) -> list[AbstractStatement]:
         assert op is not None
         assert src is not None
         assert dst is not None
@@ -235,26 +351,50 @@ class UnaryMapTransformer(PatternTransformer[sast.AssignOp, spa.MapStatement]):
             ]
         )
         print(stmt.as_ir())
-        return stmt
+
+        stmt_block = self.get_context()[1]
+        out_t = stmt_block.operation_type.destination[0]
+        xy_range = _get_range(out_t, self.placement.get_shift())
+
+        line_nr = self.versioning.next_version("___line___").version
+
+        return [AbstractStatement(xy_range[0], xy_range[1], (line_nr, stmt))]
 
 
-class HorizontalStencilTransformer(PatternTransformer[sast.AssignOp, spa.ForeachStatement]):
+class HorizontalStencilTransformer(
+    PatternTransformer[sast.AssignOp, AbstractStatement, tuple[sast.ComputationBlock, sast.StatementBlock]]):
 
-    def __init__(self, placement: ProgramPlacement, versioning: Versioning[spa.Identifier]):
+    def __init__(self,
+                 placement: ProgramPlacement,
+                 versioning: Versioning[spa.Identifier],
+                 dataflow: ProgramDataflow):
         self.placement = placement
         self.versioning = versioning
+        self.dataflow = dataflow
         # %c = (%a + %b[dx, dy, 0]) : f32
 
         e = sast.Expression(
-            value=sast.BinaryOperator(left=sast.Expression(value=Wildcard('local')()),
+            value=sast.BinaryOperator(left=sast.Expression(value=Wildcard[sast.Identifier]('local')()),
                                       op=Wildcard("op")(),
                                       right=sast.Expression(
                                           sast.Subscript(Wildcard('remote')(),
                                                          [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0]))))
 
-        assignment_0 = sast.AssignOp(Wildcard[sast.Identifier]("dst")(), e, Wildcard()())
+        e_1 = sast.Expression(
+            value=sast.BinaryOperator(left=sast.Expression(value=sast.Subscript(
+                Wildcard[sast.Identifier]('local')(), [0, 0, 0])),
+                op=Wildcard("op")(),
+                right=sast.Expression(
+                    sast.Subscript(Wildcard('remote')(),
+                                   [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0]))))
 
-        super().__init__([assignment_0])
+        assignment_0 = sast.AssignOp(Wildcard[sast.Identifier]("dst")(), e, Wildcard()())
+        assignment_1 = sast.AssignOp(Wildcard[sast.Identifier]("dst")(), e_1, Wildcard()())
+
+        return_0 = sast.ReturnOp([e], Wildcard()())
+        return_1 = sast.ReturnOp([e_1], Wildcard()())
+
+        super().__init__([assignment_0, return_0, assignment_1, return_1])
 
     def transform(self,
                   root: sast.AssignOp,
@@ -264,14 +404,159 @@ class HorizontalStencilTransformer(PatternTransformer[sast.AssignOp, spa.Foreach
                   dst: sast.Identifier = None,
                   dx: int = None,
                   dy: int = None,
-                  **wildcards) -> spa.MapStatement:
+                  **wildcards) -> list[AbstractStatement]:
         assert op is not None
         assert local is not None
         assert remote is not None
-        assert dst is not None
+        assert dx is not None
+        assert dy is not None
 
+        compute_block, stmt_block = self.get_context()
+        out_id = stmt_block.outputs[0]
+
+        if dst is None:
+            dst = out_id
+            # (1) dst buffer
+            print(f"Matched  return = (%a + %b[dx, dy, 0]) as {dst} = return {local} {op} {remote}[{dx}, {dy}, 0]")
+
+        else:
+            print(f"Matched  %c = (%a + %b[dx, dy, 0]) as {dst} = {local} {op} {remote}[{dx}, {dy}, 0]")
+
+        # (1) dst buffer
         res_id, res_dtype = self.placement.get_storage(dst)
-        print(f"Matched  %c = (%a + %b[dx, dy, 0]) as {res_id} = {local} {op} {remote}[{dx}, {dy}, 0]")
-        var_k = self.versioning.next_version('k')
 
-        return None
+        # Approach: Communicate the remote values and aggregate them into the local value
+        # For this, we need:
+
+        # (2) local buffer
+        local_id, local_dtype = self.placement.get_storage(local)
+
+        # (3) remote buffer
+        # Determine if its an input type or an intermediate type
+
+        out_t = stmt_block.operation_type.destination[0]
+        shift = self.placement.get_shift()
+        xy_range = _get_range(out_t, shift)
+
+        if any([remote == inp for inp in compute_block.inputs]):
+            remote_id, remote_dtype = self.placement.get_storage(remote)
+
+            # (4) stream used to communicate the remote buffer
+            stream = self.dataflow.get_stream(remote, out_id, sast.Offset((dx, dy, 0)))
+            assert stream
+
+            # Loop variables
+            var_k = self.versioning.next_version('k')
+            var_x = self.versioning.next_version('x')
+
+            recv = spa.Receive(
+                stream
+            )
+
+            src_expr = spa.Expression(
+                spa.BinaryOperator(
+                    spa.Expression(local_id, local_dtype.base_type),
+                    op,
+                    spa.Expression(var_x, remote_dtype.base_type),
+                ),
+                local_dtype.base_type
+            )
+
+            assign_stmt = spa.AssignmentStatement(
+                source=src_expr,
+                destination=spa.ArraySlice(
+                    res_id,
+                    [var_k]
+                )
+            )
+
+            body = [assign_stmt]
+
+            recv_completion = spa.Completion(self.versioning.next_version('_recv_comp'))
+            recv_foreach = spa.ForeachStatement(
+                variables=[var_k, var_x],
+                receive_stream=recv,
+                body=body,
+                completion_name=recv_completion,
+                parameter_range=spa.RangeExpression.from_args(0, res_dtype.shape[0]),
+            )
+
+            line_nr = self.versioning.next_version("___line___").version
+
+            receive = AbstractStatement(xy_range[0], xy_range[1], (line_nr, recv_foreach))
+
+            send_completion = spa.Completion(self.versioning.next_version('_send_comp'))
+            send = spa.SendStatement(
+                local_id,
+                stream,
+                send_completion
+            )
+
+            send_domain = out_t.domain.union(out_t.domain.add((dx, dy, 0)))
+            send_x_range = (send_domain.x[0] + shift[0], send_domain.x[1] + shift[0])
+            send_y_range = (send_domain.y[0] + shift[1], send_domain.y[1] + shift[1])
+
+            line_nr = self.versioning.next_version("___line___").version
+            send_stmt = AbstractStatement(send_x_range, send_y_range, (line_nr, send))
+
+            line_nr = self.versioning.next_version("___line___").version
+            await_send = AbstractStatement(send_x_range, send_y_range,
+                                           (line_nr, spa.AwaitStatement(copy.deepcopy(send_completion))))
+
+            line_nr = self.versioning.next_version("___line___").version
+            await_recv = AbstractStatement(xy_range[0], xy_range[1],
+                                           (line_nr, spa.AwaitStatement(copy.deepcopy(recv_completion))))
+
+            return [receive, send_stmt, await_send, await_recv]
+
+        else:
+            # (4) materialized buffer (already computed)
+            # Only local computation is needed
+            remote_id, remote_dtype = self.placement.get_storage(remote, sast.Offset((dx, dy, 0)))
+
+            var_k = self.versioning.next_version('k')
+
+            src_e = spa.Expression(
+                spa.BinaryOperator(
+                    spa.Expression(spa.ArraySlice(
+                        local_id,
+                        [var_k]
+                    ), local_dtype.base_type),
+                    op,
+                    spa.Expression(spa.ArraySlice(
+                        remote_id,
+                        [var_k]
+                    ), remote_dtype.base_type),
+                ),
+                res_dtype.base_type
+            )
+
+            stmt = spa.MapStatement(
+                variables=[self.versioning.next_version('k')],
+                range_expression=spa.RangeExpression.from_args(0, res_dtype.shape[0]),
+                body=[
+                    spa.AssignmentStatement(
+                        src_e,
+                        spa.ArraySlice(
+                            res_id,
+                            [var_k]
+                        )
+                    )
+                ]
+            )
+
+            line_nr = self.versioning.next_version("___line___").version
+            return [AbstractStatement(xy_range[0], xy_range[1], (line_nr, stmt))]
+
+
+def _get_range(access_type: sast.ViewType | sast.FieldType, shift: tuple) -> tuple:
+    assert isinstance(access_type, (sast.ViewType, sast.FieldType))
+    assert isinstance(access_type.domain, sast.Cartesian)
+    offset_domain = shift
+
+    x_range = (access_type.domain.x[0] + offset_domain[0],
+               access_type.domain.x[1] + offset_domain[0])
+    y_range = (access_type.domain.y[0] + offset_domain[1],
+               access_type.domain.y[1] + offset_domain[1])
+
+    return x_range, y_range

@@ -1,8 +1,10 @@
+import types
 from dataclasses import dataclass
 
 import unittest
 
 from spatialstencil.lowering.stencil_to_spatial_compute import HorizontalStencilTransformer
+from spatialstencil.lowering.stencil_to_spatial_dataflow import ProgramDataflow
 from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
 from spatialstencil.lowering.versioning import Versioning
 from spatialstencil.syntax.common.match_tree import TreeNode, TreeWildcard, MatchTree, MatchingBaseNode
@@ -13,6 +15,7 @@ import spatialstencil.syntax.stencil_ir.irnodes as sast
 from spatialstencil.syntax.common.basenode import Wildcard
 from spatialstencil.syntax.common.types import ScalarType
 import spatialstencil.syntax.spatial_ir.irnodes as spa
+from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
 
 
 # Assume Tree, Node, Wildcard classes are already defined from previous translations.
@@ -78,7 +81,7 @@ class Parser:
         return children, i
 
 
-class IdentifierIncrementerTransformer(PatternTransformer[sast.BaseNode, sast.Identifier]):
+class IdentifierIncrementerTransformer(PatternTransformer[sast.BaseNode, sast.Identifier, types.NoneType]):
 
     def __init__(self):
         pattern = sast.Expression(sast.Identifier(Wildcard[str]()(), Wildcard[int]("version")()))
@@ -96,6 +99,14 @@ class DummyProgramPlacement(ProgramPlacement):
                     offset: sast.Offset = sast.Offset.zero()) -> tuple[spa.Identifier, spa.ArrayType]:
         return spa.Identifier(f'{identifier.name}_{offset[0]}_{offset[1]}_{offset[2]}',
                               identifier.version), spa.ArrayType(ScalarType.f32, [80])
+class DummyProgramDataflow(ProgramDataflow):
+    def get_stream(self, input_id: sast.Identifier, output_id: sast.Identifier, offset: sast.Offset) -> spa.Identifier | None:
+        return spa.Identifier(f'_stream_{input_id.name}', 0)
+
+class DummyDomains(DomainCollector):
+
+    def get_shift(self) -> Tuple[int, int, int]:
+        return 0, 0, 0
 
 
 class TestTreeMatching(unittest.TestCase):
@@ -328,9 +339,9 @@ class TestTreeMatching(unittest.TestCase):
     def test_horizontal_stencil_transformer(self):
 
         versioning = Versioning[sast.Identifier](sast.Identifier.__class__)
-        placement = DummyProgramPlacement(None, versioning)
-
-        horizontal_stencil_transformer = HorizontalStencilTransformer(placement, versioning)
+        domain_collector = DummyDomains()
+        placement = DummyProgramPlacement(domain_collector, versioning)
+        horizontal_stencil_transformer = HorizontalStencilTransformer(placement, versioning, DummyProgramDataflow(domain_collector, versioning))
 
         a = sast.AssignOp(result=sast.Identifier(name='d', version=0),
                           value=sast.Expression(value=sast.BinaryOperator(
