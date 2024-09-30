@@ -7,6 +7,7 @@ from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
 from spatialstencil.lowering.versioning import Versioning
 from spatialstencil.syntax.common.basenode import Wildcard
 from spatialstencil.syntax.common.tree_matching import PatternMatcher, PatternTransformer
+from spatialstencil.syntax.common.visitor import IRNodeVisitor
 from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle, group_rectangles_by_domain, split_rectangles
 from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
 import spatialstencil.syntax.spatial_ir.irnodes as spa
@@ -27,10 +28,7 @@ class ProgramCompute:
         self.dataflow = dataflow
         self.placement = placement
         self.offset_domain = domains.get_shift()[0:2]
-
-        self.statement_transformers = [UnaryMapTransformer(placement, versioning),
-                                       MapTransformer(placement, versioning),
-                                       HorizontalStencilTransformer(placement, versioning, dataflow)]
+        self.visitor = ComputeVisitor(placement, versioning, dataflow)
 
     def generate_computation(self, comp: sast.ComputationBlock) -> list[spa.ComputeBlock]:
         """
@@ -39,17 +37,11 @@ class ProgramCompute:
         :param comp:
         :return:
         """
-        body = []
         assert comp.schedule == sast.ComputationType.PARALLEL
 
-        for op in comp.walk():
-            if isinstance(op, sast.StatementBlock):
-                body.extend(self._generate_statement_block(op, comp))
-            elif isinstance(op, sast.MaterializeOp):
-                body.extend(self._generate_materialize_operation(op))
-            elif isinstance(op, sast.ReturnOp):
-                # TODO Only do this when returning from the computation!
-                body.extend(self._generate_return_op(op, comp))
+        # Generate the compute block
+        self.visitor.visit(comp)
+        body = self.visitor.stmts
 
         # Merge all statements into a compute blocks
 
@@ -83,24 +75,50 @@ class ProgramCompute:
 
         return block
 
-    def _generate_statement_block(self, op: sast.StatementBlock, comp: sast.ComputationBlock) -> list[
-        AbstractStatement]:
-        blocks = []
+    def _generate_return_op(self, op: sast.ReturnOp, comp: sast.ComputationBlock) -> list:
+        # Generates a map 'copy' operation for each output
+
+        for return_value, return_value_t, comp_field in zip(op.values, op.operation_type.source, comp.outputs):
+            print(f"Return {return_value} with type {return_value_t} to {comp_field}")
+
+        return []
+
+
+class ComputeVisitor(sast.ScopedNodeVisitor):
+
+    def __init__(self, placement: ProgramPlacement,
+                 versioning: Versioning[spa.Identifier],
+                 dataflow: ProgramDataflow):
+        super().__init__()
+        self.placement = placement
+        self.versioning = versioning
+        self.dataflow = dataflow
+        self.stmts = []
+
+        self.statement_transformers = [UnaryMapTransformer(placement, versioning),
+                                       MapTransformer(placement, versioning),
+                                       HorizontalStencilTransformer(placement, versioning, dataflow)]
+
+    def visit_ReturnOp(self, node: sast.ReturnOp):
+        comp = self.get_scope()
+        assert isinstance(comp, sast.ComputationBlock)
+        print(f"Return {node} in {comp}")
+        pass
+
+    def visit_StatementBlock(self, op: sast.StatementBlock):
+        comp = self.get_scope()
+        assert isinstance(comp, sast.ComputationBlock)
 
         for transformer in self.statement_transformers:
             transformer.set_context((comp, op))
 
         for stmt in op.body:
             statements = self._apply_statement_transformers(stmt)
-            #assert len(statements) > 0, f"Could not match statement {stmt.as_ir()}"
-
-            blocks.extend(statements)
-
-        return blocks
+            assert len(statements) > 0, f"Could not match statement {stmt.as_ir()}"
+            self.stmts.extend(statements)
 
     def _apply_statement_transformers(self, op: sast.AssignOp) -> list[AbstractStatement]:
         blocks = []
-        print(op)
         for transformer in self.statement_transformers:
             res = transformer.first(op)
             if len(res):
@@ -108,7 +126,7 @@ class ProgramCompute:
                 break
         return blocks
 
-    def _generate_materialize_operation(self, op: sast.MaterializeOp) -> list:
+    def visit_MaterializeOp(self, op: sast.MaterializeOp):
 
         # The materialize operation creates data movement for each offset in its output offsets
         # that is not zero
@@ -191,16 +209,8 @@ class ProgramCompute:
                 await_recv = AbstractStatement(xy_range[0], xy_range[1],
                                                (line_nr, spa.AwaitStatement(copy.deepcopy(recv_completion))))
 
-                result.extend([receive, send_stmt, await_send, await_recv])
-        return result
+                self.stmts.extend([receive, send_stmt, await_send, await_recv])
 
-    def _generate_return_op(self, op: sast.ReturnOp, comp: sast.ComputationBlock) -> list:
-        # Generates a map 'copy' operation for each output
-
-        for return_value, return_value_t, comp_field in zip(op.values, op.operation_type.source, comp.outputs):
-            print(f"Return {return_value} with type {return_value_t} to {comp_field}")
-
-        return []
 
 
 class MapTransformer(
