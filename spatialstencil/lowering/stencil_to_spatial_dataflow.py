@@ -57,7 +57,6 @@ class ProgramDataflow:
                     output_id: sast.Identifier,
                     offset: sast.Offset,
                     stream: spa.Identifier):
-        print(f"Setting stream from {input_id} to {output_id} with offset {offset} to {stream}")
         self._stream_map[input_id][output_id][offset] = stream
 
     def declare_dataflow_for_computation(self,

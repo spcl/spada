@@ -171,19 +171,23 @@ class RangeExpression(SpatialNode):
     A range expression (start:stop or start:stop:step).
     """
     start: Expression
-    stop: Expression
+    stop: Expression = None
     step: Expression = None
 
     def validate(self) -> None:
         assert isinstance(self.start, Expression)
-        assert isinstance(self.stop, Expression)
+        if self.stop is not None:
+            assert isinstance(self.stop, Expression)
         if self.step is not None:
             assert isinstance(self.step, Expression)
 
     def as_ir(self, indent: int = 0) -> str:
         if self.step:
             return f'{self.start.as_ir()}:{self.stop.as_ir()}:{self.step.as_ir()}'
-        return f'{self.start.as_ir()}:{self.stop.as_ir()}'
+        elif self.stop:
+            return f'{self.start.as_ir()}:{self.stop.as_ir()}'
+        else:
+            return self.start.as_ir()
 
     @staticmethod
     def from_args(start: int, stop: int, step: int = None) -> 'RangeExpression':

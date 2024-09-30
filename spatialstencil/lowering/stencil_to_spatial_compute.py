@@ -7,6 +7,7 @@ from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
 from spatialstencil.lowering.versioning import Versioning
 from spatialstencil.syntax.common.basenode import Wildcard
 from spatialstencil.syntax.common.tree_matching import PatternMatcher, PatternTransformer
+from spatialstencil.syntax.common.types import ScalarType
 from spatialstencil.syntax.common.visitor import IRNodeVisitor
 from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle, group_rectangles_by_domain, split_rectangles
 from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
@@ -75,14 +76,6 @@ class ProgramCompute:
 
         return block
 
-    def _generate_return_op(self, op: sast.ReturnOp, comp: sast.ComputationBlock) -> list:
-        # Generates a map 'copy' operation for each output
-
-        for return_value, return_value_t, comp_field in zip(op.values, op.operation_type.source, comp.outputs):
-            print(f"Return {return_value} with type {return_value_t} to {comp_field}")
-
-        return []
-
 
 class ComputeVisitor(sast.ScopedNodeVisitor):
 
@@ -99,11 +92,70 @@ class ComputeVisitor(sast.ScopedNodeVisitor):
                                        MapTransformer(placement, versioning),
                                        HorizontalStencilTransformer(placement, versioning, dataflow)]
 
-    def visit_ReturnOp(self, node: sast.ReturnOp):
+    def visit_ReturnOp(self, op: sast.ReturnOp):
         comp = self.get_scope()
         assert isinstance(comp, sast.ComputationBlock)
-        print(f"Return {node} in {comp}")
-        pass
+
+        shift = self.placement.get_shift()
+        assert shift[2] == 0
+        for value, value_t, out, out_t in zip(op.values, op.operation_type.source, comp.outputs,
+                                              comp.operation_type.destination):
+            value = value.value
+            assert isinstance(value, sast.Identifier)
+
+            x_range = _shift(out_t.domain.x, shift[0])
+            y_range = _shift(out_t.domain.y, shift[1])
+
+            var_k = self.versioning.next_version('k')
+
+            dst_range = (value_t.domain.z[0], value_t.domain.z[1])
+            src_range = (out_t.domain.z[0], out_t.domain.z[1])
+
+            translation = src_range[0] - dst_range[0]
+
+            src_id, src_dtype = self.placement.get_storage(value)
+
+            src_e = spa.Expression(
+                spa.ArraySlice(
+                    src_id,
+                    [var_k]
+                ),
+                src_dtype.base_type
+            )
+
+            dst_id, dst_dtype = self.placement.get_storage(out)
+
+            if translation > 0:
+
+                dst_e = spa.ArraySlice(
+                    dst_id,
+                    [spa.RangeExpression(spa.Expression(spa.BinaryOperator(spa.Expression(var_k, ScalarType.i32),
+                                                                           '+',
+                                                                           spa.Expression(
+                                                                               spa.ConstantLiteral(translation,
+                                                                                                   ScalarType.i32),
+                                                                               ScalarType.i32)),
+                                                        ScalarType.i32))]
+                )
+            else:
+                dst_e = spa.ArraySlice(
+                    dst_id,
+                    [var_k]
+                )
+
+            stmt = spa.MapStatement(
+                variables=[var_k],
+                range_expression=spa.RangeExpression.from_args(0, out_t.domain.z[1]),
+                body=[
+                    spa.AssignmentStatement(
+                        src_e,
+                        dst_e
+                    )
+                ]
+            )
+
+            line_nr = self.versioning.next_version("___line___").version
+            self.stmts.append(AbstractStatement(x_range, y_range, (line_nr, stmt)))
 
     def visit_StatementBlock(self, op: sast.StatementBlock):
         comp = self.get_scope()
@@ -135,8 +187,6 @@ class ComputeVisitor(sast.ScopedNodeVisitor):
         result = []
         for extent in op.operation_type.destination[0].extent.extents:
             if extent != sast.Offset.zero():
-                print(f"Materialize {op} with offset {extent}")
-
                 dst_buf, dst_dtype = self.placement.get_storage(dst, extent)
 
                 # Approach: Communicate the remote values and aggregate them into the local value
@@ -195,8 +245,9 @@ class ComputeVisitor(sast.ScopedNodeVisitor):
                 )
 
                 send_domain = out_t.domain.union(out_t.domain.add(extent.values))
-                send_x_range = (send_domain.x[0] + shift[0], send_domain.x[1] + shift[0])
-                send_y_range = (send_domain.y[0] + shift[1], send_domain.y[1] + shift[1])
+
+                send_x_range = _shift(send_domain.x, shift[0])
+                send_y_range = _shift(send_domain.y, shift[1])
 
                 line_nr = self.versioning.next_version("___line___").version
                 send_stmt = AbstractStatement(send_x_range, send_y_range, (line_nr, send))
@@ -212,9 +263,7 @@ class ComputeVisitor(sast.ScopedNodeVisitor):
                 self.stmts.extend([receive, send_stmt, await_send, await_recv])
 
 
-
-class MapTransformer(
-    PatternTransformer[sast.AssignOp, AbstractStatement, tuple[sast.ComputationBlock, sast.StatementBlock]]):
+class MapTransformer(PatternTransformer[sast.AssignOp, AbstractStatement, tuple[sast.ComputationBlock, sast.StatementBlock]]):
 
     def __init__(self, placement: ProgramPlacement, versioning: Versioning[spa.Identifier]):
         self.placement = placement
@@ -250,7 +299,6 @@ class MapTransformer(
         assert dst is not None
 
         res_id, res_dtype = self.placement.get_storage(dst)
-        print("Matched x op a[0, 0, 0]")
         var_k = self.versioning.next_version('k')
 
         # so we can easily extract the correct operation from the expression
@@ -281,7 +329,6 @@ class MapTransformer(
                 )
             ]
         )
-        print(stmt.as_ir())
 
         stmt_block = self.get_context()[1]
         out_t = stmt_block.operation_type.destination[0]
@@ -290,8 +337,7 @@ class MapTransformer(
         return [AbstractStatement(xy_range[0], xy_range[1], stmt)]
 
 
-class UnaryMapTransformer(
-    PatternTransformer[sast.AssignOp, AbstractStatement, tuple[sast.ComputationBlock, sast.StatementBlock]]):
+class UnaryMapTransformer(PatternTransformer[sast.AssignOp, AbstractStatement, tuple[sast.ComputationBlock, sast.StatementBlock]]):
 
     def __init__(self, placement: ProgramPlacement, versioning: Versioning[spa.Identifier]):
         self.placement = placement
@@ -327,7 +373,6 @@ class UnaryMapTransformer(
         assert dst is not None
 
         res_id, res_dtype = self.placement.get_storage(dst)
-        print("Matched (u_op) x op a[0, 0, 0]")
         var_k = self.versioning.next_version('k')
 
         # so we can easily extract the correct operation from the expression
@@ -360,7 +405,6 @@ class UnaryMapTransformer(
                 )
             ]
         )
-        print(stmt.as_ir())
 
         stmt_block = self.get_context()[1]
         out_t = stmt_block.operation_type.destination[0]
@@ -426,11 +470,6 @@ class HorizontalStencilTransformer(
 
         if dst is None:
             dst = out_id
-            # (1) dst buffer
-            print(f"Matched  return = (%a + %b[dx, dy, 0]) as {dst} = return {local} {op} {remote}[{dx}, {dy}, 0]")
-
-        else:
-            print(f"Matched  %c = (%a + %b[dx, dy, 0]) as {dst} = {local} {op} {remote}[{dx}, {dy}, 0]")
 
         # (1) dst buffer
         res_id, res_dtype = self.placement.get_storage(dst)
@@ -503,8 +542,9 @@ class HorizontalStencilTransformer(
             )
 
             send_domain = out_t.domain.union(out_t.domain.add((dx, dy, 0)))
-            send_x_range = (send_domain.x[0] + shift[0], send_domain.x[1] + shift[0])
-            send_y_range = (send_domain.y[0] + shift[1], send_domain.y[1] + shift[1])
+
+            send_x_range = _shift(send_domain.x, shift[0])
+            send_y_range = _shift(send_domain.y, shift[1])
 
             line_nr = self.versioning.next_version("___line___").version
             send_stmt = AbstractStatement(send_x_range, send_y_range, (line_nr, send))
@@ -562,11 +602,10 @@ class HorizontalStencilTransformer(
 def _get_range(access_type: sast.ViewType | sast.FieldType, shift: tuple) -> tuple:
     assert isinstance(access_type, (sast.ViewType, sast.FieldType))
     assert isinstance(access_type.domain, sast.Cartesian)
-    offset_domain = shift
-
-    x_range = (access_type.domain.x[0] + offset_domain[0],
-               access_type.domain.x[1] + offset_domain[0])
-    y_range = (access_type.domain.y[0] + offset_domain[1],
-               access_type.domain.y[1] + offset_domain[1])
-
+    x_range = _shift(access_type.domain.x, shift[0])
+    y_range = _shift(access_type.domain.y, shift[1])
     return x_range, y_range
+
+
+def _shift(_range: tuple | sast.Interval, shift: int) -> tuple:
+    return _range[0] + shift, _range[1] + shift

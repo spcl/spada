@@ -184,10 +184,6 @@ def _match_pattern(pattern: TreeNode | None, subject: TreeNode, paths=None, trie
     :param subject:
     :return:
     """
-    #_paths = root_to_leaf_paths(subject)
-    #print("Subject paths:")
-    #for path in _paths:
-    #    print([str(p) for p in path])
 
     # Pattern must be rooted at a labeled node for initial transition
     assert isinstance(subject, TreeNode)
@@ -255,7 +251,6 @@ def _build_trie(pattern: TreeNode) -> tuple[Trie[Symbol], list[list[Symbol]]]:
     paths = root_to_leaf_paths(pattern)
     builder = TrieBuilder[Symbol]()
     for path in paths:
-        #print([str(p) for p in path])
         assert all(isinstance(p, Symbol) for p in path)
         builder.add(path)
 
