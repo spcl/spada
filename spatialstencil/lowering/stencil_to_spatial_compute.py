@@ -317,7 +317,7 @@ class MapTransformer(PatternTransformer[sast.AssignOp, AbstractStatement, tuple[
         )
 
         stmt = spa.MapStatement(
-            variables=[self.versioning.next_version('k')],
+            variables=[var_k],
             range_expression=spa.RangeExpression.from_args(0, res_dtype.shape[0]),
             body=[
                 spa.AssignmentStatement(
@@ -393,7 +393,7 @@ class UnaryMapTransformer(PatternTransformer[sast.AssignOp, AbstractStatement, t
         )
 
         stmt = spa.MapStatement(
-            variables=[self.versioning.next_version('k')],
+            variables=[var_k],
             range_expression=spa.RangeExpression.from_args(0, res_dtype.shape[0]),
             body=[
                 spa.AssignmentStatement(
@@ -582,7 +582,7 @@ class HorizontalStencilTransformer(
             )
 
             stmt = spa.MapStatement(
-                variables=[self.versioning.next_version('k')],
+                variables=[var_k],
                 range_expression=spa.RangeExpression.from_args(0, res_dtype.shape[0]),
                 body=[
                     spa.AssignmentStatement(
