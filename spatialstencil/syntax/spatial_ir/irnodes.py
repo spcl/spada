@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Union, Tuple, Optional, Literal
 from spatialstencil.syntax.common.basenode import BaseNode
 from spatialstencil.syntax.common.types import ScalarType, IRType
+from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle
 
 
 @dataclass
@@ -163,6 +164,11 @@ class Expression(SpatialNode):
     def as_ir(self, indent: int = 0) -> str:
         return self.value.as_ir()
 
+    def eval(self) -> int | float | Identifier | Parameter | ArraySlice | UnaryOperator | BinaryOperator:
+        if isinstance(self.value, ConstantLiteral):
+            return self.value.value
+        return self.value
+
 
 @dataclass
 class RangeExpression(SpatialNode):
@@ -178,6 +184,7 @@ class RangeExpression(SpatialNode):
         if self.stop is not None:
             assert isinstance(self.stop, Expression)
         if self.step is not None:
+            assert self.stop is not None
             assert isinstance(self.step, Expression)
 
     def as_ir(self, indent: int = 0) -> str:
@@ -197,6 +204,13 @@ class RangeExpression(SpatialNode):
             return RangeExpression(start_expr, stop_expr, step_expr)
         return RangeExpression(start_expr, stop_expr)
 
+    def as_tuple(self) -> tuple:
+        if self.step:
+            return self.start.eval(), self.stop.eval(), self.step.eval()
+        elif self.stop:
+            return self.start.eval(), self.stop.eval()
+        else:
+            return self.start.eval(),
 
 
 @dataclass
@@ -220,6 +234,10 @@ class SubgridExpression(SpatialNode):
 
     def as_ir(self, indent: int = 0) -> str:
         return f'[{self.x_range.as_ir()} , {self.y_range.as_ir()}]'
+
+    @staticmethod
+    def from_rectangle(rectangle: Rectangle) -> 'SubgridExpression':
+        return SubgridExpression.from_tuple(rectangle.x_range, rectangle.y_range)
 
 
 @dataclass
@@ -552,12 +570,12 @@ class Phase(SpatialNode):
         place_str = "\n".join(pl.as_ir(indent + 1) for pl in self.place)
 
         body_str = ""
+        if place_str:
+            body_str += f'{place_str}\n'
         if dataflow_str:
             body_str += f'{dataflow_str}\n'
         if compute_str:
             body_str += f'{compute_str}\n'
-        if place_str:
-            body_str += f'{place_str}\n'
 
         return f'{indent_str}{phase_str}{body_str}{indent_str}}}'
 
@@ -591,6 +609,12 @@ class KernelArgument(SpatialNode):
         return f'{self.dtype.as_ir()} {self.identifier.as_ir()}'
 
 
+# Tuple of Phase-Id and Block
+BlockInPhase = tuple[int, DataflowBlock | PlaceBlock | ComputeBlock]
+# Rectangle with Phase-Id and Block
+Subgrid = Rectangle[BlockInPhase]
+
+
 @dataclass
 class Kernel(SpatialNode):
     """
@@ -612,3 +636,31 @@ class Kernel(SpatialNode):
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
         return f'kernel @{self.name}<{param_str}>({arg_str}) {{\n{body_str}\n}}' if self.name \
             else f'kernel<{param_str}>({arg_str}) {{\n{body_str}\n}}'
+
+    def subgrids(self) -> list[Subgrid]:
+        rectangles = []
+        phase_id = 1
+        for elem in self.body:
+            if isinstance(elem, Phase):
+                rectangles.extend([Rectangle(a.subgrid.x_range.as_tuple(),
+                                             a.subgrid.y_range.as_tuple(),
+                                             (phase_id, a))
+                                   for a in elem.place])
+
+                rectangles.extend([Rectangle(a.subgrid.x_range.as_tuple(),
+                                             a.subgrid.y_range.as_tuple(),
+                                             (phase_id, a))
+                                  for a in elem.dataflow])
+
+                rectangles.extend([Rectangle(a.subgrid.x_range.as_tuple(),
+                                             a.subgrid.y_range.as_tuple(),
+                                             (phase_id, a))
+                                  for a in elem.compute])
+                phase_id += 1
+            else:
+                assert isinstance(elem, (ComputeBlock, DataflowBlock, PlaceBlock))
+                rectangles.append(Rectangle(elem.subgrid.x_range.as_tuple(),
+                                            elem.subgrid.y_range.as_tuple(),
+                                            (0, elem)))
+
+        return rectangles

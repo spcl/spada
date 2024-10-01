@@ -1,3 +1,5 @@
+import copy
+
 import spatialstencil.syntax.stencil_ir.irnodes as sast
 import spatialstencil.syntax.spatial_ir.irnodes as spa
 from spatialstencil.lowering.stencil_to_spatial_compute import ProgramCompute, AbstractStatement
@@ -6,6 +8,7 @@ from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
 
 from spatialstencil.lowering.versioning import Versioning
 from spatialstencil.syntax.common.types import ScalarType
+from spatialstencil.syntax.spatial_ir.grid_geometry import split_rectangles
 
 from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
 
@@ -57,10 +60,50 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
             output_compute = output_phase(comp, arguments, versioning, placement_gen)
             body.append(spa.Phase([], [], output_compute))
 
-    # TODO Pass that applies rectangle splitting to all phases across block types
     kernel = spa.Kernel(name=stencil.name or "", parameters=[], arguments=arguments, body=body)
 
+    # Pass that applies rectangle splitting to all phases across block types
+    kernel = split_subgrids(kernel)
+
     return kernel
+
+
+def split_subgrids(kernel: spa.Kernel) -> spa.Kernel:
+    subgrids = kernel.subgrids()
+
+    # split subgrids so that no two un-equal subgrids overlap
+    split = split_rectangles(subgrids)
+
+    # group the subgrids into phases (by phase Id)
+    number_of_phases = max(r.metadata[0] for r in split) + 1
+
+    dataflow_blocks = [[] for _ in range(number_of_phases)]
+    place_blocks = [[] for _ in range(number_of_phases)]
+    compute_blocks = [[] for _ in range(number_of_phases)]
+
+    for subgrid in split:
+        phase_id = subgrid.metadata[0]
+
+        # Create a block from the subgrid, and set the new ranges
+        block = copy.deepcopy(subgrid.metadata[1])
+        block.subgrid = spa.SubgridExpression.from_rectangle(subgrid)
+
+        if isinstance(block, spa.DataflowBlock):
+            dataflow_blocks[phase_id].append(block)
+        elif isinstance(block, spa.PlaceBlock):
+            place_blocks[phase_id].append(block)
+        elif isinstance(block, spa.ComputeBlock):
+            compute_blocks[phase_id].append(block)
+
+    new_kernel = spa.Kernel(name=kernel.name or "", parameters=[], arguments=kernel.arguments, body=[])
+    # for each phase, generate the phase body
+    new_kernel.body.extend(place_blocks[0])
+    new_kernel.body.extend(dataflow_blocks[0])
+    new_kernel.body.extend(compute_blocks[0])
+    for i in range(1, number_of_phases):
+        new_kernel.body.append(spa.Phase(place_blocks[i], dataflow_blocks[i], compute_blocks[i]))
+
+    return new_kernel
 
 
 def kernel_arguments(stencil: sast.Program) -> list[spa.KernelArgument]:

@@ -10,6 +10,14 @@ class Rectangle(Generic[T]):
     y_range: tuple[int, int]
     metadata: T
 
+    def __post_init__(self):
+        assert self.x_range[0] <= self.x_range[1]
+        assert self.y_range[0] <= self.y_range[1]
+        assert isinstance(self.x_range[0], int)
+        assert isinstance(self.x_range[1], int)
+        assert isinstance(self.y_range[0], int)
+        assert isinstance(self.y_range[1], int)
+
     def contains_point(self, x: int, y: int) -> bool:
         """
         Return True if the point (x, y) is contained in the rectangle.
