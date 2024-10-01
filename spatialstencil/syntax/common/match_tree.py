@@ -26,6 +26,14 @@ class TreeNode(MatchTree[V]):
     def get_children(self) -> List[MatchTree[V]]:
         return self.children
 
+    def walk_tree(self):
+        todo: deque[MatchTree[V]] = deque([self])
+        while todo:
+            node = todo.popleft()
+            if isinstance(node, TreeNode):
+                todo.extend(node.get_children())
+            yield node
+
     def __str__(self):
         if not self.children:
             return self.label
@@ -130,6 +138,13 @@ class Index(Symbol[V]):
     def __eq__(self, other):
         return isinstance(other, Index) and self.value == other.value
 
+    def __lt__(self, other):
+        if isinstance(other, Index):
+            return self.value < other.value
+        if isinstance(other, SymbolWildcard):
+            return False
+        return True
+
 
 # Label class representing a label symbol in the automaton
 @dataclass(frozen=True)
@@ -148,6 +163,11 @@ class Label(Symbol[V]):
     def __eq__(self, other):
         return isinstance(other, Label) and self.value == other.value
 
+    def __lt__(self, other):
+        if isinstance(other, Label):
+            return self.value < other.value
+        return False
+
 
 # Wildcard class representing a wildcard in the tree
 class SymbolWildcard(Symbol):
@@ -162,6 +182,9 @@ class SymbolWildcard(Symbol):
 
     def __str__(self):
         return '_'
+
+    def __lt__(self, other):
+        return True
 
 
 # Helper function to collect paths from root to leaf

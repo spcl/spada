@@ -42,7 +42,7 @@ class TrieNode(Generic[T]):
         return outputs
 
     def __str__(self):
-        return f'{self.identifier} : {[(str(a), b.identifier) for a, b in self.arrows.items()]}'
+        return f'{self.identifier} : {[(str(a), b.identifier) for a, b in self.iterate_arrows(self.arrows)]}'
 
 
 class Trie(Generic[T]):
@@ -72,14 +72,19 @@ class Trie(Generic[T]):
             assert node is not None
         node.pattern = pattern[:]
 
+    @staticmethod
+    def iterate_sorted(dictionary: Dict[T, 'TrieNode[T]']):
+        for k, v in sorted(dictionary.items(), key=lambda x: x[0]):
+            yield k, v
+
     def compute_automaton_links(self):
         q = deque[T, TrieNode[T]]()
 
         # root and its children have root as their suffix link
         self.root.suffix = self.root
-        for initial, child in self.root.arrows.items():
+        for initial, child in self.iterate_sorted(self.root.arrows):
             child.suffix = self.root
-            for symbol, grandchild in child.arrows.items():
+            for symbol, grandchild in self.iterate_sorted(child.arrows):
                 q.append((symbol, grandchild))
 
         while q:
@@ -94,7 +99,7 @@ class Trie(Generic[T]):
             node.suffix = suffix.arrows.get(symbol, self.root)
             node.output = node.suffix if node.suffix.pattern is not None else node.suffix.output
 
-            for sym, child in node.arrows.items():
+            for sym, child in self.iterate_sorted(node.arrows):
                 q.append((sym, child))
 
     def __str__(self):

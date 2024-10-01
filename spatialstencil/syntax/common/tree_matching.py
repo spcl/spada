@@ -172,7 +172,7 @@ class PatternTransformer(Generic[BaseNodeT, BaseNodeK, ContextT], ABC):
         pass
 
 
-def _match_pattern(pattern: TreeNode | None, subject: TreeNode, paths=None, trie=None) -> set[TreeNode]:
+def _match_pattern(pattern: TreeNode | None, subject: TreeNode, paths=None, trie=None) -> list[TreeNode]:
     """
     Math a pattern tree to a subject tree using the approach by Hoffmann and O’Donnell
     described in "Pattern Matching in Trees".
@@ -241,7 +241,7 @@ def _match_pattern(pattern: TreeNode | None, subject: TreeNode, paths=None, trie
         stack.append(Entry(next_node, next_state, -1))
         tabulate(next_state)
 
-    return {t for t in counter.keys() if has_match[t]}
+    return [t for t in subject.walk_tree() if has_match[t]]
 
 
 def _build_trie(pattern: TreeNode) -> tuple[Trie[Symbol], list[list[Symbol]]]:
