@@ -345,7 +345,7 @@ class TestTreeMatching(unittest.TestCase):
 
         a = sast.AssignOp(result=sast.Identifier(name='d', version=0),
                           value=sast.Expression(value=sast.BinaryOperator(
-                              left=sast.Expression(value=sast.Identifier(name='c', version=0)),
+                              left=sast.Expression(value=sast.Subscript(sast.Identifier(name='c', version=0), [0, 0, 0])),
                               op='+',
                               right=sast.Expression(value=sast.Subscript(value=sast.Identifier(name='in', version=0),
                                                                          subscript=[0, -1, 0])))),
