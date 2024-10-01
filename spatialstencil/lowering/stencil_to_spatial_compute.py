@@ -425,14 +425,9 @@ class HorizontalStencilTransformer(
         self.placement = placement
         self.versioning = versioning
         self.dataflow = dataflow
-        # %c = (%a + %b[dx, dy, 0]) : f32
-
-        e = sast.Expression(
-            value=sast.BinaryOperator(left=sast.Expression(value=Wildcard[sast.Identifier]('local')()),
-                                      op=Wildcard("op")(),
-                                      right=sast.Expression(
-                                          sast.Subscript(Wildcard('remote')(),
-                                                         [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0]))))
+        # %c = (%a[0, 0, 0] + %b[dx, dy, 0]) : f32
+        # %c = (%b[dx, dy, 0] + %a[0, 0, 0]) : f32
+        # %c = (%b[dx, dy, 0] : f32
 
         e_1 = sast.Expression(
             value=sast.BinaryOperator(left=sast.Expression(value=sast.Subscript(
@@ -442,13 +437,26 @@ class HorizontalStencilTransformer(
                     sast.Subscript(Wildcard('remote')(),
                                    [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0]))))
 
+        e = sast.Expression(
+            value=sast.BinaryOperator(right=sast.Expression(value=sast.Subscript(
+                Wildcard[sast.Identifier]('local')(), [0, 0, 0])),
+                op=Wildcard("op")(),
+                left=sast.Expression(
+                    sast.Subscript(Wildcard('remote')(),
+                                   [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0]))))
+
+        e_2 = sast.Expression(sast.Subscript(Wildcard('remote')(),
+                                            [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0]))
+
         assignment_0 = sast.AssignOp(Wildcard[sast.Identifier]("dst")(), e, Wildcard()())
         assignment_1 = sast.AssignOp(Wildcard[sast.Identifier]("dst")(), e_1, Wildcard()())
+        assignment_2 = sast.AssignOp(Wildcard[sast.Identifier]("dst")(), e_2, Wildcard()())
 
         return_0 = sast.ReturnOp([e], Wildcard()())
         return_1 = sast.ReturnOp([e_1], Wildcard()())
+        return_2 = sast.ReturnOp([e_2], Wildcard()())
 
-        super().__init__([assignment_0, return_0, assignment_1, return_1])
+        super().__init__([assignment_0, return_0, assignment_1, return_1, assignment_2, return_2])
 
     def transform(self,
                   root: sast.AssignOp,
@@ -459,8 +467,6 @@ class HorizontalStencilTransformer(
                   dx: int = None,
                   dy: int = None,
                   **wildcards) -> list[AbstractStatement]:
-        assert op is not None
-        assert local is not None
         assert remote is not None
         assert dx is not None
         assert dy is not None
@@ -478,7 +484,9 @@ class HorizontalStencilTransformer(
         # For this, we need:
 
         # (2) local buffer
-        local_id, local_dtype = self.placement.get_storage(local)
+        if local is not None:
+            assert op is not None
+            local_id, local_dtype = self.placement.get_storage(local)
 
         # (3) remote buffer
         # Determine if its an input type or an intermediate type
@@ -502,14 +510,17 @@ class HorizontalStencilTransformer(
                 stream
             )
 
-            src_expr = spa.Expression(
-                spa.BinaryOperator(
-                    spa.Expression(local_id, local_dtype.base_type),
-                    op,
-                    spa.Expression(var_x, remote_dtype.base_type),
-                ),
-                local_dtype.base_type
-            )
+            if local is not None:
+                src_expr = spa.Expression(
+                    spa.BinaryOperator(
+                        spa.Expression(local_id, local_dtype.base_type),
+                        op,
+                        spa.Expression(var_x, remote_dtype.base_type),
+                    ),
+                    local_dtype.base_type
+                )
+            else:
+                src_expr = spa.Expression(var_x, remote_dtype.base_type)
 
             assign_stmt = spa.AssignmentStatement(
                 source=src_expr,
@@ -536,7 +547,7 @@ class HorizontalStencilTransformer(
 
             send_completion = spa.Completion(self.versioning.next_version('_send_comp'))
             send = spa.SendStatement(
-                local_id,
+                remote_id,
                 stream,
                 send_completion
             )
@@ -559,7 +570,7 @@ class HorizontalStencilTransformer(
 
             return [receive, send_stmt, await_send, await_recv]
 
-        else:
+        elif local is not None:
             # (4) materialized buffer (already computed)
             # Only local computation is needed
             remote_id, remote_dtype = self.placement.get_storage(remote, sast.Offset((dx, dy, 0)))

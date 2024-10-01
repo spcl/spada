@@ -528,8 +528,15 @@ class Subscript(Node):
     value: Identifier
     subscript: list[int]
 
+    def validate(self) -> None:
+        assert isinstance(self.value, Identifier)
+        assert isinstance(self.subscript, list)
+
     def as_ir(self, indent: int = 0) -> str:
         return f'{self.value.as_ir()}[{", ".join(str(s) for s in self.subscript)}]'
+
+    def from_lark(self, args):
+        return Subscript(args[0], list(args[1]))
 
 
 @dataclass
@@ -554,6 +561,10 @@ class Expression(Node):
     """
     value: Identifier | int | float | Subscript | UnaryOperator | BinaryOperator | TernaryOperator | MathCall
 
+    def validate(self) -> None:
+        assert isinstance(self.value,
+                          (Identifier, int, float, Subscript, UnaryOperator, BinaryOperator, TernaryOperator, MathCall))
+
     def as_ir(self, indent: int = 0) -> str:
         if isinstance(self.value, (int, float)):
             return str(self.value)
@@ -574,6 +585,8 @@ class Expression(Node):
             return 1 + max(self.value.left.depth(), self.value.right.depth())
         if isinstance(self.value, TernaryOperator):
             return 1 + max(self.value.true_value.depth(), self.value.test.depth(), self.value.false_value.depth())
+        else:
+            raise ValueError(f"Unknown expression type {self.value}")
 
     def number_of_subscripts(self) -> int:
         """

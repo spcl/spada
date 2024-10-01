@@ -11,6 +11,8 @@ from spatialstencil.syntax.common.types import ScalarType
 from spatialstencil.syntax.spatial_ir.grid_geometry import split_rectangles
 
 from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
+from spatialstencil.syntax.stencil_ir.canonical_expression import CanonicalExpressionVisitor
+from spatialstencil.syntax.stencil_ir.type_inference import infer_scalar_types, infer_types
 
 
 def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
@@ -28,6 +30,11 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
     # (3) COMPUTE: Go through statements, generate code for them by sending through channels and using the placed fields
 
     # We use a field per identifier NAME, that is, storage is re-used for equal version fields in the same scope.
+
+    canonicalizer = CanonicalExpressionVisitor()
+    canonicalizer.visit(stencil)
+    # TODO Should do type inference again after canonicalization
+    #infer_scalar_types(stencil, ScalarType.f32, ScalarType.i32)
 
     domain_collector = DomainCollector()
     domain_collector.visit(stencil)
