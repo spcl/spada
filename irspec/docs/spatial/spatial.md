@@ -391,7 +391,59 @@ array_expression = expression;
 field_name = expression;
 ```
 
-Note that each completion name must be unique within a `compute` block.
+### Asynchronous Execution with Completions
+
+A completion is a built-in identifier type that can be used to control asynchronous execution.
+
+In a well-formed code, every asynchronous element must either have a `completion` definition assigned, or be prefixed
+with `await`. This includes asynchronous blocks (`foreach`, `map`, `async`) and asynchronous built-in functions (`send`,
+`receive`) that appear in the top-level `compute` scope.
+
+A `completion` object cannot be defined on its own (i.e., `completion c`), nor can it be reassigned. Each completion
+name must be unique within a `compute` block.
+
+### Await completions with `await`
+
+Inside a `compute` block, an `await` statement is used to wait for a completion to trigger.
+The `await` can be applied to a completion name.
+```rust
+await completion_name;
+```
+The `await` can be immediately applied to an asynchronous operation as a shorthand:
+```
+await operation;
+// Is semantically equivalent to:
+completion c = operation;
+await c;
+```
+
+??? example "Example: await"
+    ```rust
+    // Execute a map and wait for its completion
+    await map i32 i in [0:10] {
+        // Statements
+    }
+    // Wait for completion of a send
+    await send(local_array, stream_name);
+    // Wait for completion of a receive
+    await foreach i32 k, f32 x in [0:K, receive(stream_name)] {
+      // Statements
+    }
+    // Wait for a completion
+    await comp;
+    ```
+
+!!! note 
+    Note that statements inside an `await` may still be preempted by other asynchronous operations!
+    
+!!! danger "Undefined Behavior"
+    Awaiting the same completion twice is considered undefined behavior.
+    
+
+Any completion that is never `await`ed is assumed to have an implicit `await` at the end of its parent `compute` block.
+
+See the [Semantics of Asynchronous Statements](../async#semantics-of-asynchronous-statements) for more details
+on the semantics of `await`.
 
 ### Streaming Data with `send`
 
@@ -544,46 +596,6 @@ Hence, the map must not contain loop-carried dependencies.
 !!! note
     If you need to perform non-affine array accesses, exploit loop-carried dependencies, 
     or nest other asynchronous operations, use a [`for`](#processing-arrays-sequentially-with-for) loop instead.
-
-### Await completions with `await`
-
-Inside a `compute` block, an `await` statement is used to wait for a completion to trigger.
-The `await` can be applied to a completion name.
-```rust
-await completion_name;
-```
-The `await` can be immediately applied to an asynchronous operation as a shorthand:
-```
-await operation;
-// Is semantically equivalent to:
-completion c = operation;
-await c;
-```
-
-??? example "Example: await"
-    ```rust
-    // Execute a map and wait for its completion
-    await map i32 i in [0:10] {
-        // Statements
-    }
-    // Wait for completion of a send
-    await send(local_array, stream_name);
-    // Wait for completion of a receive
-    await foreach i32 k, f32 x in [0:K, receive(stream_name)] {
-      // Statements
-    }
-    // Wait for a completion
-    await comp;
-    ```
-
-!!! note 
-    Note that statements inside an `await` may still be preempted by other asynchronous operations!
-    
-!!! danger "Undefined Behavior"
-    Awaiting the same completion twice is considered undefined behavior.
-    
-See the [Semantics of Asynchronous Statements](../async#semantics-of-asynchronous-statements) for more details
-on the semantics of `await`.
 
 ### Processing arrays sequentially with `for`
 
