@@ -87,7 +87,7 @@ and record the stream $F$, channel $C$, and corresponding stream edge.
     are properly sequenced in different phases.
     ```rust
     // 1D 2-phase reduce for 4 PEs
-    place i, j in [0:4, 0] {
+    place i16 i, i16 j in [0:4, 0] {
         f32[K] a;
     }
     
