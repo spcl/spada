@@ -260,7 +260,7 @@ class PlaceBlock(SpatialNode):
     """
     The 'place' block for allocating variables or arrays on a subgrid of PEs.
     """
-    variables: list[Identifier]
+    variables: list[TypedIdentifier]
     subgrid: SubgridExpression
     statements: list[FieldDeclaration]
 
@@ -329,12 +329,12 @@ class DataflowBlock(SpatialNode):
     """
     The 'dataflow' block for describing communication streams between PEs.
     """
-    variables: list[Identifier]
+    variables: list[TypedIdentifier]
     subgrid: SubgridExpression
     statements: list[RelativeStreamDeclaration]
 
     def validate(self) -> None:
-        assert all(isinstance(var, Identifier) for var in self.variables)
+        assert all(isinstance(var, TypedIdentifier) for var in self.variables)
         assert all(isinstance(stmt, RelativeStreamDeclaration) for stmt in self.statements)
         assert len(self.variables) == 2
 
@@ -386,7 +386,7 @@ class SendStatement(Statement):
         indent_str = '  ' * indent
         if self.completion_name:
             return f'{indent_str}{self.completion_name.as_ir()} = send({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
-        return f'{indent_str}send({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
+        return f'{indent_str}await send({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
 
 
 @dataclass
@@ -402,20 +402,19 @@ class ReceiveStatement(Statement):
         indent_str = '  ' * indent
         if self.completion_name:
             return f'{indent_str}{self.completion_name.as_ir()} = receive({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
-        return f'{indent_str}receive({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
+        return f'{indent_str}await receive({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
 
 
-# Receive Statement
+# Receive generator
 @dataclass
-class Receive(SpatialNode):
+class ReceiveGenerator(SpatialNode):
     """
-    Receive data from a stream, used in a foreach statement.
+    Receive data from a stream, used as a generator in a foreach statement.
     """
     stream_name: Identifier
 
     def as_ir(self, indent: int = 0) -> str:
-        indent_str = '  ' * indent
-        return f'{indent_str}receive({self.stream_name.as_ir()})'
+        return f'receive({self.stream_name.as_ir()})'
 
 
 # Foreach Loop (asynchronous)
@@ -424,11 +423,14 @@ class ForeachStatement(Statement):
     """
     Foreach loop for asynchronously iterating over a received stream.
     """
-    variables: list[Identifier]
-    receive_stream: Receive
+    variables: list[TypedIdentifier]
+    parameter_range: list[RangeExpression]
+    receive_stream: Identifier
     body: list[Statement]
     completion_name: Optional[Completion] = None
-    parameter_range: Optional[list[RangeExpression]] = None
+
+    def validate(self) -> None:
+        assert len(self.variables) == len(self.parameter_range) + 1
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -453,7 +455,7 @@ class MapStatement(Statement):
     """
     Map statement for applying an affine computation asynchronously to array elements.
     """
-    variables: list[Identifier]
+    variables: list[TypedIdentifier]
     range_expression: list[RangeExpression]
     body: list[Statement]
     completion_name: Optional[Completion] = None
@@ -475,7 +477,7 @@ class ForStatement(Statement):
     """
     Sequential for loop for iterating over a range expression.
     """
-    variables: list[Identifier]
+    variables: list[TypedIdentifier]
     range_expression: list[RangeExpression]
     body: list[Statement]
 
@@ -493,29 +495,26 @@ class AsyncBlock(Statement):
     """
     Asynchronous block for executing a computation asynchronously.
     """
+    completion_name: Completion
     body: list[Statement]
-    completion_name: Optional[Completion] = None
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
-        if self.completion_name:
-            return f'{indent_str}{self.completion_name.as_ir()} = async {{\n{body_str}\n{indent_str}}}'
-        else:
-            return f'{indent_str}async {{\n{body_str}\n{indent_str}}}'
+        return f'{indent_str}{self.completion_name.as_ir()} = async {{\n{body_str}\n{indent_str}}}'
 
 
 # Await Completion Statement
 @dataclass
-class AwaitStatement(Statement):
+class AwaitCompletionStatement(Statement):
     """
     Await statement to wait for a completion.
     """
-    completion: Completion
+    completion_name: Identifier
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
-        return f'{indent_str}await {self.completion.name.as_ir()}'
+        return f'{indent_str}await {self.completion_name.as_ir()}'
 
 
 # Assignment Statement
@@ -563,12 +562,12 @@ class ComputeBlock(SpatialNode):
     """
     The 'compute' block for defining computation on a subgrid of PEs.
     """
-    variables: list[Identifier]
+    variables: list[TypedIdentifier]
     subgrid: SubgridExpression
     statements: list[Statement]
 
     def validate(self) -> None:
-        assert all(isinstance(var, Identifier) for var in self.variables)
+        assert all(isinstance(var, TypedIdentifier) for var in self.variables)
         assert all(isinstance(stmt, Statement) for stmt in self.statements)
         assert len(self.variables) == 2
 

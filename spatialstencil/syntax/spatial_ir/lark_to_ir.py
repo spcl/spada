@@ -1,12 +1,6 @@
-from dataclasses import dataclass
 import lark
 
 from spatialstencil.syntax.spatial_ir import irnodes
-
-
-@dataclass
-class ObjectType:
-    typename: str
 
 
 class TreeToSpatialIR(lark.Transformer):
@@ -20,6 +14,8 @@ class TreeToSpatialIR(lark.Transformer):
     underscore = lambda self, val: str(val[0])
     true = lambda self, _: True
     false = lambda self, _: False
+    prefix = lambda self, _: None
+
     def NEWLINE(self, args):
         return None
 
@@ -68,7 +64,6 @@ class TreeToSpatialIR(lark.Transformer):
         return irnodes.TypedIdentifier(dtype, ident.name, ident.version)
 
     float_type = int_type = uint_type = bool_type = lambda self, args: getattr(irnodes.ScalarType, str(args[0]))
-    object_type = lambda self, args: ObjectType(str(args[0]))
     stream_type = irnodes.StreamType.from_lark
 
     def array_type(self, args):
@@ -114,12 +109,19 @@ class TreeToSpatialIR(lark.Transformer):
     def ternary_op(self, args, meta=None):
         return irnodes.TernaryOperator(_expr(args[0]), _expr(args[1]), _expr(args[2]))
 
+    # Free function call to builtins
     def function_call(self, args, meta=None):
-        func, arguments = args
+        if isinstance(args[0], irnodes.Completion):
+            completion = args[0]
+            func, arguments = args[1:]
+        else:
+            completion = None
+            func, arguments = args[1:]
+
         if func == 'send':
-            return irnodes.SendStatement(*arguments)
+            return irnodes.SendStatement(*arguments, completion_name=completion)
         elif func == 'receive':
-            return irnodes.ReceiveStatement(*arguments)
+            return irnodes.ReceiveStatement(*arguments, completion_name=completion)
         raise SyntaxError(f'Unrecognized free function call to "{func}"')
 
     subscript = irnodes.ArraySlice.from_lark
@@ -141,36 +143,36 @@ class TreeToSpatialIR(lark.Transformer):
     subgrid_expression_2d = irnodes.SubgridExpression.from_lark
 
     # Scopes
-    for_stmt = irnodes.ForStatement.from_lark
-    map_stmt = irnodes.MapStatement.from_lark
+    def _scope_wrapper(self, cls, args):
+        """
+        A scope wrapper that handles `completion` assignments and `await` statements
+        """
+        completion = None
+        if isinstance(args[0], irnodes.Completion) or args[0] is None:
+            completion = args[0]
+            args = args[1:]
+        return cls(*args, completion_name=completion)
+
+    for_stmt = lambda self, args: self._scope_wrapper(irnodes.ForStatement, args)
+    map_stmt = lambda self, args: self._scope_wrapper(irnodes.MapStatement, args)
     async_stmt = irnodes.AsyncBlock.from_lark
 
     def foreach_stmt(self, args):
+        completion = None
+        if isinstance(args[0], irnodes.Completion) or args[0] is None:
+            completion = args[0]
+            args = args[1:]
+
         iters, (rng, stream), body = args
-        return irnodes.ForeachStatement(iters, stream, body, parameter_range=rng)
+        return irnodes.ForeachStatement(iters, rng, stream, body, completion_name=completion)
 
-    # Await variants
-    def await_stmt(self, args):
-        return irnodes.AwaitStatement(irnodes.Completion(args[0]))
+    # Await for a completion object
+    await_completion = irnodes.AwaitCompletionStatement.from_lark
 
-    # Definitions and assignments (combines syntax and semantics)
-    def definition(self, args):
-        dtype, identifier, rhs = args
-        if isinstance(rhs, (irnodes.MapStatement, irnodes.ForeachStatement, irnodes.SendStatement,
-                            irnodes.ReceiveStatement, irnodes.AsyncBlock)):
-            if isinstance(dtype, ObjectType) and dtype.typename == 'completion':
-                rhs.completion_name = irnodes.Completion(identifier)
-                return rhs
-            else:
-                raise SyntaxError('Only completions can be assigned to from scopes')
-        return irnodes.DefinitionStatement(dtype, identifier, rhs)
-
-    def assignment(self, args):
-        lhs, rhs = args
-        if isinstance(rhs, (irnodes.MapStatement, irnodes.ForeachStatement, irnodes.SendStatement,
-                            irnodes.ReceiveStatement, irnodes.AsyncBlock)):
-            raise SyntaxError('Cannot reassign completions to scopes')
-        return irnodes.AssignmentStatement(lhs, rhs)
+    # Definitions and assignments
+    completion = irnodes.Completion.from_lark
+    definition = irnodes.DefinitionStatement.from_lark
+    assignment = irnodes.AssignmentStatement.from_lark
 
     def typed_argument(self, args):
         if len(args) == 2:
@@ -232,6 +234,7 @@ class TreeToSpatialIR(lark.Transformer):
     # Statements is a special list where newlines can appear as tokens
     def statements(self, args):
         return [a for a in args if a is not None]
+
 
 # Helper functions
 
