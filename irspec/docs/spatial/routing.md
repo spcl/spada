@@ -102,7 +102,7 @@ and record the stream $F$, channel $C$, and corresponding stream edge.
         send(a, hop1);
       }
       compute i32 i, i32 j in [0:4:2] {
-        foreach i32 k, i32 x in [0:K, receive(hop1)] {
+        foreach i32 k, i32 x in [0:K], receive(hop1) {
           a[k] += x
         }
       }
@@ -121,7 +121,7 @@ and record the stream $F$, channel $C$, and corresponding stream edge.
       }
     
       compute i32 i, i32 j in [0, 0] {
-        foreach i32 k, i32 x in [0:K, receive(hop2)] {
+        foreach i32 k, i32 x in [0:K], receive(hop2) {
           a[k] += x
         }
       }

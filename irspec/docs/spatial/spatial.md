@@ -358,12 +358,12 @@ asynchronous and return completions that may be used to synchronize computations
 completion completion_name = send(local_array, stream_name);
 
 // Foreach loop over a receive() stream until the sender is done (asynchronous)
-completion completion_name = foreach variables in [receive(stream_name)] {
+completion completion_name = foreach variables in receive(stream_name) {
   // Statements
 }
 
 // Foreach loop over a receive() stream of defined size (asynchronous)
-completion completion_name = foreach variables in [parameter_expressions, receive(stream_name)] {
+completion completion_name = foreach variables in [parameter_expressions], receive(stream_name) {
   // Statements
 }
 // Parallel map (asynchronous)
@@ -426,7 +426,7 @@ await c;
     // Wait for completion of a send
     await send(local_array, stream_name);
     // Wait for completion of a receive
-    await foreach i32 k, f32 x in [0:K, receive(stream_name)] {
+    await foreach i32 k, f32 x in [0:K], receive(stream_name) {
       // Statements
     }
     // Wait for a completion
@@ -522,12 +522,12 @@ The elements are processed in the order they are received.
 One may either provide the number of elements to receive, or receive until the sender is done.
 ```rust
 // Receive until the sender is done
-completion completion_name = foreach variables in [receive(stream_name)] {
+completion completion_name = foreach variables in receive(stream_name) {
   // Assignment statements
 }
 
 // Receive a fixed number of elements
-completion completion_name = foreach variables in [parameter_range_expressions, receive(stream_name)] {
+completion completion_name = foreach variables in [parameter_range_expressions], receive(stream_name) {
   // Assignment statements
 }
 ```
@@ -544,7 +544,7 @@ to allow for performance optimizations.
 For example, the following code receives data from `stream_1` for `K` elements
 and assigns the received data to the array `a`.
 ```
-completion completion_name = foreach i32 k, f32 x in [0:K, receive(stream_1)] {
+completion completion_name = foreach i32 k, f32 x in [0:K], receive(stream_1) {
     a[k] = x;
 }
 ```

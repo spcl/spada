@@ -163,6 +163,7 @@ class TreeToSpatialIR(lark.Transformer):
 
         iters, generators, body = args
 
+        # Split out generator from potential zipped range iterator(s)
         # Semantic check: a foreach must have at least one stream generator
         try:
             stream_varind, stream_gen = next(
