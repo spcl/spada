@@ -519,7 +519,12 @@ Inside a `compute` block, a `foreach` loop can be used to apply a computation to
 For each element in the stream, the computation is executed.
 The elements are processed in the order they are received.
 
-One may either provide the number of elements to receive, or receive until the sender is done.
+The foreach loop is defined on a generator (i.e., `receive(stream_name)`), and may optionally
+accept an additional range iterator (for example, `[0:K]` or `[0:2, 0:N]`). If an additional
+range iterator is provided, it is considered as an implicit zip operator, in which the range
+will terminate the loop upon completion. This range can be used to provide a fixed number of
+elements to receive. Otherwise, the `foreach` loop will receive until the sender is done:
+
 ```rust
 // Receive until the sender is done
 completion completion_name = foreach variables in receive(stream_name) {
@@ -531,10 +536,13 @@ completion completion_name = foreach variables in [parameter_range_expressions],
   // Assignment statements
 }
 ```
-The last variable is the data variable. The data variable is bound to the received data. Its type must match the type of the stream.
+The variable at the corresponding position to the `receive` generator is bound to the received data.
+Its type must match the type of the stream. The other variables are iteration variables.
 
-The other variables are iteration variables. They must be of type `i32`.
-One may specify multiple parameter range expressions. 
+The order of range iterators and `receive` generator does not matter. A program in its canonical form will place
+the `receive` generator last.
+
+For the iteration variables, one may specify multiple parameter range expressions. 
 The iteration variables are bound to the indices of the received data, which is
 interpreted as a multi-dimensional array in *row-major* order.
 
