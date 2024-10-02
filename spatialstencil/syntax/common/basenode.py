@@ -33,7 +33,7 @@ class BaseNode:
     """
 
     @classmethod
-    def validate_schema(cls, visited: set[type['BaseNode']] = None) -> bool:
+    def validate_schema(cls, visited: set[type['BaseNode']] = None):
         """
         Validates that the node type and all its child node types abide by
         the rules defined on ``BaseNode``.

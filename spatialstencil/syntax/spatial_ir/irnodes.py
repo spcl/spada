@@ -176,7 +176,7 @@ class RangeExpression(SpatialNode):
     def validate(self) -> None:
         assert isinstance(self.start, Expression)
         assert isinstance(self.stop, Expression)
-        if self.step:
+        if self.step is not None:
             assert isinstance(self.step, Expression)
 
     def as_ir(self, indent: int = 0) -> str:
