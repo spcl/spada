@@ -425,23 +425,24 @@ class ForeachStatement(Statement):
     """
     variables: list[TypedIdentifier]
     parameter_range: list[RangeExpression]
+    stream_variable: Identifier
     receive_stream: Identifier
     body: list[Statement]
     completion_name: Optional[Completion] = None
 
     def validate(self) -> None:
-        assert len(self.variables) == len(self.parameter_range) + 1
+        assert len(self.variables) == len(self.parameter_range)
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
-        vars_str = ", ".join(var.as_ir() for var in self.variables)
+        vars_str = ", ".join(var.as_ir() for var in self.variables + [self.stream_variable])
         rng_str = ", ".join(rng.as_ir() for rng in self.parameter_range)
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
 
         if self.parameter_range:
-            main_str = f'foreach {vars_str} in [{rng_str}, receive({self.receive_stream.as_ir()})] {{\n{body_str}\n{indent_str}}}'
+            main_str = f'foreach {vars_str} in [{rng_str}], receive({self.receive_stream.as_ir()}) {{\n{body_str}\n{indent_str}}}'
         else:
-            main_str = f'foreach {vars_str} in [receive({self.receive_stream.as_ir()})] {{\n{body_str}\n{indent_str}}}'
+            main_str = f'foreach {vars_str} in receive({self.receive_stream.as_ir()}) {{\n{body_str}\n{indent_str}}}'
 
         if self.completion_name:
             return f'{indent_str}{self.completion_name.as_ir()} = {main_str}'

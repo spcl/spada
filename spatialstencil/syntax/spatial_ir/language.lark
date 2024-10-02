@@ -108,7 +108,6 @@ subscript : identifier "[" subscript_slice "]"
 range_expression : value_expr ":" value_expr (":" value_expr)?
 subgrid_expression : "[" range_expression ("," range_expression)* "]"
 subgrid_expression_2d : "[" range_expression "," range_expression "]"
-range_and_stream : "[" (range_expression ("," range_expression)* ",")? "receive" "(" (identifier | subscript) ")" "]"
 ///////////////////////////////////////////////////
 // Declarations and routing
 
@@ -122,6 +121,14 @@ stream_declaration : "stream" "<" scalar_type ">" identifier "=" "relative_strea
 vars : identifier ("," identifier)*
 typed_var : scalar_type identifier
 typed_vars : typed_var ("," typed_var)*
+
+///////////////////////////////////////////////////
+// Generators for foreach statements
+
+receive_generator : "receive" "(" (identifier | subscript) ")"
+
+?generator : receive_generator | subgrid_expression
+generators : generator ("," generator)*
 
 ///////////////////////////////////////////////////
 // Scope contents
@@ -144,7 +151,7 @@ await_completion : "await" identifier
 
 for_stmt : "for" typed_vars "in" subgrid_expression compute_body
 map_stmt : prefix "map" typed_vars "in" subgrid_expression compute_body
-foreach_stmt : prefix "foreach" typed_vars "in" range_and_stream compute_body
+foreach_stmt : prefix "foreach" typed_vars "in" generators compute_body
 async_stmt : completion "async" compute_body
 
 // Top-level statements that are direct children of `compute` blocks

@@ -130,11 +130,6 @@ class TreeToSpatialIR(lark.Transformer):
     # Grid/Subgrid expressions
     range_expression = irnodes.RangeExpression.from_lark
 
-    def range_and_stream(self, args):
-        rng = args[:-1]
-        stream = args[-1]
-        return rng, stream
-
     # Declarations and routing
     hop = irnodes.RoutingHop.from_lark
     routing = irnodes.RoutingDeclaration.from_lark
@@ -157,14 +152,33 @@ class TreeToSpatialIR(lark.Transformer):
     map_stmt = lambda self, args: self._scope_wrapper(irnodes.MapStatement, args)
     async_stmt = irnodes.AsyncBlock.from_lark
 
+    # Foreach statements and generators
+    receive_generator = irnodes.ReceiveGenerator.from_lark
+
     def foreach_stmt(self, args):
         completion = None
         if isinstance(args[0], irnodes.Completion) or args[0] is None:
             completion = args[0]
             args = args[1:]
 
-        iters, (rng, stream), body = args
-        return irnodes.ForeachStatement(iters, rng, stream, body, completion_name=completion)
+        iters, generators, body = args
+
+        # Semantic check: a foreach must have at least one stream generator
+        try:
+            stream_varind, stream_gen = next(
+                (i, gen) for i, gen in enumerate(generators) if isinstance(gen, irnodes.ReceiveGenerator))
+        except StopIteration:
+            raise SyntaxError('A foreach statement must have at least one stream `receive` generator')
+
+        other_gens = [gen for gen in generators if gen is not stream_gen]
+        itervars = [it for i, it in enumerate(iters) if i != stream_varind]
+        if len(other_gens) > 1:
+            raise NotImplementedError('Only one foreach zipped range is supported at the moment')
+        if not other_gens:
+            other_gens = [[]]
+
+        return irnodes.ForeachStatement(
+            itervars, other_gens[0], iters[stream_varind], stream_gen.stream_name, body, completion_name=completion)
 
     # Await for a completion object
     await_completion = irnodes.AwaitCompletionStatement.from_lark
@@ -217,6 +231,7 @@ class TreeToSpatialIR(lark.Transformer):
     call_arguments = list
     subscript_slice = list
     subgrid_expression = list
+    generators = list
     hops = list
     vars = list
     typed_vars = list
