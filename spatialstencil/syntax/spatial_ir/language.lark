@@ -157,10 +157,9 @@ async_stmt : completion "async" compute_body
 // Top-level statements that are direct children of `compute` blocks
 ?base_stmt : (function_call | await_completion | map_stmt | foreach_stmt | async_stmt | for_stmt)
 
-definition : builtin_type identifier "=" value_expr
 assignment : (subscript | identifier) "=" value_expr
 
-?statement : (definition | assignment | base_stmt)
+?statement : (assignment | base_stmt)
 
 
 ////////////////////////////////////////////////////
