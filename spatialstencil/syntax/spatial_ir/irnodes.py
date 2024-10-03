@@ -101,13 +101,10 @@ class TypedIdentifier(SpatialNode):
     A variable identifier (e.g., x, y, my_variable) with a type.
     """
     dtype: Union[ScalarType, StreamType, ArrayType]
-    name: str
-    version: int
+    identifier: Identifier
 
     def as_ir(self, indent: int = 0) -> str:
-        if self.version == 0:
-            return f'{self.dtype.as_ir()} {self.name}'
-        return f'{self.dtype.as_ir()} {self.name}#{self.version}'
+        return f'{self.dtype.as_ir()} {self.identifier.as_ir()}'
 
 
 # Unary Operators
@@ -426,7 +423,7 @@ class ForeachStatement(Statement):
     variables: list[TypedIdentifier]
     parameter_range: list[RangeExpression]
     stream_variable: Identifier
-    receive_stream: Identifier
+    receive_stream: ReceiveGenerator
     body: list[Statement]
     completion_name: Optional[Completion] = None
 
@@ -440,9 +437,9 @@ class ForeachStatement(Statement):
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
 
         if self.parameter_range:
-            main_str = f'foreach {vars_str} in [{rng_str}], receive({self.receive_stream.as_ir()}) {{\n{body_str}\n{indent_str}}}'
+            main_str = f'foreach {vars_str} in [{rng_str}], {self.receive_stream.as_ir()} {{\n{body_str}\n{indent_str}}}'
         else:
-            main_str = f'foreach {vars_str} in receive({self.receive_stream.as_ir()}) {{\n{body_str}\n{indent_str}}}'
+            main_str = f'foreach {vars_str} in {self.receive_stream.as_ir()} {{\n{body_str}\n{indent_str}}}'
 
         if self.completion_name:
             return f'{indent_str}{self.completion_name.as_ir()} = {main_str}'
@@ -536,25 +533,6 @@ class AssignmentStatement(Statement):
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         return f'{indent_str}{self.destination.as_ir()} = {self.source.as_ir()}'
-
-
-@dataclass
-class DefinitionStatement(Statement):
-    """
-    Assigns the result of an expression to a field or variable
-    """
-    dtype: Union[ScalarType, StreamType]
-    destination: Identifier
-    source: Expression
-
-    def validate(self) -> None:
-        assert isinstance(self.source, Expression)
-        assert isinstance(self.destination, (ArraySlice, Identifier))
-        assert isinstance(self.dtype, (ScalarType, StreamType))
-
-    def as_ir(self, indent: int = 0) -> str:
-        indent_str = '  ' * indent
-        return f'{indent_str}{self.dtype.as_ir()} {self.destination.as_ir()} = {self.source.as_ir()}'
 
 
 # Compute Block
