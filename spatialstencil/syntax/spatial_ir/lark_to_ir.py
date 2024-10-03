@@ -59,9 +59,7 @@ class TreeToSpatialIR(lark.Transformer):
                     return irnodes.Identifier(args[0], 0)
         return irnodes.Identifier(*args)
 
-    def typed_var(self, args):
-        dtype, ident = args
-        return irnodes.TypedIdentifier(dtype, ident.name, ident.version)
+    typed_var = irnodes.TypedIdentifier.from_lark
 
     float_type = int_type = uint_type = bool_type = lambda self, args: getattr(irnodes.ScalarType, str(args[0]))
     stream_type = irnodes.StreamType.from_lark
@@ -179,14 +177,13 @@ class TreeToSpatialIR(lark.Transformer):
             other_gens = [[]]
 
         return irnodes.ForeachStatement(
-            itervars, other_gens[0], iters[stream_varind], stream_gen.stream_name, body, completion_name=completion)
+            itervars, other_gens[0], iters[stream_varind], stream_gen, body, completion_name=completion)
 
     # Await for a completion object
     await_completion = irnodes.AwaitCompletionStatement.from_lark
 
     # Definitions and assignments
     completion = irnodes.Completion.from_lark
-    definition = irnodes.DefinitionStatement.from_lark
     assignment = irnodes.AssignmentStatement.from_lark
 
     def typed_argument(self, args):
