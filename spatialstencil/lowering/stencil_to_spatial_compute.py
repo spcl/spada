@@ -23,13 +23,15 @@ class ProgramCompute:
                  domains: DomainCollector,
                  versioning: Versioning[spa.Identifier],
                  dataflow: ProgramDataflow,
-                 placement: ProgramPlacement):
+                 placement: ProgramPlacement,
+                 subgrid_var_type: ScalarType = ScalarType.u16):
         self.domains = domains
         self.versioning = versioning
         self.dataflow = dataflow
         self.placement = placement
         self.offset_domain = domains.get_shift()[0:2]
         self.visitor = ComputeVisitor(placement, versioning, dataflow)
+        self.grid_var_t = subgrid_var_type
 
     def generate_computation(self, comp: sast.ComputationBlock) -> list[spa.ComputeBlock]:
         """
@@ -60,7 +62,8 @@ class ProgramCompute:
         var_i = self.versioning.next_version('i')
         var_j = self.versioning.next_version('j')
 
-        variables = [var_i, var_j]
+        variables = [spa.TypedIdentifier(self.grid_var_t, var_i),
+                     spa.TypedIdentifier(self.grid_var_t, var_j)]
 
         subgrid = spa.SubgridExpression.from_tuple(
             block[0].x_range, block[0].y_range
@@ -118,9 +121,8 @@ class ComputeVisitor(sast.ScopedNodeVisitor):
             src_e = spa.Expression(
                 spa.ArraySlice(
                     src_id,
-                    [var_k]
-                ),
-                src_dtype.base_type
+                    [spa.Expression(var_k)]
+                )
             )
 
             dst_id, dst_dtype = self.placement.get_storage(out)
@@ -129,27 +131,25 @@ class ComputeVisitor(sast.ScopedNodeVisitor):
 
                 dst_e = spa.ArraySlice(
                     dst_id,
-                    [spa.RangeExpression(spa.Expression(spa.BinaryOperator(spa.Expression(var_k, ScalarType.i32),
+                    [spa.RangeExpression(spa.Expression(spa.BinaryOperator(spa.Expression(var_k),
                                                                            '+',
                                                                            spa.Expression(
                                                                                spa.ConstantLiteral(translation,
-                                                                                                   ScalarType.i32),
-                                                                               ScalarType.i32)),
-                                                        ScalarType.i32))]
+                                                                                                   ScalarType.i32)))))]
                 )
             else:
                 dst_e = spa.ArraySlice(
                     dst_id,
-                    [var_k]
+                    [spa.Expression(var_k)]
                 )
 
             stmt = spa.MapStatement(
-                variables=[var_k],
-                range_expression=spa.RangeExpression.from_args(0, out_t.domain.z[1]),
+                variables=[spa.TypedIdentifier(ScalarType.i32, var_k)],
+                range_expression=[spa.RangeExpression.from_args(0, out_t.domain.z[1])],
                 body=[
                     spa.AssignmentStatement(
+                        dst_e,
                         src_e,
-                        dst_e
                     )
                 ]
             )
@@ -209,35 +209,38 @@ class ComputeVisitor(sast.ScopedNodeVisitor):
                 var_k = self.versioning.next_version('k')
                 var_x = self.versioning.next_version('x')
 
-                recv = spa.Receive(
+                recv = spa.ReceiveGenerator(
                     stream
                 )
 
-                src_expr = spa.Expression(var_x, src_dtype.base_type)
+                src_expr = spa.Expression(var_x)
 
                 assign_stmt = spa.AssignmentStatement(
                     source=src_expr,
                     destination=spa.ArraySlice(
                         dst_buf,
-                        [var_k]
+                        [spa.Expression(var_k)]
                     )
                 )
 
                 body = [assign_stmt]
 
-                recv_completion = spa.Completion(self.versioning.next_version('_recv_comp'))
+                recv_comp_id = self.versioning.next_version('_recv_comp')
+                recv_completion = spa.Completion(recv_comp_id)
                 recv_foreach = spa.ForeachStatement(
-                    variables=[var_k, var_x],
+                    variables=[spa.TypedIdentifier(ScalarType.i32, var_k)],
+                    parameter_range=[spa.RangeExpression.from_args(0, dst_dtype.shape[0])],
+                    stream_variable=spa.TypedIdentifier(src_dtype.base_type, var_x),
                     receive_stream=recv,
                     body=body,
                     completion_name=recv_completion,
-                    parameter_range=spa.RangeExpression.from_args(0, dst_dtype.shape[0]),
                 )
 
                 line_nr = self.versioning.next_version("___line___").version
                 receive = AbstractStatement(xy_range[0], xy_range[1], (line_nr, recv_foreach))
 
-                send_completion = spa.Completion(self.versioning.next_version('_send_comp'))
+                send_comp_id = self.versioning.next_version('_send_comp')
+                send_completion = spa.Completion(send_comp_id)
                 send = spa.SendStatement(
                     src_buf,
                     stream,
@@ -254,11 +257,11 @@ class ComputeVisitor(sast.ScopedNodeVisitor):
 
                 line_nr = self.versioning.next_version("___line___").version
                 await_send = AbstractStatement(send_x_range, send_y_range,
-                                               (line_nr, spa.AwaitStatement(copy.deepcopy(send_completion))))
+                                               (line_nr, spa.AwaitCompletionStatement(send_comp_id)))
 
                 line_nr = self.versioning.next_version("___line___").version
                 await_recv = AbstractStatement(xy_range[0], xy_range[1],
-                                               (line_nr, spa.AwaitStatement(copy.deepcopy(recv_completion))))
+                                               (line_nr, spa.AwaitCompletionStatement(recv_comp_id)))
 
                 self.stmts.extend([receive, send_stmt, await_send, await_recv])
 
@@ -306,27 +309,25 @@ class MapTransformer(PatternTransformer[sast.AssignOp, AbstractStatement, tuple[
 
         src_e = spa.Expression(
             spa.BinaryOperator(
-                spa.Expression(spa.ConstantLiteral(value, src_dtype.base_type), src_dtype.base_type),
+                spa.Expression(spa.ConstantLiteral(value, src_dtype.base_type)),
                 op,
                 spa.Expression(spa.ArraySlice(
                     src_id,
-                    [var_k]
-                ), src_dtype.base_type),
-            ),
-            src_dtype.base_type
+                    [spa.Expression(var_k)]
+                )),
+            )
         )
 
         stmt = spa.MapStatement(
-            variables=[var_k],
-            range_expression=spa.RangeExpression.from_args(0, res_dtype.shape[0]),
+            variables=[spa.TypedIdentifier(ScalarType.i32, var_k)],
+            range_expression=[spa.RangeExpression.from_args(0, res_dtype.shape[0])],
             body=[
                 spa.AssignmentStatement(
-                    src_e,
                     spa.ArraySlice(
                         res_id,
-                        [var_k]
-                    )
-                )
+                        [spa.Expression(var_k)]
+                    ),
+                    src_e)
             ]
         )
 
@@ -380,28 +381,25 @@ class UnaryMapTransformer(PatternTransformer[sast.AssignOp, AbstractStatement, t
 
         src_e = spa.Expression(
             spa.BinaryOperator(
-                spa.Expression(spa.UnaryOperator(u_op, spa.Expression(spa.ConstantLiteral(value, src_dtype.base_type),
-                                                                      src_dtype.base_type)),
-                               src_dtype.base_type),
+                spa.Expression(spa.UnaryOperator(u_op, spa.Expression(spa.ConstantLiteral(value, src_dtype.base_type)))),
                 op,
                 spa.Expression(spa.ArraySlice(
                     src_id,
-                    [var_k]
-                ), src_dtype.base_type),
-            ),
-            src_dtype.base_type
+                    [spa.Expression(var_k)]
+                )),
+            )
         )
 
         stmt = spa.MapStatement(
-            variables=[var_k],
-            range_expression=spa.RangeExpression.from_args(0, res_dtype.shape[0]),
+            variables=[spa.TypedIdentifier(ScalarType.i32, var_k)],
+            range_expression=[spa.RangeExpression.from_args(0, res_dtype.shape[0])],
             body=[
                 spa.AssignmentStatement(
-                    src_e,
                     spa.ArraySlice(
                         res_id,
-                        [var_k]
-                    )
+                        [spa.Expression(var_k)]
+                    ),
+                    src_e,
                 )
             ]
         )
@@ -506,46 +504,47 @@ class HorizontalStencilTransformer(
             var_k = self.versioning.next_version('k')
             var_x = self.versioning.next_version('x')
 
-            recv = spa.Receive(
+            recv = spa.ReceiveGenerator(
                 stream
             )
 
             if local is not None:
                 src_expr = spa.Expression(
                     spa.BinaryOperator(
-                        spa.Expression(local_id, local_dtype.base_type),
+                        spa.Expression(local_id),
                         op,
-                        spa.Expression(var_x, remote_dtype.base_type),
-                    ),
-                    local_dtype.base_type
-                )
+                        spa.Expression(var_x),
+                    ))
             else:
-                src_expr = spa.Expression(var_x, remote_dtype.base_type)
+                src_expr = spa.Expression(var_x)
 
             assign_stmt = spa.AssignmentStatement(
                 source=src_expr,
                 destination=spa.ArraySlice(
                     res_id,
-                    [var_k]
+                    [spa.Expression(var_k)]
                 )
             )
 
             body = [assign_stmt]
 
-            recv_completion = spa.Completion(self.versioning.next_version('_recv_comp'))
+            recv_comp_id = self.versioning.next_version('_recv_comp')
+            recv_completion = spa.Completion(recv_comp_id)
             recv_foreach = spa.ForeachStatement(
-                variables=[var_k, var_x],
+                variables=[spa.TypedIdentifier(ScalarType.i32, var_k)],
+                parameter_range=[spa.RangeExpression.from_args(0, res_dtype.shape[0])],
+                stream_variable=spa.TypedIdentifier(remote_dtype.base_type, var_x),
                 receive_stream=recv,
                 body=body,
                 completion_name=recv_completion,
-                parameter_range=spa.RangeExpression.from_args(0, res_dtype.shape[0]),
             )
 
             line_nr = self.versioning.next_version("___line___").version
 
             receive = AbstractStatement(xy_range[0], xy_range[1], (line_nr, recv_foreach))
 
-            send_completion = spa.Completion(self.versioning.next_version('_send_comp'))
+            send_comp_id = self.versioning.next_version('_send_comp')
+            send_completion = spa.Completion(send_comp_id)
             send = spa.SendStatement(
                 remote_id,
                 stream,
@@ -562,11 +561,11 @@ class HorizontalStencilTransformer(
 
             line_nr = self.versioning.next_version("___line___").version
             await_send = AbstractStatement(send_x_range, send_y_range,
-                                           (line_nr, spa.AwaitStatement(copy.deepcopy(send_completion))))
+                                           (line_nr, spa.AwaitCompletionStatement(send_comp_id)))
 
             line_nr = self.versioning.next_version("___line___").version
             await_recv = AbstractStatement(xy_range[0], xy_range[1],
-                                           (line_nr, spa.AwaitStatement(copy.deepcopy(recv_completion))))
+                                           (line_nr, spa.AwaitCompletionStatement(recv_comp_id)))
 
             return [receive, send_stmt, await_send, await_recv]
 
@@ -581,27 +580,26 @@ class HorizontalStencilTransformer(
                 spa.BinaryOperator(
                     spa.Expression(spa.ArraySlice(
                         local_id,
-                        [var_k]
-                    ), local_dtype.base_type),
+                        [spa.Expression(var_k)]
+                    )),
                     op,
                     spa.Expression(spa.ArraySlice(
                         remote_id,
-                        [var_k]
-                    ), remote_dtype.base_type),
-                ),
-                res_dtype.base_type
+                        [spa.Expression(var_k)]
+                    )),
+                )
             )
 
             stmt = spa.MapStatement(
-                variables=[var_k],
-                range_expression=spa.RangeExpression.from_args(0, res_dtype.shape[0]),
+                variables=[spa.TypedIdentifier(ScalarType.i32, var_k)],
+                range_expression=[spa.RangeExpression.from_args(0, res_dtype.shape[0])],
                 body=[
                     spa.AssignmentStatement(
-                        src_e,
                         spa.ArraySlice(
                             res_id,
-                            [var_k]
-                        )
+                            [spa.Expression(var_k)]
+                        ),
+                        src_e,
                     )
                 ]
             )

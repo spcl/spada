@@ -145,7 +145,8 @@ def _construct_arg(name: str, arg_t: sast.FieldType) -> spa.KernelArgument:
 
 def input_phase(body: list[spa.PlaceBlock],
                 arguments: list[spa.KernelArgument],
-                versioning: Versioning[spa.Identifier]) -> list[spa.ComputeBlock]:
+                versioning: Versioning[spa.Identifier],
+                subgrid_var_type: ScalarType = ScalarType.u16) -> list[spa.ComputeBlock]:
     compute = []
 
     for block in body:
@@ -162,35 +163,37 @@ def input_phase(body: list[spa.PlaceBlock],
                     # Generate input phase
                     # TODO: Check / Fix the indices
                     # Receive the input
-                    receive_stream = spa.ArraySlice(array=arg.identifier, indices=[var_i, var_j])
+                    receive_stream = spa.ArraySlice(array=arg.identifier,
+                                                    indices=[spa.Expression(var_i),
+                                                             spa.Expression(var_j)])
 
-                    receive = spa.Receive(receive_stream)
+                    receive = spa.ReceiveGenerator(receive_stream)
                     dat_var = versioning.next_version('x')
                     iter_var = versioning.next_version('k')
 
                     assignment = spa.AssignmentStatement(
-                        source=spa.Expression(value=dat_var, dtype=field.dtype.base_type),
+                        source=spa.Expression(value=dat_var),
                         destination=spa.ArraySlice(
                             array=field.field_name,
-                            indices=[iter_var]
+                            indices=[spa.Expression(iter_var)]
                         ),
                     )
                     range_expr = spa.RangeExpression(
-                        start=spa.Expression(value=spa.ConstantLiteral(0, dtype=ScalarType.f32),
-                                             dtype=ScalarType.f32),
-                        stop=spa.Expression(value=spa.ConstantLiteral(field.dtype.shape[0], dtype=ScalarType.f32),
-                                            dtype=ScalarType.f32),
+                        start=spa.Expression(spa.ConstantLiteral(0, dtype=ScalarType.u32)),
+                        stop=spa.Expression(spa.ConstantLiteral(field.dtype.shape[0], dtype=ScalarType.u32)),
                     )
                     foreach = spa.ForeachStatement(
-                        variables=[iter_var, dat_var],
+                        variables=[spa.TypedIdentifier(ScalarType.u32, iter_var)],
+                        parameter_range=[range_expr],
+                        stream_variable=spa.TypedIdentifier(ScalarType.u32, dat_var),
                         receive_stream=receive,
                         body=[assignment],
-                        parameter_range=range_expr
                     )
                     statements.append(foreach)
 
         if len(statements) > 0:
-            compute.append(spa.ComputeBlock(variables=[var_i, var_j],
+            compute.append(spa.ComputeBlock(variables=[spa.TypedIdentifier(subgrid_var_type, var_i),
+                                                       spa.TypedIdentifier(subgrid_var_type, var_j)],
                                             subgrid=block.subgrid,
                                             statements=statements))
 
@@ -200,7 +203,8 @@ def input_phase(body: list[spa.PlaceBlock],
 def output_phase(op: sast.ReturnOp,
                  arguments: list[spa.KernelArgument],
                  versioning: Versioning[spa.Identifier],
-                 placement: ProgramPlacement) -> list[spa.ComputeBlock]:
+                 placement: ProgramPlacement,
+                 grid_var_t: ScalarType = ScalarType.u32) -> list[spa.ComputeBlock]:
     # For each return value, find the corresponding argument and generate the output phase
     # TODO Handle different domain sizes for output fields
 
@@ -224,17 +228,17 @@ def output_phase(op: sast.ReturnOp,
         assert shift[0] >= 0
         assert shift[1] >= 0
 
-        var_i_expr = spa.RangeExpression(spa.Expression(spa.BinaryOperator(spa.Expression(var_i, ScalarType.i32),
-                                                                           '-',
-                                                                           spa.Expression(spa.ConstantLiteral(shift[0], ScalarType.i32),
-                                                                                          ScalarType.i32)),
-                                                        ScalarType.i32))
+        var_i_expr = spa.RangeExpression(
+            spa.Expression(spa.BinaryOperator(spa.Expression(var_i),
+                                              '-',
+                                              spa.Expression(spa.ConstantLiteral(shift[0],
+                                                                                 ScalarType.i32)))))
 
-        var_j_expr = spa.RangeExpression(spa.Expression(spa.BinaryOperator(spa.Expression(var_j, ScalarType.i32),
-                                                                           '-',
-                                                                           spa.Expression(spa.ConstantLiteral(shift[1], ScalarType.i32),
-                                                                                          ScalarType.i32)),
-                                                        ScalarType.i32))
+        var_j_expr = spa.RangeExpression(
+            spa.Expression(spa.BinaryOperator(spa.Expression(var_j),
+                                              '-',
+                                              spa.Expression(spa.ConstantLiteral(shift[1],
+                                                                                 ScalarType.i32)))))
 
         target = spa.ArraySlice(
             array=spa.Identifier(_ith_output_name(i), 0),
@@ -244,7 +248,8 @@ def output_phase(op: sast.ReturnOp,
         stmt = spa.SendStatement(buf, target)
 
         comp = spa.ComputeBlock(
-            variables=[var_i, var_j],
+            variables=[spa.TypedIdentifier(grid_var_t, var_i),
+                       spa.TypedIdentifier(grid_var_t, var_j)],
             subgrid=spa.SubgridExpression(spa.RangeExpression.from_args(x_range[0], x_range[1]),
                                           spa.RangeExpression.from_args(y_range[0], y_range[1])),
             statements=[stmt]

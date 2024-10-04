@@ -521,10 +521,10 @@ class ReceiveGenerator(SpatialNode):
     """
     Receive data from a stream, used as a generator in a foreach statement.
     """
-    stream_name: Identifier
+    stream_name: Union[Identifier, ArraySlice]
 
     def validate(self) -> None:
-        assert isinstance(self.stream_name, Identifier)
+        assert isinstance(self.stream_name, (Identifier, ArraySlice))
 
     def as_ir(self, indent: int = 0) -> str:
         return f'receive({self.stream_name.as_ir()})'
@@ -544,12 +544,14 @@ class ForeachStatement(Statement):
     completion_name: Optional[Completion] = None
 
     def validate(self) -> None:
+        assert isinstance(self.variables, list)
+        assert isinstance(self.parameter_range, list)
         assert len(self.variables) == len(self.parameter_range)
-        assert all(isinstance(var, TypedIdentifier) for var in self.variables)
-        assert all(isinstance(rng, RangeExpression) for rng in self.parameter_range)
         assert isinstance(self.stream_variable, TypedIdentifier)
         assert isinstance(self.receive_stream, ReceiveGenerator)
         assert all(isinstance(stmt, Statement) for stmt in self.body)
+        assert all(isinstance(var, TypedIdentifier) for var in self.variables)
+        assert all(isinstance(rng, RangeExpression) for rng in self.parameter_range)
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent

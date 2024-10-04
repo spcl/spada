@@ -34,11 +34,15 @@ class ProgramDataflow:
     # the destination field is the first 
     _stream_map: dict[sast.Identifier, dict[sast.Identifier, dict[sast.Offset, spa.Identifier]]]
 
-    def __init__(self, domain_collector: DomainCollector, versioning: Versioning[spa.Identifier]):
+    def __init__(self,
+                 domain_collector: DomainCollector,
+                 versioning: Versioning[spa.Identifier],
+                 grid_var_type: ScalarType = ScalarType.u16, ):
         self.versioning = versioning
         self.domain_collector = domain_collector
         self.offset_domain = domain_collector.get_shift()[0:2]
         self._stream_map = defaultdict(lambda: defaultdict(dict))
+        self.grid_var_t = grid_var_type
 
     def get_stream(self,
                    input_id: sast.Identifier,
@@ -153,8 +157,8 @@ class ProgramDataflow:
                 stream = spa.RelativeStreamDeclaration(
                     dtype=rect.metadata.stream_type,
                     stream_name=rect.metadata.identifier,
-                    dx=spa.Expression(spa.ConstantLiteral(rect.metadata.dx, dtype=ScalarType.i32), ScalarType.i32),
-                    dy=spa.Expression(spa.ConstantLiteral(rect.metadata.dy, dtype=ScalarType.i32), ScalarType.i32)
+                    dx=spa.Expression(spa.ConstantLiteral(rect.metadata.dx, dtype=ScalarType.i32)),
+                    dy=spa.Expression(spa.ConstantLiteral(rect.metadata.dy, dtype=ScalarType.i32))
                 )
                 declarations.append(stream)
 
@@ -163,7 +167,8 @@ class ProgramDataflow:
 
             subgrid = spa.SubgridExpression.from_tuple(x_range, y_range)
 
-            block = spa.DataflowBlock(variables=[var_i, var_j],
+            block = spa.DataflowBlock(variables=[spa.TypedIdentifier(self.grid_var_t, var_i),
+                                                 spa.TypedIdentifier(self.grid_var_t, var_j)],
                                       subgrid=subgrid,
                                       statements=declarations)
             blocks.append(block)

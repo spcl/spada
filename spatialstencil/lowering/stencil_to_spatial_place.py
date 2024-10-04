@@ -26,10 +26,14 @@ class ProgramPlacement:
 
     _storage_map: dict[sast.Identifier, dict[sast.Offset, tuple[spa.Identifier, spa.ArrayType]]]
 
-    def __init__(self, domains: DomainCollector, versioning: Versioning[spa.Identifier]):
+    def __init__(self,
+                 domains: DomainCollector,
+                 versioning: Versioning[spa.Identifier],
+                 subgrid_var_type: ScalarType = ScalarType.u16,):
         self.domains = domains
         self.versioning = versioning
         self._storage_map = defaultdict(dict)
+        self.subgrid_var_type = subgrid_var_type
 
     def place_program(self,
                       program: sast.Program) -> list[spa.PlaceBlock]:
@@ -177,8 +181,8 @@ class ProgramPlacement:
 
         subgrid = spa.SubgridExpression.from_tuple(x_range, y_range)
 
-        var_i = self.versioning.next_version("_i")
-        var_j = self.versioning.next_version("_j")
+        var_i = spa.TypedIdentifier(self.subgrid_var_type, self.versioning.next_version("_i"))
+        var_j = spa.TypedIdentifier(self.subgrid_var_type, self.versioning.next_version("_j"))
 
         place_block = spa.PlaceBlock(variables=[var_i, var_j],
                                      subgrid=subgrid,
