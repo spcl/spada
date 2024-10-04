@@ -157,11 +157,8 @@ def output_phase(op: sast.ReturnOp,
     shift = placement.get_shift()
 
     for i, (arg, arg_t) in enumerate(zip(op.values, op.operation_type.source)):
-        print("DOMAIN", arg_t.domain)
         x_range = [arg_t.domain.x[0] + shift[0], arg_t.domain.x[1] + shift[0]]
         y_range = [arg_t.domain.y[0] + shift[1], arg_t.domain.y[1] + shift[1]]
-
-        print("RANGE", x_range, y_range)
 
         # Create a send statement for each output
 
