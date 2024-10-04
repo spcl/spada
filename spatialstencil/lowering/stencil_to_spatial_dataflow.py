@@ -162,8 +162,8 @@ class ProgramDataflow:
                 )
                 declarations.append(stream)
 
-            var_i = self.versioning.next_version("_i")
-            var_j = self.versioning.next_version("_j")
+            var_i = self.versioning.next_version("i")
+            var_j = self.versioning.next_version("j")
 
             subgrid = spa.SubgridExpression.from_tuple(x_range, y_range)
 

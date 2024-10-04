@@ -181,8 +181,8 @@ class ProgramPlacement:
 
         subgrid = spa.SubgridExpression.from_tuple(x_range, y_range)
 
-        var_i = spa.TypedIdentifier(self.subgrid_var_type, self.versioning.next_version("_i"))
-        var_j = spa.TypedIdentifier(self.subgrid_var_type, self.versioning.next_version("_j"))
+        var_i = spa.TypedIdentifier(self.subgrid_var_type, self.versioning.next_version("i"))
+        var_j = spa.TypedIdentifier(self.subgrid_var_type, self.versioning.next_version("j"))
 
         place_block = spa.PlaceBlock(variables=[var_i, var_j],
                                      subgrid=subgrid,
