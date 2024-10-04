@@ -85,7 +85,7 @@ class SingleNonLocalAccess(PatternTransformer[AssignOp | ReturnOp, AssignOp, Non
         new_assign = AssignOp(
             temp_var,
             Expression(Subscript(arg1, list(idx1))),
-            OperationType([ScalarType.f32], None)
+            OperationType([ScalarType.UNKNOWN], None)
         )
 
         root.value = BinaryOperator(
@@ -152,13 +152,13 @@ class ExpressionSimplifier(PatternTransformer[AssignOp | ReturnOp, AssignOp, Non
 
         temp_var = self.versioning.next_version("_temp")
 
-        # TODO The type information should be inferred from the IR
+        # The type information is inferred from the IR
         nested_assign = AssignOp(
             temp_var,
             Expression(BinaryOperator(arg2,
                                       op2,
                                       arg3)),
-            OperationType([ScalarType.f32], None)
+            OperationType([ScalarType.UNKNOWN], None)
         )
 
         if left_handed:
