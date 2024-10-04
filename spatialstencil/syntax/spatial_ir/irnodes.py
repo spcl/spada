@@ -72,6 +72,9 @@ class StreamType(SpatialNode, IRType):
     """
     dtype: ScalarType
 
+    def validate(self) -> None:
+        assert isinstance(self.dtype, ScalarType)
+
     def as_ir(self, indent: int = 0) -> str:
         return f'stream<{self.dtype.as_ir()}>'
 
@@ -302,7 +305,7 @@ class RelativeStreamDeclaration(SpatialNode):
     A stream declaration inside a dataflow block that declares a communication stream
     to and from PEs at relative positions, with an optional routing declaration.
     """
-    dtype: ScalarType
+    dtype: StreamType
     stream_name: Identifier
     dx: Expression
     dy: Expression
@@ -313,7 +316,7 @@ class RelativeStreamDeclaration(SpatialNode):
         routing_str = ""
         if self.routing:
             routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{' ' * indent}}}"
-        return f'{indent_str}stream<{self.dtype.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
+        return f'{indent_str}stream<{self.dtype.dtype.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
 
 
 ###

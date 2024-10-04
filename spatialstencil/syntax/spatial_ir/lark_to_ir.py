@@ -1,6 +1,7 @@
 import lark
 
 from spatialstencil.syntax.spatial_ir import irnodes
+from spatialstencil.syntax.spatial_ir.irnodes import StreamType
 
 
 class TreeToSpatialIR(lark.Transformer):
@@ -132,8 +133,12 @@ class TreeToSpatialIR(lark.Transformer):
     hop = irnodes.RoutingHop.from_lark
     routing = irnodes.RoutingDeclaration.from_lark
     field_declaration = irnodes.FieldDeclaration.from_lark
-    stream_declaration = irnodes.RelativeStreamDeclaration.from_lark
     subgrid_expression_2d = irnodes.SubgridExpression.from_lark
+
+    def stream_declaration(self, args):
+        args[0] = StreamType(args[0])
+        return irnodes.RelativeStreamDeclaration(*args)
+
 
     # Scopes
     def _scope_wrapper(self, cls, args):
