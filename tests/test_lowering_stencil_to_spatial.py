@@ -61,9 +61,9 @@ class TestTypeInference(unittest.TestCase):
         files = [
             Path(__file__).parent / Path('../samples/spst/laplacian_3ac.spst'),
             Path(__file__).parent / Path('../samples/spst/laplacian_mat_ext_dom.spst'),  # ,
-            #Path(__file__).parent / Path('../samples/spst/if_else_ext.spst'),
+            Path(__file__).parent / Path('../samples/spst/uvbke.spst'),
             Path(__file__).parent / Path('../samples/spst/multiple_returns_ext.spst'),
-            #Path(__file__).parent / Path('../samples/spst/laplacian_mat_sh_ext.spst')
+            Path(__file__).parent / Path('../samples/spst/laplacian_mat_sh_ext.spst')
         ]
 
         for file in files:
@@ -72,8 +72,10 @@ class TestTypeInference(unittest.TestCase):
 
             type_inference.infer_field_extents(program)
             domain = Cartesian(x=Interval(0, 128), y=Interval(0, 128), z=Interval(0, 80))
+            #type_inference.infer_types(program, domain=[128, 128, 80])
             type_inference.infer_field_domains(program, domain)
             print(program.as_ir())
+
             spatial_program = lower_stencil_to_spatial(program)
             print(spatial_program.as_ir())
 

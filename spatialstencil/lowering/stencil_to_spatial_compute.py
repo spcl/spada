@@ -193,6 +193,10 @@ class ComputeVisitor(sast.ScopedNodeVisitor):
             if len(res):
                 blocks.extend(res)
                 break
+
+        for stmt in blocks:
+            assert isinstance(stmt, Rectangle)
+            assert isinstance(stmt.metadata, tuple)
         return blocks
 
     def visit_MaterializeOp(self, op: sast.MaterializeOp):
@@ -290,51 +294,82 @@ class MapTransformer(
         self.versioning = versioning
         self.dataflow = dataflow
         # x (op) a[0, 0, 0]
-        e = sast.Expression(
+        e_0 = sast.Expression(
             sast.BinaryOperator(
                 sast.Expression(Wildcard[float]("value")()),
                 Wildcard("op")(),
                 sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
             ))
-        assignment_f = sast.AssignOp(Wildcard("dst")(), e, Wildcard()())
 
-        e = sast.Expression(
+        e_1 = sast.Expression(
             sast.BinaryOperator(
                 sast.Expression(Wildcard[int]("value")()),
                 Wildcard("op")(),
                 sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
             ))
-        assignment_i = sast.AssignOp(Wildcard("dst")(), e, Wildcard()())
 
-        super().__init__([assignment_i, assignment_f])
+        e_2 = sast.Expression(
+            sast.BinaryOperator(
+                sast.Expression(sast.Subscript(Wildcard("src2")(), [0, 0, 0])),
+                Wildcard("op")(),
+                sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
+            ))
+
+        assignments = [sast.AssignOp(Wildcard[sast.Identifier]("dst")(), e, Wildcard()()) for e in [e_0, e_1, e_2]]
+        returns = [sast.ReturnOp([e], Wildcard()()) for e in [e_0, e_1, e_2]]
+
+        super().__init__(assignments + returns)
 
     def transform(self,
                   root: sast.AssignOp,
                   op: str = None,
                   value=None,
                   src: sast.Identifier = None,
+                  src2: sast.Identifier = None,
                   dst: sast.Identifier = None,
                   **wildcards) -> list[AbstractStatement]:
         assert op is not None
         assert src is not None
-        assert dst is not None
 
-        res_id, res_dtype = self.placement.get_storage(dst)
-        var_k = self.versioning.next_version('k')
-
-        # so we can easily extract the correct operation from the expression
         src_id, src_dtype = self.placement.get_storage(src)
 
-        src_e = spa.Expression(
-            spa.BinaryOperator(
-                spa.Expression(spa.ConstantLiteral(value, src_dtype.base_type)),
-                op,
-                spa.Expression(spa.ArraySlice(
-                    src_id,
-                    [spa.Expression(var_k)]
-                )),
+        context = self.get_context()
+        compute_block, stmt_block = context.comp, context.stmt
+
+        if dst is None:
+            assert isinstance(root, sast.ReturnOp)
+            # Return statement has an implicit destination to the i-th output of the statement block
+            dst = stmt_block.outputs[context.index]
+        res_id, res_dtype = self.placement.get_storage(dst)
+
+        var_k = self.versioning.next_version('k')
+
+        if src2 is None:
+            src_e = spa.Expression(
+                spa.BinaryOperator(
+                    spa.Expression(spa.ConstantLiteral(value, src_dtype.base_type)),
+                    op,
+                    spa.Expression(spa.ArraySlice(
+                        src_id,
+                        [spa.Expression(var_k)]
+                    )),
+                )
             )
-        )
+        else:
+            src2_id, src2_dtype = self.placement.get_storage(src2)
+            src_e = spa.Expression(
+                spa.BinaryOperator(
+                    spa.Expression(spa.ArraySlice(
+                        src2_id,
+                        [spa.Expression(var_k)]
+                    )),
+                    op,
+                    spa.Expression(spa.ArraySlice(
+                        src_id,
+                        [spa.Expression(var_k)]
+                    )),
+                )
+            )
 
         stmt = spa.MapStatement(
             variables=[spa.TypedIdentifier(ScalarType.i32, var_k)],
@@ -353,7 +388,9 @@ class MapTransformer(
         out_t = stmt_block.operation_type.destination[0]
         xy_range = self.dataflow.get_x_y_range(out_t, 0, 0)
 
-        return [AbstractStatement(xy_range[0], xy_range[1], stmt)]
+        line_nr = self.versioning.next_version("___line___").version
+
+        return [AbstractStatement(xy_range[0], xy_range[1], (line_nr, stmt))]
 
 
 class UnaryMapTransformer(
@@ -510,11 +547,12 @@ class HorizontalStencilTransformer(
                   dst: sast.Identifier = None,
                   dx: int = None,
                   dy: int = None,
-                  factor = None,
+                  factor: int = None,
                   **wildcards) -> list[AbstractStatement]:
         assert remote is not None
         assert dx is not None
         assert dy is not None
+
 
         context = self.get_context()
         compute_block, stmt_block = context.comp, context.stmt
@@ -542,9 +580,12 @@ class HorizontalStencilTransformer(
         xy_range = self.dataflow.get_x_y_range(out_t, 0, 0)
 
         if any([remote == inp for inp in compute_block.inputs]):
+            if dx == 0 and dy == 0:
+                # Horizontal stencil with no offset -> does not match
+                return []
             # (4) stream used to communicate the remote buffer
             stream = self.dataflow.get_stream(remote, out_id, sast.Offset((dx, dy, 0)))
-            assert stream
+            assert stream, f"Stream not found for {remote.as_ir()} -> {out_id.as_ir()} with offset ({dx, dy}, 0)"
 
             # Loop variables
             var_k = self.versioning.next_version('k')
