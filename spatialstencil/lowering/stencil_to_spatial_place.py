@@ -73,7 +73,6 @@ class ProgramPlacement:
                     field = self._allocate_field(out, out_t.dtype, domain, out_t.extent.extents)
                     fields.extend(field)
                 # Place the intermediate results of the statement block (if any)
-                # TODO (assuming three-address code)
                 for stmt in op.body:
                     if isinstance(stmt, sast.AssignOp):
                         assert stmt.value.depth() <= 2, "At most two levels of nesting supported per assignment"
