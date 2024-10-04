@@ -53,10 +53,10 @@ class TreeToSpatialIR(lark.Transformer):
     def identifier(self, args):
         if len(args) == 1:
             try:
-                return irnodes.ConstantLiteral(int(args[0]), ScalarType.i32)
+                return irnodes.ConstantLiteral(int(args[0]), ScalarType.UNKNOWN)
             except ValueError:
                 try:
-                    return irnodes.ConstantLiteral(float(args[0]), ScalarType.f32)
+                    return irnodes.ConstantLiteral(float(args[0]), ScalarType.UNKNOWN)
                 except ValueError:
                     return irnodes.Identifier(args[0], 0)
         return irnodes.Identifier(*args)
