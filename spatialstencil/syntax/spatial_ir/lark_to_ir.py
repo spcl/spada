@@ -181,8 +181,6 @@ class TreeToSpatialIR(lark.Transformer):
         if not other_gens:
             other_gens = [[]]
 
-        print(itervars, other_gens[0], iters[stream_varind], stream_gen, body)
-
         return irnodes.ForeachStatement(
             itervars, other_gens[0], iters[stream_varind], stream_gen, body, completion_name=completion)
 
