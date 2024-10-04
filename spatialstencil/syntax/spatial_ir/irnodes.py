@@ -32,6 +32,10 @@ class ConstantLiteral(SpatialNode):
     value: Union[int, float]
     dtype: ScalarType
 
+    def validate(self) -> None:
+        assert isinstance(self.value, (int, float))
+        assert isinstance(self.dtype, ScalarType)
+
     def as_ir(self, indent: int = 0) -> str:
         return str(self.value)
 
@@ -45,6 +49,11 @@ class Parameter(SpatialNode):
     name: str
     value: Optional[int] = None
 
+    def validate(self) -> None:
+        assert isinstance(self.name, str)
+        if self.value is not None:
+            assert isinstance(self.value, int)
+
     def as_ir(self, indent: int = 0) -> str:
         return self.name
 
@@ -57,6 +66,10 @@ class Identifier(SpatialNode):
     """
     name: str
     version: int
+
+    def validate(self) -> None:
+        assert isinstance(self.name, str)
+        assert isinstance(self.version, int)
 
     def as_ir(self, indent: int = 0) -> str:
         if self.version == 0:
@@ -106,6 +119,10 @@ class TypedIdentifier(SpatialNode):
     dtype: Union[ScalarType, StreamType, ArrayType]
     identifier: Identifier
 
+    def validate(self) -> None:
+        assert isinstance(self.dtype, (ScalarType, StreamType, ArrayType))
+        assert isinstance(self.identifier, Identifier)
+
     def as_ir(self, indent: int = 0) -> str:
         return f'{self.dtype.as_ir()} {self.identifier.as_ir()}'
 
@@ -121,6 +138,7 @@ class UnaryOperator(SpatialNode):
 
     def validate(self) -> None:
         assert self.op in ('+', '-')
+        assert isinstance(self.value, Expression)
 
     def as_ir(self, indent: int = 0) -> str:
         return f'{self.op}{self.value.as_ir()}'
@@ -138,6 +156,8 @@ class BinaryOperator(SpatialNode):
 
     def validate(self) -> None:
         assert self.op in ('+', '-', '*', '/', '//', '%', '==', '!=', '<', '<=', '>', '>=')
+        assert isinstance(self.left, Expression)
+        assert isinstance(self.right, Expression)
 
     def as_ir(self, indent: int = 0) -> str:
         return f'({self.left.as_ir()} {self.op} {self.right.as_ir()})'
@@ -152,6 +172,11 @@ class TernaryOperator(SpatialNode):
     cond: 'Expression'
     if_true: 'Expression'
     if_false: 'Expression'
+
+    def validate(self) -> None:
+        assert isinstance(self.cond, Expression)
+        assert isinstance(self.if_true, Expression)
+        assert isinstance(self.if_false, Expression)
 
     def as_ir(self, indent: int = 0) -> str:
         return f'({self.if_true.as_ir()} if {self.cond.as_ir()} else {self.if_false.as_ir()})'
@@ -230,6 +255,10 @@ class SubgridExpression(SpatialNode):
     x_range: RangeExpression
     y_range: RangeExpression
 
+    def validate(self) -> None:
+        assert isinstance(self.x_range, RangeExpression)
+        assert isinstance(self.y_range, RangeExpression)
+
     def as_ir(self, indent: int = 0) -> str:
         return f'[{self.x_range.as_ir()} , {self.y_range.as_ir()}]'
 
@@ -263,6 +292,14 @@ class PlaceBlock(SpatialNode):
     variables: list[TypedIdentifier]
     subgrid: SubgridExpression
     statements: list[FieldDeclaration]
+
+    def validate(self) -> None:
+        assert isinstance(self.subgrid, SubgridExpression)
+        assert isinstance(self.variables, list)
+        assert isinstance(self.statements, list)
+        assert all(isinstance(var, TypedIdentifier) for var in self.variables)
+        assert all(isinstance(stmt, FieldDeclaration) for stmt in self.statements)
+        assert len(self.variables) == 2
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -310,6 +347,14 @@ class RelativeStreamDeclaration(SpatialNode):
     dx: Expression
     dy: Expression
     routing: Optional[RoutingDeclaration] = None
+
+    def validate(self) -> None:
+        assert isinstance(self.dtype, StreamType)
+        assert isinstance(self.stream_name, Identifier)
+        assert isinstance(self.dx, Expression)
+        assert isinstance(self.dy, Expression)
+        if self.routing:
+            assert isinstance(self.routing, RoutingDeclaration)
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -367,6 +412,9 @@ class Completion(SpatialNode):
     """
     name: Identifier
 
+    def validate(self) -> None:
+        assert isinstance(self.name, Identifier)
+
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         return f'{indent_str}completion {self.name.as_ir()}'
@@ -379,8 +427,14 @@ class SendStatement(Statement):
     Send statement for sending data asynchronously through a stream.
     """
     local_array: Union[Identifier, ArraySlice]
-    stream_name: Identifier
+    stream_name: Union[Identifier, ArraySlice]
     completion_name: Optional[Completion] = None
+
+    def validate(self) -> None:
+        assert isinstance(self.local_array, (Identifier, ArraySlice))
+        assert isinstance(self.stream_name, (Identifier, ArraySlice))
+        if self.completion_name:
+            assert isinstance(self.completion_name, Completion)
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -395,8 +449,14 @@ class ReceiveStatement(Statement):
     Receive statement for receiving data asynchronously through a stream.
     """
     local_array: Union[Identifier, ArraySlice]
-    stream_name: Identifier
+    stream_name: Union[Identifier, ArraySlice]
     completion_name: Optional[Completion] = None
+
+    def validate(self) -> None:
+        assert isinstance(self.local_array, (Identifier, ArraySlice))
+        assert isinstance(self.stream_name, (Identifier, ArraySlice))
+        if self.completion_name:
+            assert isinstance(self.completion_name, Completion)
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -413,6 +473,9 @@ class ReceiveGenerator(SpatialNode):
     """
     stream_name: Identifier
 
+    def validate(self) -> None:
+        assert isinstance(self.stream_name, Identifier)
+
     def as_ir(self, indent: int = 0) -> str:
         return f'receive({self.stream_name.as_ir()})'
 
@@ -425,13 +488,18 @@ class ForeachStatement(Statement):
     """
     variables: list[TypedIdentifier]
     parameter_range: list[RangeExpression]
-    stream_variable: Identifier
+    stream_variable: TypedIdentifier
     receive_stream: ReceiveGenerator
     body: list[Statement]
     completion_name: Optional[Completion] = None
 
     def validate(self) -> None:
         assert len(self.variables) == len(self.parameter_range)
+        assert all(isinstance(var, TypedIdentifier) for var in self.variables)
+        assert all(isinstance(rng, RangeExpression) for rng in self.parameter_range)
+        assert isinstance(self.stream_variable, TypedIdentifier)
+        assert isinstance(self.receive_stream, ReceiveGenerator)
+        assert all(isinstance(stmt, Statement) for stmt in self.body)
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -461,6 +529,16 @@ class MapStatement(Statement):
     body: list[Statement]
     completion_name: Optional[Completion] = None
 
+    def validate(self) -> None:
+        assert isinstance(self.variables, list)
+        assert isinstance(self.range_expression, list)
+        assert len(self.variables) == len(self.range_expression)
+        assert all(isinstance(var, TypedIdentifier) for var in self.variables)
+        assert all(isinstance(rng, RangeExpression) for rng in self.range_expression)
+        assert all(isinstance(stmt, Statement) for stmt in self.body)
+        if self.completion_name:
+            assert isinstance(self.completion_name, Completion)
+
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         vars_str = ", ".join(var.as_ir() for var in self.variables)
@@ -482,6 +560,12 @@ class ForStatement(Statement):
     range_expression: list[RangeExpression]
     body: list[Statement]
 
+    def validate(self) -> None:
+        assert len(self.variables) == len(self.range_expression)
+        assert all(isinstance(var, TypedIdentifier) for var in self.variables)
+        assert all(isinstance(rng, RangeExpression) for rng in self.range_expression)
+        assert all(isinstance(stmt, Statement) for stmt in self.body)
+
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         vars_str = ", ".join(var.as_ir() for var in self.variables)
@@ -499,6 +583,11 @@ class AsyncBlock(Statement):
     completion_name: Completion
     body: list[Statement]
 
+    def validate(self) -> None:
+        assert isinstance(self.completion_name, Completion)
+        assert isinstance(self.body, list)
+        assert all(isinstance(stmt, Statement) for stmt in self.body)
+
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
@@ -512,6 +601,9 @@ class AwaitCompletionStatement(Statement):
     Await statement to wait for a completion.
     """
     completion_name: Identifier
+
+    def validate(self) -> None:
+        assert isinstance(self.completion_name, Identifier)
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -549,6 +641,9 @@ class ComputeBlock(SpatialNode):
     statements: list[Statement]
 
     def validate(self) -> None:
+        assert isinstance(self.subgrid, SubgridExpression)
+        assert isinstance(self.variables, list)
+        assert isinstance(self.statements, list)
         assert all(isinstance(var, TypedIdentifier) for var in self.variables)
         assert all(isinstance(stmt, Statement) for stmt in self.statements)
         assert len(self.variables) == 2
@@ -573,6 +668,14 @@ class Phase(SpatialNode):
     place: list[PlaceBlock]
     dataflow: list[DataflowBlock]
     compute: list[ComputeBlock]
+
+    def validate(self) -> None:
+        assert isinstance(self.place, list)
+        assert isinstance(self.dataflow, list)
+        assert isinstance(self.compute, list)
+        assert all(isinstance(pl, PlaceBlock) for pl in self.place)
+        assert all(isinstance(df, DataflowBlock) for df in self.dataflow)
+        assert all(isinstance(cmp, ComputeBlock) for cmp in self.compute)
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -606,6 +709,8 @@ class KernelArgument(SpatialNode):
     def validate(self) -> None:
         assert isinstance(self.dtype, (ScalarType, ArrayType, StreamType))
         assert isinstance(self.identifier, Identifier)
+        assert not self.readonly or not self.writeonly
+        assert not self.compiletime or not self.writeonly
 
     def as_ir(self, indent: int = 0) -> str:
         annotations = []
@@ -632,6 +737,11 @@ class Kernel(SpatialNode):
     body: list[PlaceBlock | DataflowBlock | ComputeBlock | Phase]
 
     def validate(self) -> None:
+        if self.name:
+            assert isinstance(self.name, str)
+        assert isinstance(self.parameters, list)
+        assert isinstance(self.arguments, list)
+        assert isinstance(self.body, list)
         assert all(isinstance(p, Parameter) for p in self.parameters)
         assert all(isinstance(arg, KernelArgument) for arg in self.arguments)
         assert all(isinstance(stmt, (Phase, ComputeBlock, DataflowBlock, PlaceBlock)) for stmt in self.body)

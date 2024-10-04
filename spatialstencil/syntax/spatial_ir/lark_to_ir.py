@@ -1,7 +1,8 @@
 import lark
 
+from spatialstencil.syntax.common.types import ScalarType
 from spatialstencil.syntax.spatial_ir import irnodes
-from spatialstencil.syntax.spatial_ir.irnodes import StreamType
+from spatialstencil.syntax.spatial_ir.irnodes import StreamType, Identifier
 
 
 class TreeToSpatialIR(lark.Transformer):
@@ -52,10 +53,10 @@ class TreeToSpatialIR(lark.Transformer):
     def identifier(self, args):
         if len(args) == 1:
             try:
-                return irnodes.ConstantLiteral(int(args[0]), None)
+                return irnodes.ConstantLiteral(int(args[0]), ScalarType.i32)
             except ValueError:
                 try:
-                    return irnodes.ConstantLiteral(float(args[0]), None)
+                    return irnodes.ConstantLiteral(float(args[0]), ScalarType.f32)
                 except ValueError:
                     return irnodes.Identifier(args[0], 0)
         return irnodes.Identifier(*args)
@@ -139,7 +140,6 @@ class TreeToSpatialIR(lark.Transformer):
         args[0] = StreamType(args[0])
         return irnodes.RelativeStreamDeclaration(*args)
 
-
     # Scopes
     def _scope_wrapper(self, cls, args):
         """
@@ -180,6 +180,8 @@ class TreeToSpatialIR(lark.Transformer):
             raise NotImplementedError('Only one foreach zipped range is supported at the moment')
         if not other_gens:
             other_gens = [[]]
+
+        print(itervars, other_gens[0], iters[stream_varind], stream_gen, body)
 
         return irnodes.ForeachStatement(
             itervars, other_gens[0], iters[stream_varind], stream_gen, body, completion_name=completion)
