@@ -10,13 +10,10 @@ the %a[0,0, 0] syntax rather than the implicit %a syntax.
 The modifications are done in-place on the IR nodes.
 """
 
-from typing import List, Tuple, Union
-
 from spatialstencil.lowering.versioning import Versioning
 from spatialstencil.syntax.common.basenode import Wildcard
-from spatialstencil.syntax.common.tree_matching import PatternTransformer, BaseNodeT, BaseNodeK
+from spatialstencil.syntax.common.tree_matching import PatternTransformer
 from spatialstencil.syntax.stencil_ir.irnodes import *
-from spatialstencil.syntax.stencil_ir.type_inference import TypeInference
 
 
 class CanonicalExpressionVisitor(NodeVisitor):
@@ -31,30 +28,30 @@ class CanonicalExpressionVisitor(NodeVisitor):
     def visit_StatementBlock(self, node: StatementBlock):
 
         new_stmts = []
-        stack = []
+        todo = []
         for stmt in node.body:
             if isinstance(stmt, AssignOp):
                 self.explicit_field_access.apply(stmt.value)
             elif isinstance(stmt, ReturnOp):
                 [self.explicit_field_access.apply(v) for v in stmt.values]
-            stack.append(stmt)
-            while len(stack) > 0:
-                s = stack.pop()
+            todo.append(stmt)
+            while len(todo) > 0:
+                s = todo.pop()
                 transformed = self.transformer.first(s)
-                stack.extend(transformed)
                 if len(transformed) > 0:
                     # a transformation was applied
                     # we need to continue processing the new statement
-                    stack.append(s)
+                    todo.append(s)
                 else:
                     # no transformation was applied
                     # we can add the statement to the new list
                     # after making sure there are no non-local accesses
                     non_local_transformed = self.non_local_transformer.first(s)
-                    new_stmts.append(s)
                     new_stmts.extend(non_local_transformed)
+                    new_stmts.append(s)
+                todo.extend(transformed)
 
-        node.body = list(reversed(new_stmts))
+        node.body = list(new_stmts)
 
 
 class SingleNonLocalAccess(PatternTransformer[AssignOp | ReturnOp, AssignOp, None]):
