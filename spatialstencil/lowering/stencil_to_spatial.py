@@ -34,7 +34,6 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
 
     canonicalizer = CanonicalExpressionVisitor()
     canonicalizer.visit(stencil)
-    print(stencil.as_ir())
     infer_scalar_types(stencil, ScalarType.f32, ScalarType.i32)
 
     domain_collector = DomainCollector()
