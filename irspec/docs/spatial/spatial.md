@@ -248,7 +248,7 @@ a stream for receiving from the PE at the relative position `(i-dx, j-dy)` at th
 ??? example "Example: Relative Stream Declaration"
     For example,
     ```rust
-    dataflow i, j in [0:I, 0:J] {
+    dataflow i16 i, i16 j in [0:I, 0:J] {
         stream<f32> eastwards = relative_stream(1, 0);
         stream<f32> westwards = relative_stream(-1, 0);
         stream<f32> northwards = relative_stream(0, -1);
@@ -259,7 +259,7 @@ a stream for receiving from the PE at the relative position `(i-dx, j-dy)` at th
 
     For example,
     ```rust
-    dataflow i, j in [0:I, 0:J] {
+    dataflow i16 i, i16 j in [0:I, 0:J] {
         stream<i32> two_north = relative_stream(0, -2);
     }
     ```
@@ -300,7 +300,7 @@ Note that the start and end PEs also count as hops implicitly.
 
 ???+ example "Example: Routing Declaration"
     ```rust
-    dataflow i, j in [0:I, 0:J] {
+    dataflow i16 i, i16 j in [0:I, 0:J] {
         stream<f32> eastwards = relative_stream(1, 0) {
             hops = [(1, 0)];
             channel = 0;
@@ -315,7 +315,7 @@ One may also provide `hops` explicitly, but leave `channel = auto`, which allows
 ```rust
 // Example use of channel=auto
 
-dataflow i, j in [0:I, 0:J] {
+dataflow i16 i, i16 j in [0:I, 0:J] {
     stream<f32> eastwards = relative_stream(1, 0) {
         hops = auto;
         channel = auto;
@@ -355,15 +355,15 @@ that lie in the `subgrid_expression`.
 asynchronous and return completions that may be used to synchronize computations.
 ```rust
 // Send (asynchronous)
-completion_name = send(local_array, stream_name);
+completion completion_name = send(local_array, stream_name);
 
 // Foreach loop over a receive() stream until the sender is done (asynchronous)
-completion completion_name = foreach variables in [receive(stream_name)] {
+completion completion_name = foreach variables in receive(stream_name) {
   // Statements
 }
 
 // Foreach loop over a receive() stream of defined size (asynchronous)
-completion completion_name = foreach variables in [parameter_expressions, receive(stream_name)] {
+completion completion_name = foreach variables in [parameter_expressions], receive(stream_name) {
   // Statements
 }
 // Parallel map (asynchronous)
@@ -391,7 +391,59 @@ array_expression = expression;
 field_name = expression;
 ```
 
-Note that each completion name must be unique within a `compute` block.
+### Asynchronous Execution with Completions
+
+A completion is a built-in identifier type that can be used to control asynchronous execution.
+
+In a well-formed code, every asynchronous element must either have a `completion` definition assigned, or be prefixed
+with `await`. This includes asynchronous blocks (`foreach`, `map`, `async`) and asynchronous built-in functions (`send`,
+`receive`) that appear in the top-level `compute` scope.
+
+A `completion` object cannot be defined on its own (i.e., `completion c`), nor can it be reassigned. Each completion
+name must be unique within a `compute` block.
+
+### Await completions with `await`
+
+Inside a `compute` block, an `await` statement is used to wait for a completion to trigger.
+The `await` can be applied to a completion name.
+```rust
+await completion_name;
+```
+The `await` can be immediately applied to an asynchronous operation as a shorthand:
+```
+await operation;
+// Is semantically equivalent to:
+completion c = operation;
+await c;
+```
+
+??? example "Example: await"
+    ```rust
+    // Execute a map and wait for its completion
+    await map i32 i in [0:10] {
+        // Statements
+    }
+    // Wait for completion of a send
+    await send(local_array, stream_name);
+    // Wait for completion of a receive
+    await foreach i32 k, f32 x in [0:K], receive(stream_name) {
+      // Statements
+    }
+    // Wait for a completion
+    await comp;
+    ```
+
+!!! note 
+    Note that statements inside an `await` may still be preempted by other asynchronous operations!
+    
+!!! danger "Undefined Behavior"
+    Awaiting the same completion twice is considered undefined behavior.
+    
+
+Any completion that is never `await`ed is assumed to have an implicit `await` at the end of its parent `compute` block.
+
+See the [Semantics of Asynchronous Statements](../async#semantics-of-asynchronous-statements) for more details
+on the semantics of `await`.
 
 ### Streaming Data with `send`
 
@@ -467,22 +519,30 @@ Inside a `compute` block, a `foreach` loop can be used to apply a computation to
 For each element in the stream, the computation is executed.
 The elements are processed in the order they are received.
 
-One may either provide the number of elements to receive, or receive until the sender is done.
+The foreach loop is defined on a generator (i.e., `receive(stream_name)`), and may optionally
+accept an additional range iterator (for example, `[0:K]` or `[0:2, 0:N]`). If an additional
+range iterator is provided, it is considered as an implicit zip operator, in which the range
+will terminate the loop upon completion. This range can be used to provide a fixed number of
+elements to receive. Otherwise, the `foreach` loop will receive until the sender is done:
+
 ```rust
 // Receive until the sender is done
-completion completion_name = foreach variables in [receive(stream_name)] {
+completion completion_name = foreach variables in receive(stream_name) {
   // Assignment statements
 }
 
 // Receive a fixed number of elements
-completion completion_name = foreach variables in [parameter_rage_expressions, receive(stream_name)] {
+completion completion_name = foreach variables in [parameter_range_expressions], receive(stream_name) {
   // Assignment statements
 }
 ```
-The last variable is the data variable. The data variable is bound to the received data. Its type must match the type of the stream.
+The variable at the corresponding position to the `receive` generator is bound to the received data.
+Its type must match the type of the stream. The other variables are iteration variables.
 
-The other variables are iteration variables. They must be of type `i32`.
-One may specify multiple parameter range expressions. 
+The order of range iterators and `receive` generator does not matter. A program in its canonical form will place
+the `receive` generator last.
+
+For the iteration variables, one may specify multiple parameter range expressions. 
 The iteration variables are bound to the indices of the received data, which is
 interpreted as a multi-dimensional array in *row-major* order.
 
@@ -492,7 +552,7 @@ to allow for performance optimizations.
 For example, the following code receives data from `stream_1` for `K` elements
 and assigns the received data to the array `a`.
 ```
-completion completion_name = foreach i32 k, f32 x in [0:K, receive(stream_1)] {
+completion completion_name = foreach i32 k, f32 x in [0:K], receive(stream_1) {
     a[k] = x;
 }
 ```
@@ -544,46 +604,6 @@ Hence, the map must not contain loop-carried dependencies.
 !!! note
     If you need to perform non-affine array accesses, exploit loop-carried dependencies, 
     or nest other asynchronous operations, use a [`for`](#processing-arrays-sequentially-with-for) loop instead.
-
-### Await completions with `await`
-
-Inside a `compute` block, an `await` statement is used to wait for a completion to trigger.
-The `await` can be applied to a completion name.
-```rust
-await completion_name;
-```
-The `await` can be immediately applied to an asynchronous operation as a shorthand:
-```
-await operation;
-// Is semantically equivalent to:
-completion c = operation;
-await c;
-```
-
-??? example "Example: await"
-    ```rust
-    // Execute a map and wait for its completion
-    await map i32 i in [0:10] {
-        // Statements
-    }
-    // Wait for completion of a send
-    await send(local_array, stream_name);
-    // Wait for completion of a receive
-    await foreach i32 k, f32 x in [0:K, receive(stream_name)] {
-      // Statements
-    }
-    // Wait for a completion
-    await comp;
-    ```
-
-!!! note 
-    Note that statements inside an `await` may still be preempted by other asynchronous operations!
-    
-!!! danger "Undefined Behavior"
-    Awaiting the same completion twice is considered undefined behavior.
-    
-See the [Semantics of Asynchronous Statements](../async#semantics-of-asynchronous-statements) for more details
-on the semantics of `await`.
 
 ### Processing arrays sequentially with `for`
 
@@ -665,24 +685,24 @@ A PEs may participate in some phases and not in others.
 
 ??? example "Example: Phases"
     ```rust
-    place for i, j in [0:I, 0:J] {
+    place i16 i, i16 j in [0:I, 0:J] {
         f32[K] a;
     }
     
-    dataflow for i, j in [0:I, 0:J] {
+    dataflow i16 i, i16 j in [0:I, 0:J] {
       stream<f32> input = arg1[i, j, 0:K];
     }
     
     phase {
-      place for i, j in [0:I, 0:J] {
+      place i16 i, i16 j in [0:I, 0:J] {
         f32[K] b;
       }
        
-      dataflow for i, j in [0:I, 0:J] {
+      dataflow i16 i, i16 j in [0:I, 0:J] {
         stream<f32> eastwards = relative_stream(1, 0);
       }
       
-      compute for i, j in [0:I, 0:J] {
+      compute i16 i, i16 j in [0:I, 0:J] {
          // Within this compute block:
          // b and a are in scope, eastwards is in scope, input are in scope
       }
@@ -691,17 +711,17 @@ A PEs may participate in some phases and not in others.
     
     phase {
     
-      place for i, j in [1:I-1, 1:J-1] {
+      place i16 i, i16 j in [1:I-1, 1:J-1] {
         f32[K] c;
         stream<f32> output = arg2[i, j];
       }
     
-      dataflow for i, j in [1:I-1, 1:J-1] {
+      dataflow i16 i, i16 j in [1:I-1, 1:J-1] {
         // The communication pattern switches direction in this phase
         stream<f32> westwards = relative_stream(-1, 0);
       }
       
-      compute for i, j in [1:I-1, 1:J-1] {
+      compute i16 i, i16 j in [1:I-1, 1:J-1] {
         // Within this compute block:
         // c is in scope, westwards, input and output are in scope
       }
