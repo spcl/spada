@@ -36,7 +36,9 @@ class TestStencilIRParser(unittest.TestCase):
 
     def test_lower_gt4py_intermediates_2(self):
         program = self.gtfuncs['unused']
-        irprogram = gt4py_to_stencil_ir.lower_gt4py_to_stencil_ir(program, materialize=False)
+        with self.assertWarns(UserWarning) as wrn:
+            irprogram = gt4py_to_stencil_ir.lower_gt4py_to_stencil_ir(program, materialize=False)
+        assert 'No uses of unused' in str(wrn.warning)
         assert irprogram.name == 'unused'
         assert [inp.name for inp in irprogram.inputs] == ['inp']
         assert [out.name for out in irprogram.outputs] == ['out']

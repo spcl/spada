@@ -3,13 +3,13 @@ import os
 import sys
 from typing import TextIO
 
-from spatialstencil.syntax.stencil_ir import irnodes
-from spatialstencil.syntax.stencil_ir import lark_to_ast
+from spatialstencil.syntax.spatial_ir import irnodes
+from spatialstencil.syntax.spatial_ir import lark_to_ir
 
 
 class Parser:
     """
-    A spatial stencil language parser. Parses multiple strings faster than
+    A spatial IR parser. Parses multiple strings faster than
     calling ``parser.parse_string`` multiple times.
     """
 
@@ -22,40 +22,40 @@ class Parser:
 
         # Create a parser
         self.parser = lark.Lark(ebnf, parser='earley')
-        self.transformer = lark_to_ast.TreeToAST()
+        self.transformer = lark_to_ir.TreeToSpatialIR()
 
-    def parse(self, code: str) -> irnodes.Program:
+    def parse(self, code: str) -> irnodes.Kernel:
         """
-        Parses a string representing a spatial stencil program, returning the
-        top-level program AST node.
+        Parses a string representing a spatial IR kernel, returning the
+        top-level kernel IR node.
         
         :param code: A code string in spatial stencil format.
-        :return: A Program node representing the root of the AST.
+        :return: A Kernel node representing the root of the spatial IR.
         """
         tree = self.parser.parse(code)
         ast = self.transformer.transform(tree)
         return ast
 
 
-def parse_string(code: str) -> irnodes.Program:
+def parse_string(code: str) -> irnodes.Kernel:
     """
-    Parses a string representing a spatial stencil program, returning the
-    top-level program AST node.
+    Parses a string representing a spatial IR kernel, returning the
+    top-level kernel IR node.
     
     :param code: A code string in spatial stencil format.
-    :return: A Program node representing the root of the AST.
+    :return: A Kernel node representing the root of the spatial IR.
     """
     parser = Parser()
     return parser.parse(code)
 
 
-def parse_file(file_or_filename: TextIO | str) -> irnodes.Program:
+def parse_file(file_or_filename: TextIO | str) -> irnodes.Kernel:
     """
-    Parses a file representing a spatial stencil program, returning the
-    top-level program AST node.
+    Parses a file representing a spatial IR kernel, returning the
+    top-level kernel IR node.
     
     :param file_or_filename: A file path or handle to an open file to read.
-    :return: A Program node representing the root of the AST.
+    :return: A Kernel node representing the root of the spatial IR.
     """
     if isinstance(file_or_filename, str):
         with open(file_or_filename, 'r') as fp:
@@ -65,7 +65,7 @@ def parse_file(file_or_filename: TextIO | str) -> irnodes.Program:
 
 if __name__ == '__main__':
     if len(sys.argv) != 2:
-        print('USAGE: python -m spatialstencil.syntax.stencil_ir.parser <STENCIL FILE>')
+        print('USAGE: python -m spatialstencil.syntax.spatial_ir.parser <STENCIL FILE>')
         exit(1)
 
     out = parse_file(sys.argv[1])

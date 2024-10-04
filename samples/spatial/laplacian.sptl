@@ -1,0 +1,76 @@
+kernel @laplacian<I,J,K> (stream<f32>[I+2, J+2] readonly in_field,
+                          stream<f32>[I, J] writeonly lap_field) {
+    
+  ////////////////////////////////
+  // Data placement
+  place i16 i, i16 j in [0:I+2, 0:J+2] {
+      f32[K] local_input;
+  }
+  
+  place i16 i, i16 j in [1:I+1, 1:J+1] {
+      f32[K] local_result;
+  }
+  
+  // Copy input data
+  phase {
+    compute i16 i, i16 j in [0:I+2, 0:J+2] {
+      await receive(local_input, in_field[i, j])
+    }
+  }
+  
+  phase {
+    // Set up communication streams
+    dataflow i16 i, i16 j in [0:I+2, 0:J+2] {
+       stream<f32> eastwards = relative_stream(+1, 0);
+       stream<f32> westwards = relative_stream(-1, 0);
+       stream<f32> northwards = relative_stream(0, -1);
+       stream<f32> southwards = relative_stream(0, +1);
+    }
+
+    // Edge senders
+    compute i16 i, i16 j in [0:1, 1:J] {
+        // Streaming send to the right
+        await send(local_input, eastwards);
+        // We receive nothing
+    }
+    
+    compute i16 i, i16 j in [I+1:I+2, 1:J] {
+        // Streaming send to the left
+        await send(tosend, westwards);
+        // We receive nothing
+    }
+    // ...
+  
+    compute i16 i, i16 j in [1:I+1, 1:J+1] {
+        // Streaming parallel computation (map)
+        completion f = map i32 k in [0:K] {
+            local_result[k] = local_input[k] * 4;
+        }
+  
+        // No data race, both map and send are reading from local_input
+        await send(local_input, westwards);
+
+        // Example of an await for a completion.
+        await f;
+        
+        // Writing to local_result form the map would be considered a data race
+        // if we did not await f
+        await foreach i32 k, f32 x in [0:K], receive(westwards) {
+          local_result[k] = local_result[k] - x;
+        }
+
+        // Writing to the same array from multiple foreach blocks concurrently
+        // is considered a data race.
+        // Hence, we need to run one after the other.
+        await send(local_input, eastwards)
+
+        await foreach f32 x, i32 k in receive(eastwards), [0:K] {
+          local_result[k] = local_result[k] - x;
+        }
+        // ...
+
+        // after all computation has finished:
+        await send(local_result, lap_field[i, j])
+    }  
+  }
+}

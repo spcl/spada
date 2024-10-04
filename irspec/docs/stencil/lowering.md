@@ -205,14 +205,14 @@ Otherwise, the computation is performed locally on the PE using a map.
 
     // Send, receive, for %in[-1, 0, 0]
     completion c1 = send(in, in_stream_0);
-    await foreach k, x in [0:K, receive(in_stream_0)] {
+    await foreach k, x in [0:K], receive(in_stream_0) {
         out_1[k] = out_1[k] - x;
     }
     await c1;
 
     // Send, receive, for %in[1, 0, 0]
     completion c2 = send(in, in_stream_1);
-    await foreach k, x in [0:K, receive(in_stream_1)] {
+    await foreach k, x in [0:K], receive(in_stream_1) {
         out_1[k] = out_1[k] + x;
     }
     await c2;

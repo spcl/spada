@@ -1,6 +1,7 @@
 """
 Provides a base class for AST/IR trees. Includes children queries and schema validation.
 """
+import inspect
 import types
 import typing
 import warnings
@@ -49,8 +50,12 @@ class BaseNode:
 
             for item in typing.get_args(sequence):
                 if isinstance(item, str):
-                    warnings.warn(f"Could not validate schema for field {f_name} of {cls} due to forward reference")
-                    continue
+                    module = inspect.getmodule(cls)
+                    if not hasattr(module, item):
+                        warnings.warn(f"Could not validate schema for field {f_name} of {cls} due to forward reference")
+                        continue
+                    item = getattr(module, item)  # Try to obtain class from the same module
+
                 if typing.get_origin(item) is types.UnionType or typing.get_origin(item) is typing.Union:
                     _check_union(item, field_name)
                 elif issubclass(item, BaseNode):

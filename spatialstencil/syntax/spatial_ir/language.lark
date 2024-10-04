@@ -1,0 +1,202 @@
+////////////////////////////////////////////////////
+// Low-level literal syntax
+digit      : /[0-9]/
+digits     : /[0-9]+/
+hex_digit  : /[0-9a-fA-F]/
+hex_digits : /[0-9a-fA-F]+/
+letter     : /[a-zA-Z]/
+letters    : /[a-zA-Z]+/
+underscore : /[_]/
+true       : "true"
+false      : "false"
+
+// Literals
+bool_literal : true | false
+decimal_literal : digits
+hexadecimal_literal : "0x" hex_digits
+?integer_literal : decimal_literal | hexadecimal_literal
+negated_integer_literal : "-" integer_literal
+?posneg_integer_literal : integer_literal | negated_integer_literal
+float_literal : /[-+]?[0-9]+[.][0-9]*([eE][-+]?[0-9]+)?/
+string_literal  : ESCAPED_STRING
+?constant_literal : bool_literal | posneg_integer_literal | float_literal | string_literal
+
+// Identifier syntax (loosely following MLIR conventions)
+bare_id : (letter| underscore) (letter|digit|underscore)*
+suffix_id : digits | bare_id
+identifier : suffix_id ("#" digits)?
+
+// Scalar types
+!float_type : "f16" | "f32" | "f64"
+!int_type : "i8" | "i16" | "i32"
+!uint_type : "u8" | "u16" | "u32"
+!bool_type : "bool"
+?scalar_type : float_type | int_type | uint_type | bool_type
+stream_type : "stream" "<" scalar_type ">"
+?standard_type : scalar_type | stream_type
+
+// Array types
+array_type : standard_type "[" value_expr ("," value_expr)* "]"
+
+// Annotations
+!annotation : "readonly" | "writeonly" | "compiletime"
+annotations : annotation (annotation)*
+
+?builtin_type : array_type | standard_type
+
+////////////////////////////////////////////////////
+// Operators and operator precedence
+// Adapted and reduced from Lark's Python grammar
+// https://github.com/lark-parser/lark/blob/88fe0fdcdccc9f8856e96fd6fe9d28ae3cb4f64b/lark/grammars/python.lark
+
+?test : or_test
+      | or_test "if" or_test "else" test -> ternary_op
+
+?or_test: and_test ("or" or_test) -> binary_op_logical_or
+        | and_test
+?and_test: not_test_ ("and" and_test) -> binary_op_logical_and
+         | not_test_
+?not_test_: "not" not_test_ -> not_test
+          | comparison
+?comparison: expr (_comp_op comparison) -> comparison
+           | expr
+
+?expr: or_expr
+?or_expr: xor_expr ("|" or_expr) -> binary_op_or
+        | xor_expr
+?xor_expr: and_expr ("^" xor_expr) -> binary_op_xor
+         | and_expr
+?and_expr: shift_expr ("&" and_expr) -> binary_op_and
+         | shift_expr
+?shift_expr: arith_expr (_shift_op shift_expr) -> binary_op
+           | arith_expr
+
+?arith_expr: term (_add_op arith_expr) -> binary_op
+           | term
+?term: factor (_mul_op term) -> binary_op
+     | factor
+?factor: _unary_op factor -> unary_op
+       | power
+
+!_unary_op: "+"|"-"|"~"
+!_add_op: "+"|"-"
+!_shift_op: "<<"|">>"
+!_mul_op: "*"|"/"|"%"
+!_comp_op: "<"|">"|"=="|">="|"<="|"!="
+
+?power: atom_expr ("**" factor)+ -> binary_op_pow
+      | atom_expr
+
+?atom_expr: bare_id "(" [call_arguments] ")"         -> call
+          | identifier "[" subscript_slice "]"  -> subscript_expr
+          | atom_expr "." bare_id               -> getattr
+          | atom
+
+?atom: identifier
+     | constant_literal
+     | "(" test ")"
+
+value_expr : test     // Basic value type. See operator precedence for more information
+
+call_arguments: test ("," test)*
+subscript_slice : value_expr ("," value_expr)*
+subscript : identifier "[" subscript_slice "]"
+
+///////////////////////////////////////////////////
+// Grid/Subgrid expressions
+
+range_expression : value_expr ":" value_expr (":" value_expr)?
+subgrid_expression : "[" range_expression ("," range_expression)* "]"
+subgrid_expression_2d : "[" range_expression "," range_expression "]"
+///////////////////////////////////////////////////
+// Declarations and routing
+
+!auto : "auto"
+hop : "(" posneg_integer_literal "," posneg_integer_literal ")"  // 2D at the moment, might expand
+hops : "[" hop ("," hop)* "]"
+routing : "hops" "=" (auto | hops) "," "channel" "=" (auto | integer_literal)
+
+field_declaration : builtin_type identifier  (";")? //(";" | NEWLINE)
+stream_declaration : "stream" "<" scalar_type ">" identifier "=" "relative_stream" "(" value_expr "," value_expr ")" ("{" routing "}")?  (";")?
+vars : identifier ("," identifier)*
+typed_var : scalar_type identifier
+typed_vars : typed_var ("," typed_var)*
+
+///////////////////////////////////////////////////
+// Generators for foreach statements
+
+receive_generator : "receive" "(" (identifier | subscript) ")"
+
+?generator : receive_generator | subgrid_expression
+generators : generator ("," generator)*
+
+///////////////////////////////////////////////////
+// Scope contents
+
+completion : "completion" identifier "="
+?prefix : completion | "await"
+
+// Free function call
+function_call: prefix bare_id "(" [call_arguments] ")" 
+
+await_completion : "await" identifier
+
+// TODO: Define syntax for branches
+// if_stmt : "if"
+//if_op : "if" "(" identifier ")" type_info? computation_body (elif_block)* (else_block)?
+//elif_block : "elif" "(" identifier ")" computation_body
+//else_block : "else" computation_body
+
+?statements: statement? ((";" | NEWLINE)+ statement)* (";" | NEWLINE)*
+
+for_stmt : "for" typed_vars "in" subgrid_expression compute_body
+map_stmt : prefix "map" typed_vars "in" subgrid_expression compute_body
+foreach_stmt : prefix "foreach" typed_vars "in" generators compute_body
+async_stmt : completion "async" compute_body
+
+// Top-level statements that are direct children of `compute` blocks
+?base_stmt : (function_call | await_completion | map_stmt | foreach_stmt | async_stmt | for_stmt)
+
+assignment : (subscript | identifier) "=" value_expr
+
+?statement : (assignment | base_stmt)
+
+
+////////////////////////////////////////////////////
+// Scopes
+
+// Kernel
+parameters : "<" (bare_id ("," bare_id)*)? ">"
+typed_argument : builtin_type annotations? bare_id
+arguments : "(" (typed_argument ("," typed_argument)*)? ")"
+kernel : "kernel" ("@" bare_id)? parameters arguments kernel_body
+
+// Kernel contents
+place_block : "place" typed_vars "in" subgrid_expression_2d place_body
+dataflow_block : "dataflow" typed_vars "in" subgrid_expression_2d dataflow_body
+compute_block : "compute" typed_vars "in" subgrid_expression_2d compute_body
+phase : "phase" phase_body
+
+////////////////////////////////////////////////////
+// AST structure
+kernel_body : "{" (place_block | dataflow_block | compute_block | phase)* "}"
+place_body : "{" field_declaration* "}"
+dataflow_body : "{" stream_declaration* "}"
+compute_body : "{" statements "}"
+phase_body : "{" (place_block | dataflow_block | compute_block)* "}"
+
+?start: kernel
+
+////////////////////////////////////////////////////
+// Lark imports
+%import common.ESCAPED_STRING
+%import common.SIGNED_NUMBER
+%import common.WS
+%import common.NEWLINE
+
+// Things to ignore: whitespace, single-line comments, multi-line comments
+COMMENT : "//" /(.)+/ NEWLINE
+MULTILINE_COMMENT: /\/\*(\*(?!\/)|[^*])*\*\//
+%ignore WS
+%ignore COMMENT
+%ignore MULTILINE_COMMENT
