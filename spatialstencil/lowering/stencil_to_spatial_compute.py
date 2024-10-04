@@ -29,7 +29,6 @@ class ProgramCompute:
         self.versioning = versioning
         self.dataflow = dataflow
         self.placement = placement
-        self.offset_domain = domains.get_shift()[0:2]
         self.visitor = ComputeVisitor(placement, versioning, dataflow)
         self.grid_var_t = subgrid_var_type
 
@@ -91,23 +90,20 @@ class ComputeVisitor(sast.ScopedNodeVisitor):
         self.dataflow = dataflow
         self.stmts = []
 
-        self.statement_transformers = [UnaryMapTransformer(placement, versioning),
-                                       MapTransformer(placement, versioning),
+        self.statement_transformers = [UnaryMapTransformer(placement, versioning, dataflow),
+                                       MapTransformer(placement, versioning, dataflow),
                                        HorizontalStencilTransformer(placement, versioning, dataflow)]
 
     def visit_ReturnOp(self, op: sast.ReturnOp):
         comp = self.get_scope()
         assert isinstance(comp, sast.ComputationBlock)
 
-        shift = self.placement.get_shift()
-        assert shift[2] == 0
         for value, value_t, out, out_t in zip(op.values, op.operation_type.source, comp.outputs,
                                               comp.operation_type.destination):
             value = value.value
             assert isinstance(value, sast.Identifier)
 
-            x_range = _shift(out_t.domain.x, shift[0])
-            y_range = _shift(out_t.domain.y, shift[1])
+            x_range, y_range = self.dataflow.get_x_y_range(out_t, 0, 0)
 
             var_k = self.versioning.next_version('k')
 
@@ -184,7 +180,6 @@ class ComputeVisitor(sast.ScopedNodeVisitor):
         # that is not zero
         dst = op.result
         src = op.value
-        result = []
         for extent in op.operation_type.destination[0].extent.extents:
             if extent != sast.Offset.zero():
                 dst_buf, dst_dtype = self.placement.get_storage(dst, extent)
@@ -198,8 +193,7 @@ class ComputeVisitor(sast.ScopedNodeVisitor):
                 # (3) remote buffer
                 # Determine if its an input type or an intermediate type
                 out_t = op.operation_type.destination[0]
-                shift = self.placement.get_shift()
-                xy_range = _get_range(out_t, shift)
+                xy_range = self.dataflow.get_x_y_range(out_t, 0, 0)
 
                 # (4) stream used to communicate the remote buffer
                 stream = self.dataflow.get_stream(src, dst, extent)
@@ -247,10 +241,8 @@ class ComputeVisitor(sast.ScopedNodeVisitor):
                     send_completion
                 )
 
-                send_domain = out_t.domain.union(out_t.domain.add(extent.values))
-
-                send_x_range = _shift(send_domain.x, shift[0])
-                send_y_range = _shift(send_domain.y, shift[1])
+                dx, dy, dz = extent.values
+                send_x_range, send_y_range = self.dataflow.get_x_y_range(out_t, dx, dy)
 
                 line_nr = self.versioning.next_version("___line___").version
                 send_stmt = AbstractStatement(send_x_range, send_y_range, (line_nr, send))
@@ -268,9 +260,13 @@ class ComputeVisitor(sast.ScopedNodeVisitor):
 
 class MapTransformer(PatternTransformer[sast.AssignOp, AbstractStatement, tuple[sast.ComputationBlock, sast.StatementBlock]]):
 
-    def __init__(self, placement: ProgramPlacement, versioning: Versioning[spa.Identifier]):
+    def __init__(self,
+                 placement: ProgramPlacement,
+                 versioning: Versioning[spa.Identifier],
+                 dataflow: ProgramDataflow):
         self.placement = placement
         self.versioning = versioning
+        self.dataflow = dataflow
         # x (op) a[0, 0, 0]
         e = sast.Expression(
             sast.BinaryOperator(
@@ -333,16 +329,20 @@ class MapTransformer(PatternTransformer[sast.AssignOp, AbstractStatement, tuple[
 
         stmt_block = self.get_context()[1]
         out_t = stmt_block.operation_type.destination[0]
-        xy_range = _get_range(out_t, self.placement.get_shift())
+        xy_range = self.dataflow.get_x_y_range(out_t, 0, 0)
 
         return [AbstractStatement(xy_range[0], xy_range[1], stmt)]
 
 
 class UnaryMapTransformer(PatternTransformer[sast.AssignOp, AbstractStatement, tuple[sast.ComputationBlock, sast.StatementBlock]]):
 
-    def __init__(self, placement: ProgramPlacement, versioning: Versioning[spa.Identifier]):
+    def __init__(self,
+                 placement: ProgramPlacement,
+                 versioning: Versioning[spa.Identifier],
+                 dataflow: ProgramDataflow):
         self.placement = placement
         self.versioning = versioning
+        self.dataflow = dataflow
         # (u_op) x (op) a[0, 0, 0]
         e = sast.Expression(
             sast.BinaryOperator(
@@ -406,7 +406,7 @@ class UnaryMapTransformer(PatternTransformer[sast.AssignOp, AbstractStatement, t
 
         stmt_block = self.get_context()[1]
         out_t = stmt_block.operation_type.destination[0]
-        xy_range = _get_range(out_t, self.placement.get_shift())
+        xy_range = self.dataflow.get_x_y_range(out_t, 0, 0)
 
         line_nr = self.versioning.next_version("___line___").version
 
@@ -490,8 +490,7 @@ class HorizontalStencilTransformer(
         # Determine if its an input type or an intermediate type
 
         out_t = stmt_block.operation_type.destination[0]
-        shift = self.placement.get_shift()
-        xy_range = _get_range(out_t, shift)
+        xy_range = self.dataflow.get_x_y_range(out_t, 0, 0)
 
         if any([remote == inp for inp in compute_block.inputs]):
             remote_id, remote_dtype = self.placement.get_storage(remote)
@@ -551,10 +550,7 @@ class HorizontalStencilTransformer(
                 send_completion
             )
 
-            send_domain = out_t.domain.union(out_t.domain.add((dx, dy, 0)))
-
-            send_x_range = _shift(send_domain.x, shift[0])
-            send_y_range = _shift(send_domain.y, shift[1])
+            send_x_range, send_y_range = self.dataflow.get_x_y_range(out_t, dx, dy)
 
             line_nr = self.versioning.next_version("___line___").version
             send_stmt = AbstractStatement(send_x_range, send_y_range, (line_nr, send))
@@ -607,14 +603,3 @@ class HorizontalStencilTransformer(
             line_nr = self.versioning.next_version("___line___").version
             return [AbstractStatement(xy_range[0], xy_range[1], (line_nr, stmt))]
 
-
-def _get_range(access_type: sast.ViewType | sast.FieldType, shift: tuple) -> tuple:
-    assert isinstance(access_type, (sast.ViewType, sast.FieldType))
-    assert isinstance(access_type.domain, sast.Cartesian)
-    x_range = _shift(access_type.domain.x, shift[0])
-    y_range = _shift(access_type.domain.y, shift[1])
-    return x_range, y_range
-
-
-def _shift(_range: tuple | sast.Interval, shift: int) -> tuple:
-    return _range[0] + shift, _range[1] + shift

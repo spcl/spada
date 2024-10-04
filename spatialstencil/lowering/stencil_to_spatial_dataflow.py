@@ -72,13 +72,16 @@ class ProgramDataflow:
         :return:
         """
 
-        # TODO: Keep track of a mapping from statements (or views) to participating streams
+        # Keep track of a mapping from statements (or views) to participating streams
         # For every statement generate a stream for each non-zero extent
 
         abstract_streams = []
 
         for stmt in comp.body:
+
             if isinstance(stmt, sast.MaterializeOp):
+                out_t = stmt.operation_type.destination[0]
+
                 for extent in stmt.operation_type.destination[0].extent.extents:
                     dx = -extent.values[0]
                     dy = -extent.values[1]
@@ -97,15 +100,14 @@ class ProgramDataflow:
                         self._set_stream(stmt.value, stmt.result, extent, identifier)
 
                         # Generate stream
-                        assert isinstance(stmt.operation_type.destination[0].domain, sast.Cartesian)
-                        x_range = (stmt.operation_type.destination[0].domain.x[0]+self.offset_domain[0],
-                                   stmt.operation_type.destination[0].domain.x[1]+self.offset_domain[1])
-                        y_range = (stmt.operation_type.destination[0].domain.y[0]+self.offset_domain[0],
-                                   stmt.operation_type.destination[0].domain.y[1]+self.offset_domain[1])
+                        x_range, y_range = self.get_x_y_range(out_t, dx, dy)
+
                         astream = AbstractStream(x_range, y_range, metadata)
                         abstract_streams.append(astream)
 
             if isinstance(stmt, sast.StatementBlock):
+                out_t = stmt.operation_type.destination[0]
+
                 for access, access_type in zip(stmt.inputs, stmt.operation_type.source):
                     if isinstance(access_type, sast.ViewType) and any(access == inp for inp in comp.inputs):
                         for extent in access_type.extent.extents:
@@ -127,11 +129,8 @@ class ProgramDataflow:
                                 self._set_stream(access, stmt.outputs[0], extent, identifier)
 
                                 # Generate stream
-                                assert isinstance(access_type.domain, sast.Cartesian)
-                                x_range = (access_type.domain.x[0]+self.offset_domain[0],
-                                           access_type.domain.x[1]+self.offset_domain[1])
-                                y_range = (access_type.domain.y[0]+self.offset_domain[0],
-                                           access_type.domain.y[1]+self.offset_domain[1])
+                                x_range, y_range = self.get_x_y_range(out_t, dx, dy)
+
                                 astream = AbstractStream(x_range, y_range, metadata)
                                 abstract_streams.append(astream)
 
@@ -174,3 +173,12 @@ class ProgramDataflow:
             blocks.append(block)
 
         return blocks
+
+    def get_x_y_range(self, out_t: sast.ViewType | sast.FieldType, dx: int, dy: int):
+        assert isinstance(out_t.domain, sast.Cartesian)
+        send_domain = out_t.domain.union(out_t.domain.add((dx, dy, 0)))
+        x_range = (send_domain.x[0] + self.offset_domain[0],
+                   send_domain.x[1] + self.offset_domain[1])
+        y_range = (send_domain.y[0] + self.offset_domain[0],
+                   send_domain.y[1] + self.offset_domain[1])
+        return x_range, y_range
