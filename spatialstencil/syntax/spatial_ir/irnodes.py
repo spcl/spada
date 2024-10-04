@@ -497,8 +497,8 @@ class ReceiveStatement(Statement):
     """
     Receive statement for receiving data asynchronously through a stream.
     """
-    stream_name: Identifier | ArraySlice
     local_array: Union[Identifier, ArraySlice]
+    stream_name: Union[Identifier, ArraySlice]
     completion_name: Optional[Completion] = None
 
     def validate(self) -> None:
