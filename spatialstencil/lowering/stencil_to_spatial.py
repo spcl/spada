@@ -167,29 +167,11 @@ def input_phase(body: list[spa.PlaceBlock],
                                                     indices=[spa.Expression(var_i),
                                                              spa.Expression(var_j)])
 
-                    receive = spa.ReceiveGenerator(receive_stream)
-                    dat_var = versioning.next_version('x')
-                    iter_var = versioning.next_version('k')
+                    local_array = field.field_name
 
-                    assignment = spa.AssignmentStatement(
-                        source=spa.Expression(value=dat_var),
-                        destination=spa.ArraySlice(
-                            array=field.field_name,
-                            indices=[spa.Expression(iter_var)]
-                        ),
-                    )
-                    range_expr = spa.RangeExpression(
-                        start=spa.Expression(spa.ConstantLiteral(0, dtype=ScalarType.u32)),
-                        stop=spa.Expression(spa.ConstantLiteral(field.dtype.shape[0], dtype=ScalarType.u32)),
-                    )
-                    foreach = spa.ForeachStatement(
-                        variables=[spa.TypedIdentifier(ScalarType.u32, iter_var)],
-                        parameter_range=[range_expr],
-                        stream_variable=spa.TypedIdentifier(ScalarType.u32, dat_var),
-                        receive_stream=receive,
-                        body=[assignment],
-                    )
-                    statements.append(foreach)
+                    receive = spa.ReceiveStatement(local_array, receive_stream)
+
+                    statements.append(receive)
 
         if len(statements) > 0:
             compute.append(spa.ComputeBlock(variables=[spa.TypedIdentifier(subgrid_var_type, var_i),
