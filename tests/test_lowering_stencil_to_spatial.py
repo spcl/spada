@@ -1,16 +1,41 @@
 import unittest
 from pathlib import Path
+from typing import Tuple
 
+from spatialstencil.lowering.stencil_to_spatial_compute import HorizontalStencilTransformer
+from spatialstencil.lowering.stencil_to_spatial_dataflow import ProgramDataflow
+from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
+from spatialstencil.lowering.versioning import Versioning
 from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle
 from spatialstencil.syntax.stencil_ir import type_inference, parser
+from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
 
-import spatialstencil.syntax.stencil_ir.irnodes as sast
+from spatialstencil.syntax.stencil_ir.irnodes import *
 import spatialstencil.syntax.spatial_ir.irnodes as spa
 
 from spatialstencil.lowering.stencil_to_spatial import lower_stencil_to_spatial
 
-class TestTypeInference(unittest.TestCase):
 
+class DummyProgramPlacement(ProgramPlacement):
+
+    def get_storage(self,
+                    identifier: Identifier,
+                    offset: Offset = Offset.zero()) -> tuple[spa.Identifier, spa.ArrayType]:
+        return spa.Identifier(f'{identifier.name}_{offset[0]}_{offset[1]}_{offset[2]}',
+                              identifier.version), spa.ArrayType(ScalarType.f32, [80])
+
+
+class DummyProgramDataflow(ProgramDataflow):
+    def get_stream(self, input_id: Identifier, output_id: Identifier, offset: Offset) -> spa.Identifier | None:
+        return spa.Identifier(f'_stream_{input_id.name}', 0)
+
+
+class DummyDomains(DomainCollector):
+    def get_shift(self) -> Tuple[int, int, int]:
+        return 0, 0, 0
+
+
+class TestTypeInference(unittest.TestCase):
     Subgrid = Rectangle[spa.DataflowBlock | spa.PlaceBlock | spa.ComputeBlock]
 
     def subgrids_dont_overlap(self, kernel: spa.Kernel):
@@ -35,9 +60,9 @@ class TestTypeInference(unittest.TestCase):
 
         files = [
             Path(__file__).parent / Path('../samples/spst/laplacian_3ac.spst'),
-            Path(__file__).parent / Path('../samples/spst/laplacian_mat_ext_dom.spst')  # ,
+            Path(__file__).parent / Path('../samples/spst/laplacian_mat_ext_dom.spst'),  # ,
             #Path(__file__).parent / Path('../samples/spst/if_else_ext.spst'),
-            #Path(__file__).parent / Path('../samples/spst/multiple_returns_ext.spst'),
+            Path(__file__).parent / Path('../samples/spst/multiple_returns_ext.spst'),
             #Path(__file__).parent / Path('../samples/spst/laplacian_mat_sh_ext.spst')
         ]
 
@@ -45,14 +70,63 @@ class TestTypeInference(unittest.TestCase):
             with open(file, 'r') as f:
                 program = parser.parse_file(f)
 
-            #type_inference.infer_field_extents(program)
-            #domain = sast.Cartesian(x=sast.Interval(0, 128), y=sast.Interval(0, 128), z=sast.Interval(0, 80))
-            #type_inference.infer_field_domains(program, domain)
+            type_inference.infer_field_extents(program)
+            domain = Cartesian(x=Interval(0, 128), y=Interval(0, 128), z=Interval(0, 80))
+            type_inference.infer_field_domains(program, domain)
             print(program.as_ir())
             spatial_program = lower_stencil_to_spatial(program)
             print(spatial_program.as_ir())
 
             assert self.subgrids_dont_overlap(spatial_program)
+
+    def test_horizontal_stencil_transformer(self):
+
+        versioning = Versioning[Identifier](Identifier.__class__)
+        domain_collector = DummyDomains()
+        placement = DummyProgramPlacement(domain_collector, versioning)
+        horizontal_stencil_transformer = HorizontalStencilTransformer(placement, versioning,
+                                                                      DummyProgramDataflow(domain_collector,
+                                                                                           versioning))
+
+        a = AssignOp(result=Identifier(name='d', version=0),
+                     value=Expression(value=BinaryOperator(
+                         left=Expression(value=Subscript(Identifier(name='c', version=0), [0, 0, 0])),
+                         op='+',
+                         right=Expression(value=Subscript(value=Identifier(name='in', version=0),
+                                                          subscript=[0, -1, 0])))),
+                     operation_type=OperationType(source=[ScalarType.f32], destination=None))
+
+        r = horizontal_stencil_transformer.match(a)
+        print(r)
+        assert len(r) > 0, "No match found"
+
+        assert "dst" in r[0].wildcards
+        assert "local" in r[0].wildcards
+        assert "op" in r[0].wildcards
+        assert "dx" in r[0].wildcards
+        assert "dy" in r[0].wildcards
+        assert "remote" in r[0].wildcards
+
+        assert r[0].wildcards["dst"].name == "d"
+        assert r[0].wildcards["dst"].version == 0
+        assert r[0].wildcards["local"].name == "c"
+        assert r[0].wildcards["local"].version == 0
+        assert r[0].wildcards["remote"].name == "in"
+        assert r[0].wildcards["remote"].version == 0
+
+        assert r[0].wildcards["op"] == "+"
+
+        assert r[0].wildcards["dx"] == 0
+        assert r[0].wildcards["dy"] == -1
+
+        pattern_2 = ReturnOp(values=[Expression(value=BinaryOperator(left=Expression(value=2), op='*', right=Expression(
+            value=Subscript(value=Identifier(name='out_mat_2', version=0), subscript=[0, 1, 0]))))],
+                             operation_type=OperationType(source=[ScalarType.f32], destination=None))
+
+        r = horizontal_stencil_transformer.match(pattern_2)
+        print(r)
+        assert len(r) > 0, "No match found"
+
 
 
 if __name__ == '__main__':

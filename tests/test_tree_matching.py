@@ -92,23 +92,6 @@ class IdentifierIncrementerTransformer(PatternTransformer[sast.BaseNode, sast.Id
         return sast.Identifier(root.value.name, version + 1)
 
 
-class DummyProgramPlacement(ProgramPlacement):
-
-    def get_storage(self,
-                    identifier: sast.Identifier,
-                    offset: sast.Offset = sast.Offset.zero()) -> tuple[spa.Identifier, spa.ArrayType]:
-        return spa.Identifier(f'{identifier.name}_{offset[0]}_{offset[1]}_{offset[2]}',
-                              identifier.version), spa.ArrayType(ScalarType.f32, [80])
-class DummyProgramDataflow(ProgramDataflow):
-    def get_stream(self, input_id: sast.Identifier, output_id: sast.Identifier, offset: sast.Offset) -> spa.Identifier | None:
-        return spa.Identifier(f'_stream_{input_id.name}', 0)
-
-class DummyDomains(DomainCollector):
-
-    def get_shift(self) -> Tuple[int, int, int]:
-        return 0, 0, 0
-
-
 class TestTreeMatching(unittest.TestCase):
 
     def test_match(self):
@@ -336,43 +319,6 @@ class TestTreeMatching(unittest.TestCase):
 
         print(assign_pattern)
 
-    def test_horizontal_stencil_transformer(self):
-
-        versioning = Versioning[sast.Identifier](sast.Identifier.__class__)
-        domain_collector = DummyDomains()
-        placement = DummyProgramPlacement(domain_collector, versioning)
-        horizontal_stencil_transformer = HorizontalStencilTransformer(placement, versioning, DummyProgramDataflow(domain_collector, versioning))
-
-        a = sast.AssignOp(result=sast.Identifier(name='d', version=0),
-                          value=sast.Expression(value=sast.BinaryOperator(
-                              left=sast.Expression(value=sast.Subscript(sast.Identifier(name='c', version=0), [0, 0, 0])),
-                              op='+',
-                              right=sast.Expression(value=sast.Subscript(value=sast.Identifier(name='in', version=0),
-                                                                         subscript=[0, -1, 0])))),
-                          operation_type=sast.OperationType(source=[ScalarType.f32], destination=None))
-
-        r = horizontal_stencil_transformer.match(a)
-        print(r)
-        assert len(r) > 0, "No match found"
-
-        assert "dst" in r[0].wildcards
-        assert "local" in r[0].wildcards
-        assert "op" in r[0].wildcards
-        assert "dx" in r[0].wildcards
-        assert "dy" in r[0].wildcards
-        assert "remote" in r[0].wildcards
-
-        assert r[0].wildcards["dst"].name == "d"
-        assert r[0].wildcards["dst"].version == 0
-        assert r[0].wildcards["local"].name == "c"
-        assert r[0].wildcards["local"].version == 0
-        assert r[0].wildcards["remote"].name == "in"
-        assert r[0].wildcards["remote"].version == 0
-
-        assert r[0].wildcards["op"] == "+"
-
-        assert r[0].wildcards["dx"] == 0
-        assert r[0].wildcards["dy"] == -1
 
 
 if __name__ == '__main__':
