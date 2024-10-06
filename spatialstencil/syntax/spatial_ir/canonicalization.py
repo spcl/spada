@@ -1,6 +1,7 @@
 """
 Canonicalization passes for Spatial IR
 """
+import copy
 from dataclasses import dataclass
 from spatialstencil.syntax.spatial_ir import irnodes as spir
 
@@ -17,7 +18,8 @@ def canonicalize_phases(kernel: spir.Kernel) -> spir.Kernel:
     for block in kernel.body:
         if isinstance(block, spir.Phase):  # Already a phase
             if current_phase is not None:  # Commit previous phase
-                new_body.append(current_phase)
+                if len(current_phase.compute) + len(current_phase.dataflow) + len(current_phase.place) > 0:
+                    new_body.append(current_phase)
                 current_phase = None
             new_body.append(block)
             continue
@@ -26,7 +28,10 @@ def canonicalize_phases(kernel: spir.Kernel) -> spir.Kernel:
         if current_phase is None:
             current_phase = spir.Phase([], [], [])
 
-        if isinstance(block, spir.DataflowBlock):
+        if isinstance(block, spir.PlaceBlock):  # Keep placement global
+            new_body.append(block)
+            continue
+        elif isinstance(block, spir.DataflowBlock):
             current_phase.dataflow.append(block)
         elif isinstance(block, spir.ComputeBlock):
             current_phase.compute.append(block)
@@ -35,7 +40,8 @@ def canonicalize_phases(kernel: spir.Kernel) -> spir.Kernel:
 
     # Final phase
     if current_phase is not None:
-        new_body.append(current_phase)
+        if len(current_phase.compute) + len(current_phase.dataflow) + len(current_phase.place) > 0:
+            new_body.append(current_phase)
 
     # Reassign kernel body
     return spir.Kernel(kernel.name, kernel.parameters, kernel.arguments, new_body)
