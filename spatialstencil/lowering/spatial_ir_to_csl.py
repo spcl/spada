@@ -55,7 +55,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
 
     ###############################################
     # Generate main layout file
-    rect_size = kernel.get_grid_size()
+    grid_rect = kernel.get_grid_rect()
+    rect_size = grid_rect[1], grid_rect[3]
 
     layout_code.write(f'''layout {{
     // Rectangle and code setup

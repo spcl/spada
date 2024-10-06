@@ -259,14 +259,19 @@ class SubgridExpression(SpatialNode):
         assert isinstance(self.x_range, RangeExpression)
         assert isinstance(self.y_range, RangeExpression)
 
-    def get_grid_size(self) -> tuple[int, int]:
-        expr_x, expr_y = self.x_range.stop.value, self.y_range.stop.value
-        if not isinstance(expr_x, ConstantLiteral):
-            raise TypeError(f'Cannot obtain concrete grid size. x range value "{expr_x.as_ir()}" is not constant')
-        if not isinstance(expr_y, ConstantLiteral):
-            raise TypeError(f'Cannot obtain concrete grid size. y range value "{expr_y.as_ir()}" is not constant')
+    def get_grid_rect(self) -> tuple[int, int, int, int]:
+        start_x, start_y = self.x_range.stop.value, self.y_range.stop.value
+        stop_x, stop_y = self.x_range.stop.value, self.y_range.stop.value
+        if not isinstance(start_x, ConstantLiteral):
+            raise TypeError(f'Cannot obtain concrete grid size. x range value "{start_x.as_ir()}" is not constant')
+        if not isinstance(start_y, ConstantLiteral):
+            raise TypeError(f'Cannot obtain concrete grid size. y range value "{start_y.as_ir()}" is not constant')
+        if not isinstance(stop_x, ConstantLiteral):
+            raise TypeError(f'Cannot obtain concrete grid size. x range value "{stop_x.as_ir()}" is not constant')
+        if not isinstance(stop_y, ConstantLiteral):
+            raise TypeError(f'Cannot obtain concrete grid size. y range value "{stop_y.as_ir()}" is not constant')
 
-        return expr_x.value, expr_y.value
+        return start_x.value, stop_x.value, start_y.value, stop_y.value
 
     def as_ir(self, indent: int = 0) -> str:
         return f'[{self.x_range.as_ir()} , {self.y_range.as_ir()}]'
@@ -302,8 +307,8 @@ class PlaceBlock(SpatialNode):
     subgrid: SubgridExpression
     statements: list[FieldDeclaration]
 
-    def get_grid_size(self) -> tuple[int, int]:
-        return self.subgrid.get_grid_size()
+    def get_grid_rect(self) -> tuple[int, int, int, int]:
+        return self.subgrid.get_grid_rect()
 
     def validate(self) -> None:
         assert isinstance(self.subgrid, SubgridExpression)
@@ -397,8 +402,8 @@ class DataflowBlock(SpatialNode):
         assert all(isinstance(stmt, RelativeStreamDeclaration) for stmt in self.statements)
         assert len(self.variables) == 2
 
-    def get_grid_size(self) -> tuple[int, int]:
-        return self.subgrid.get_grid_size()
+    def get_grid_rect(self) -> tuple[int, int, int, int]:
+        return self.subgrid.get_grid_rect()
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -651,6 +656,7 @@ class EndPhaseStatement(Statement):
     """
     A special statement that marks the end of a phase. ONLY used as an intermediate while lowering to CSL.
     """
+
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         return f'{indent_str}endphase'
@@ -674,8 +680,8 @@ class ComputeBlock(SpatialNode):
         assert all(isinstance(stmt, Statement) for stmt in self.statements)
         assert len(self.variables) == 2
 
-    def get_grid_size(self) -> tuple[int, int]:
-        return self.subgrid.get_grid_size()
+    def get_grid_rect(self) -> tuple[int, int, int, int]:
+        return self.subgrid.get_grid_rect()
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -706,22 +712,21 @@ class Phase(SpatialNode):
         assert all(isinstance(df, DataflowBlock) for df in self.dataflow)
         assert all(isinstance(cmp, ComputeBlock) for cmp in self.compute)
 
-    def get_grid_size(self) -> tuple[int, int]:
-        max_grid_size = [0, 0]
+    def get_grid_rect(self) -> tuple[int, int, int, int]:
+        """
+        Returns the total PE grid size for this phase.
+        
+        :return: A rectangle as a tuple of (x range begin, x range end, y range begin, y range end).
+        """
+        grid_rect = [None] * 4
         for block in self.place:
-            gs = block.get_grid_size()
-            max_grid_size[0] = max(max_grid_size[0], gs[0])
-            max_grid_size[1] = max(max_grid_size[1], gs[1])
+            grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
         for block in self.dataflow:
-            gs = block.get_grid_size()
-            max_grid_size[0] = max(max_grid_size[0], gs[0])
-            max_grid_size[1] = max(max_grid_size[1], gs[1])
+            grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
         for block in self.compute:
-            gs = block.get_grid_size()
-            max_grid_size[0] = max(max_grid_size[0], gs[0])
-            max_grid_size[1] = max(max_grid_size[1], gs[1])
+            grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
 
-        return tuple(max_grid_size)
+        return tuple(grid_rect)
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -793,14 +798,17 @@ class Kernel(SpatialNode):
         assert all(isinstance(stmt, (Phase, ComputeBlock, DataflowBlock, PlaceBlock)) for stmt in self.body)
         assert self.validate_schema()
 
-    def get_grid_size(self) -> tuple[int, int]:
-        max_grid_size = [0, 0]
+    def get_grid_rect(self) -> tuple[int, int, int, int]:
+        """
+        Returns the total PE grid size for this kernel.
+        
+        :return: A rectangle as a tuple of (x range begin, x range end, y range begin, y range end).
+        """
+        grid_rect = [None, None, None, None]
         for block in self.body:
-            gs = block.get_grid_size()
-            max_grid_size[0] = max(max_grid_size[0], gs[0])
-            max_grid_size[1] = max(max_grid_size[1], gs[1])
+            grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
 
-        return tuple(max_grid_size)
+        return tuple(grid_rect)
 
     def as_ir(self, indent: int = 0) -> str:
         param_str = ", ".join(p.as_ir() for p in self.parameters)
@@ -808,6 +816,28 @@ class Kernel(SpatialNode):
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
         return f'kernel @{self.name}<{param_str}>({arg_str}) {{\n{body_str}\n}}' if self.name \
             else f'kernel<{param_str}>({arg_str}) {{\n{body_str}\n}}'
+
+
+# Helper functions
+def _combine_grids(grid: tuple[int, int, int, int], current_grid: list[int]):
+    gxb, gxe, gyb, gye = grid
+    if current_grid[0] is None:
+        current_grid[0] = gxb
+    else:
+        current_grid[0] = min(gxb, current_grid[0])
+    if current_grid[1] is None:
+        current_grid[1] = gxe
+    else:
+        current_grid[1] = max(gxe, current_grid[1])
+    if current_grid[2] is None:
+        current_grid[2] = gyb
+    else:
+        current_grid[2] = min(gyb, current_grid[2])
+    if current_grid[3] is None:
+        current_grid[3] = gye
+    else:
+        current_grid[3] = max(gye, current_grid[3])
+    return current_grid
 
 
 # Specialized visitors
