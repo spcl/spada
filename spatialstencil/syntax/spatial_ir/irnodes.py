@@ -322,7 +322,7 @@ class PlaceBlock(SpatialNode):
 
 @dataclass
 class RoutingHop(SpatialNode):
-    offset = Tuple[int, int]
+    offset: tuple[int, int]
 
     def as_ir(self, indent: int = 0) -> str:
         return f'({self.offset[0]}, {self.offset[1]})'
@@ -338,7 +338,8 @@ class RoutingDeclaration(SpatialNode):
 
     def validate(self) -> None:
         if isinstance(self.hops, list):
-            for dx, dy in self.hops:
+            for hop in self.hops:
+                dx, dy = hop.offset
                 assert abs(dx) + abs(dy) == 1, "Each hop must have an absolute sum of 1."
 
     def as_ir(self, indent: int = 0) -> str:
@@ -372,7 +373,7 @@ class RelativeStreamDeclaration(SpatialNode):
         indent_str = '  ' * indent
         routing_str = ""
         if self.routing:
-            routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{' ' * indent}}}"
+            routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{indent_str}}}"
         return (f'{indent_str}stream<{self.dtype.element_type.as_ir()}> {self.stream_name.as_ir()} = '
                 f'relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}')
 

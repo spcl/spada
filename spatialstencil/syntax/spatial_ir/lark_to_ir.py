@@ -17,6 +17,7 @@ class TreeToSpatialIR(lark.Transformer):
     true = lambda self, _: True
     false = lambda self, _: False
     prefix = lambda self, _: None
+    auto = lambda self, _: 'auto'
 
     def NEWLINE(self, args):
         return None
@@ -131,7 +132,9 @@ class TreeToSpatialIR(lark.Transformer):
     range_expression = irnodes.RangeExpression.from_lark
 
     # Declarations and routing
-    hop = irnodes.RoutingHop.from_lark
+    def hop(self, args):
+        return irnodes.RoutingHop(tuple(args))
+
     routing = irnodes.RoutingDeclaration.from_lark
     field_declaration = irnodes.FieldDeclaration.from_lark
     subgrid_expression_2d = irnodes.SubgridExpression.from_lark
@@ -154,6 +157,7 @@ class TreeToSpatialIR(lark.Transformer):
     for_stmt = lambda self, args: self._scope_wrapper(irnodes.ForStatement, args)
     map_stmt = lambda self, args: self._scope_wrapper(irnodes.MapStatement, args)
     async_stmt = irnodes.AsyncBlock.from_lark
+    endphase_stmt = irnodes.EndPhaseStatement.from_lark
 
     # Foreach statements and generators
     receive_generator = irnodes.ReceiveGenerator.from_lark
