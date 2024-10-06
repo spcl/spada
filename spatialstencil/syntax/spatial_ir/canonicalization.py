@@ -46,6 +46,10 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
     Inlines phases into their constituent computation and dataflow blocks by adding waits and appending all streams,
     respectively.
     """
+    rect_place: dict[tuple[int, int, int, int], spir.PlaceBlock] = {}
+    rect_place: dict[tuple[int, int, int, int], spir.PlaceBlock] = {}
+    for block in kernel.body:
+        pass
     return kernel
 
 
@@ -82,6 +86,7 @@ def consolidate_rectangles_to_equivalence_classes(kernel: spir.Kernel) -> list[R
 
 def reduce_streams(kernel: spir.Kernel) -> spir.Kernel:
     """
-    Reduces multiple streams if their colors and routing instructions overlap.
+    Combines multiple streams if their colors and routing instructions overlap.
     """
+    # TODO(later)
     return kernel

@@ -31,8 +31,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
 
     # Check if virtual rectangles are equal, consolidate, add phase-end remark at end of computation
     kernel = canonicalization.canonicalize_phases(kernel)
-    kernel = canonicalization.inline_phases(kernel)
     kernel = canonicalization.reduce_streams(kernel)
+    kernel = canonicalization.inline_phases(kernel)
 
     # Create mapping between SpIR blocks and PE rectangles
     rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
