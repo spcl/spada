@@ -98,30 +98,13 @@ class TestTreeMatching(unittest.TestCase):
         pattern = "a(a(b, _), c)"
         subject = "f(a(a(b, a(a(b, a(a(b, y), c)), c)), c), z)"
         # Parse pattern and subject trees into trees for matching
-        print(pattern)
-        print(subject)
         pattern_tree = Parser.parse(pattern)
         subject_tree = Parser.parse(subject)
         has_match = _match_pattern(pattern_tree, subject_tree)
 
-        # Print the match
-        self._print_match(subject_tree, has_match)
+        assert len(has_match) == 3
+        assert all(has_match[i].label == 'a' for i in range(3))
 
-    def _print_match(self, subject_tree, has_match):
-        colours = ["\u001B[31m", "\u001B[33m", "\u001B[32m", "\u001B[33m", "\u001B[36m", "\u001B[35m"]
-        depth = -1
-        subject_str = subject_tree.match_string(has_match)
-        match_count = 0
-        for c in subject_str:
-            if c == '[':
-                depth += 1
-                match_count += 1
-            elif c == ']':
-                depth -= 1
-            color = colours[depth % len(colours)] if depth >= 0 else "\033[0m"
-            print(f"{color}{c}", end="")
-        print("\u001B[0m")
-        return match_count
 
     def test_expression_matching(self):
 
@@ -174,8 +157,6 @@ class TestTreeMatching(unittest.TestCase):
                                       "+",
                                       sast.Expression(Wildcard[int]("right").bind()))
 
-        print(pattern)
-
         matcher = PatternMatcher(pattern)
 
         match = matcher.match_pattern(e)
@@ -212,8 +193,6 @@ class TestTreeMatching(unittest.TestCase):
         transformer = IdentifierIncrementerTransformer()
 
         result = transformer.apply(e)
-
-        print(result)
 
         for r in result:
             assert r.name == "a" or r.name == "b"
@@ -301,9 +280,9 @@ class TestTreeMatching(unittest.TestCase):
             [sast.Expression(sast.Identifier(Wildcard[str]("dest_name").bind(), Wildcard[str]("dest_version").bind()))]
         )
 
-        print(return_pattern)
-
         pattern_matcher = PatternMatcher(return_pattern)
+
+        assert pattern_matcher
 
         assign_pattern = sast.AssignOp(
             sast.Identifier(Wildcard('dest_name').bind(), Wildcard[int]("dest_version").bind()),
@@ -317,7 +296,7 @@ class TestTreeMatching(unittest.TestCase):
 
         pattern_matcher = PatternMatcher(assign_pattern)
 
-        print(assign_pattern)
+        assert pattern_matcher
 
 
 
