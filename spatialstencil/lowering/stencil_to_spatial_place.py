@@ -1,3 +1,4 @@
+import copy
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -9,17 +10,7 @@ from spatialstencil.syntax.common.types import ScalarType
 from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle, split_rectangles, group_rectangles_by_domain
 from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
 
-
-@dataclass(frozen=True)
-class FieldMetadata:
-    """
-    Metadata for a field.
-    """
-    field_type: spa.ArrayType | spa.ScalarType
-    identifier: spa.Identifier
-
-
-AbstractFieldDeclaration = Rectangle[FieldMetadata]
+AbstractFieldDeclaration = Rectangle[spa.FieldDeclaration]
 
 
 class ProgramPlacement:
@@ -149,7 +140,7 @@ class ProgramPlacement:
 
             self._set_storage(identifier, offset, spa_identifier, field_type)
 
-            meta = FieldMetadata(field_type, spa_identifier)
+            meta = spa.FieldDeclaration(field_type, spa_identifier)
             place = AbstractFieldDeclaration((domain.x[0], domain.x[1]), (domain.y[0], domain.y[1]), meta)
             result.append(place)
 
@@ -171,9 +162,7 @@ class ProgramPlacement:
         y_range = fields[0].y_range
 
         for field in fields:
-            identifier = spa.Identifier(field.metadata.identifier.name, field.metadata.identifier.version)
-            field_type = field.metadata.field_type
-            declaration = spa.FieldDeclaration(field_type, identifier)
+            declaration = copy.deepcopy(field.metadata)
             declarations.append(declaration)
             assert field.x_range == x_range, "All fields must be allocated in the same x range"
             assert field.y_range == y_range, "All fields must be allocated in the same y range"
