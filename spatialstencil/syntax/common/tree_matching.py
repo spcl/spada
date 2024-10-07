@@ -42,6 +42,8 @@ class PatternMatcher(Generic[BaseNodeT]):
     def match_pattern(self, subject: BaseNodeT) -> list[Match]:
         """
         Return a list of matches for the pattern in the subject tree.
+        All subtrees in the subject tree that match the pattern tree are returned,
+        Matches check for the structure and the labels of the nodes in the pattern tree.
         The match contains the root node of the match and the wildcards
         that were matched, which are stored in a dictionary.
 
