@@ -1,4 +1,4 @@
-kernel<>(stream<f32>[130, 131] _in, stream<f32>[128, 128] _kernel_out_0) {
+kernel @laplacian<>(stream<f32>[130, 131] _in, stream<f32>[128, 128] _kernel_out_0) {
   place u16 i, u16 j in [1:129 , 1:129] {
     f32[80] res_0_0_0
     f32[80] in_0_0_0

@@ -160,7 +160,7 @@ awaitall_stmt : "awaitall"
 
 assignment : (subscript | identifier) "=" value_expr
 
-?statement : (assignment | base_stmt)
+?statement : (base_stmt | assignment)
 
 
 ////////////////////////////////////////////////////

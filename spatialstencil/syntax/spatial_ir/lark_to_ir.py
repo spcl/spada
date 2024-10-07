@@ -264,4 +264,8 @@ class TreeToSpatialIR(lark.Transformer):
 def _expr(val: irnodes.SpatialNode | int | float | str) -> irnodes.Expression:
     if isinstance(val, irnodes.Expression):
         return val
+    if isinstance(val, int):
+        return irnodes.Expression(irnodes.ConstantLiteral(val, irnodes.ScalarType.UNKNOWN))
+    if isinstance(val, float):
+        return irnodes.Expression(irnodes.ConstantLiteral(val, irnodes.ScalarType.UNKNOWN))
     return irnodes.Expression(val)
