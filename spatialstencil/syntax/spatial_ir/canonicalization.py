@@ -83,7 +83,7 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
             for compute in block.compute:
                 rect = compute.get_grid_rect()
                 if rect in rect_compute:
-                    rect_compute[rect].statements.append(spir.EndPhaseStatement())
+                    rect_compute[rect].statements.append(spir.AwaitAllStatement())
                     rect_compute[rect].statements.extend(compute.statements)
                 else:
                     rect_compute[rect] = copy.deepcopy(compute)

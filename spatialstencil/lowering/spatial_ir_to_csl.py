@@ -36,6 +36,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     print(kernel.as_ir())
 
     # Create mapping between SpIR blocks and PE rectangles
+    # TODO: create empty blocks as necessary
     rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
 
     # Correctness assertion

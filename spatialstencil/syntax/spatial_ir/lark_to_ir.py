@@ -157,7 +157,7 @@ class TreeToSpatialIR(lark.Transformer):
     for_stmt = lambda self, args: self._scope_wrapper(irnodes.ForStatement, args)
     map_stmt = lambda self, args: self._scope_wrapper(irnodes.MapStatement, args)
     async_stmt = irnodes.AsyncBlock.from_lark
-    endphase_stmt = irnodes.EndPhaseStatement.from_lark
+    awaitall_stmt = irnodes.AwaitAllStatement.from_lark
 
     # Foreach statements and generators
     receive_generator = irnodes.ReceiveGenerator.from_lark

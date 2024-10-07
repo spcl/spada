@@ -652,14 +652,15 @@ class AssignmentStatement(Statement):
         return f'{indent_str}{self.destination.as_ir()} = {self.source.as_ir()}'
 
 
-class EndPhaseStatement(Statement):
+class AwaitAllStatement(Statement):
     """
-    A special statement that marks the end of a phase. ONLY used as an intermediate while lowering to CSL.
+    Awaits all completions that have not yet been awaited for.
+    The statement can also be used to mark the end of a phase.
     """
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
-        return f'{indent_str}endphase'
+        return f'{indent_str}awaitall'
 
 
 # Compute Block
