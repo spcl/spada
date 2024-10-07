@@ -36,8 +36,6 @@ class ProgramCompute:
         """
         Generate a computation block.
 
-        :param comp:
-        :return:
         """
         assert comp.schedule == sast.ComputationType.PARALLEL
 
