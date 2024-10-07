@@ -101,6 +101,12 @@ class PatternMatcher(Generic[BaseNodeT]):
                 self._collect_named_wildcards(pattern_field, subject_field, wildcard_matches)
 
     def _match_pattern(self, subject: BaseNodeT) -> list[MatchingBaseNode]:
+        """
+        Wraps the pattern matching algorithm and returns the matching nodes.
+
+        :param subject:
+        :return:
+        """
         subject_tree = MatchingBaseNode.from_base_node(subject)
         matches = _match_pattern(None, subject_tree, self.paths, self.trie)
         return matches  # type: ignore
@@ -200,7 +206,7 @@ class PatternTransformer(Generic[BaseNodeT, BaseNodeK, ContextT], ABC):
 
 def _match_pattern(pattern: TreeNode | None, subject: TreeNode, paths=None, trie=None) -> list[TreeNode]:
     """
-    Math a pattern tree to a subject tree using the approach by Hoffmann and O’Donnell
+    Match a pattern tree to a subject tree using the approach by Hoffmann and O’Donnell
     described in "Pattern Matching in Trees".
 
     It relies on a Aho-Corasick automaton to match the pattern tree to the subject tree.
