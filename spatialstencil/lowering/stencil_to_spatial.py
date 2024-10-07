@@ -12,7 +12,7 @@ from spatialstencil.syntax.spatial_ir.canonical_subgrids import canonicalize_sub
 from spatialstencil.syntax.spatial_ir.grid_geometry import split_rectangles
 
 from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
-from spatialstencil.syntax.stencil_ir.canonical_expression import CanonicalExpressionVisitor
+from spatialstencil.syntax.stencil_ir.canonical_expression_visitor import CanonicalExpressionVisitor
 from spatialstencil.syntax.stencil_ir.type_inference import infer_scalar_types, infer_types
 
 

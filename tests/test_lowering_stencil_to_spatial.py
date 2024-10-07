@@ -99,7 +99,6 @@ def test_horizontal_stencil_transformer():
         operation_type=OperationType(source=[ScalarType.f32], destination=None))
 
     r = horizontal_stencil_transformer.match(a)
-    print(r)
     assert len(r) > 0, "No match found"
 
     assert "dst" in r[0].wildcards
@@ -133,7 +132,6 @@ def test_horizontal_stencil_transformer():
         operation_type=OperationType(source=[ScalarType.f32], destination=None))
 
     r = horizontal_stencil_transformer.match(pattern_2)
-    print(r)
     assert len(r) > 0, "No match found"
 
 
