@@ -9,24 +9,46 @@ import spatialstencil.syntax.common.basenode as syntax
 V = TypeVar('V')
 
 
-# Abstract Tree class
 class MatchTree(Generic[V]):
+    """
+    Abstract Match Tree class representing a tree structure.
+    """
     pass
 
 
-# Node class representing a node in the tree
 class TreeNode(MatchTree[V]):
+    """
+    Node class representing a node in the match tree.
+    Each node has a label and a list of children.
+    """
+
+    label: V
+    children: List[MatchTree[V]]
+
     def __init__(self, label: V, children: List[MatchTree[V]]):
         self.label = label
         self.children = children
 
     def get_label(self) -> V:
+        """
+        Get the label of the node.
+        :return:
+        """
         return self.label
 
     def get_children(self) -> List[MatchTree[V]]:
+        """
+        Get the children of the node.
+        :return: A list of children nodes.
+        """
         return self.children
 
     def walk_tree(self):
+        """
+        Walk the tree in breadth-first order.
+        """
+        # The queue of nodes to visit
+        # Using a queue to avoid recursion in the BFS.
         todo: deque[MatchTree[V]] = deque([self])
         while todo:
             node = todo.popleft()
@@ -42,7 +64,14 @@ class TreeNode(MatchTree[V]):
         node = f"{self.label}({subtrees})"
         return node
 
-    def match_string(self, match: dict['TreeNode', bool]):
+    def match_string(self, match: dict['TreeNode', bool]) -> str:
+        """
+        This is a textual representation of the tree with the nodes that match the match dictionary
+        surrounded by square brackets.
+
+        :param match:
+        :return:
+        """
         if not self.children:
             return self.label
 
@@ -51,8 +80,10 @@ class TreeNode(MatchTree[V]):
         return f"[{node}]" if self in match else node
 
 
-# Wildcard class representing a wildcard in the tree
 class TreeWildcard(MatchTree):
+    """
+    Wildcard class representing a wildcard in the tree
+    """
     def __str__(self):
         return "_"
 
@@ -61,6 +92,13 @@ NVar = TypeVar('NVar', bound=BaseNode)
 
 
 class MatchingBaseNode(Generic[NVar], TreeNode[str]):
+    """
+    This class represents a match tree that is constructed from an IR BaseNode.
+
+    This class is used to glue the IR and the match tree together,
+    by representing the IR as a tree structure that can be matched against
+    and holding a reference to the original IR node.
+    """
 
     # The base node that this match tree represents
     base_node: NVar = None
@@ -119,14 +157,18 @@ class MatchingBaseNode(Generic[NVar], TreeNode[str]):
         return MatchingBaseNode[NVar](label, children, node)
 
 
-# Abstract base class for Symbol
 class Symbol(Generic[V]):
+    """
+    Abstract base class for Symbol in the automaton.
+    """
     pass
 
 
-# Index class representing an index symbol in the automaton
 @dataclass(frozen=True)
 class Index(Symbol[V]):
+    """
+    Index class representing an index symbol in the automaton
+    """
     value: int
 
     def __str__(self):
@@ -146,9 +188,11 @@ class Index(Symbol[V]):
         return True
 
 
-# Label class representing a label symbol in the automaton
 @dataclass(frozen=True)
 class Label(Symbol[V]):
+    """
+    Label class representing a label symbol in the automaton
+    """
     value: V
 
     def __str__(self):
@@ -169,8 +213,10 @@ class Label(Symbol[V]):
         return False
 
 
-# Wildcard class representing a wildcard in the tree
 class SymbolWildcard(Symbol):
+    """
+    Wildcard class representing a wildcard in the automaton
+    """
     def __init__(self):
         pass
 
@@ -187,9 +233,17 @@ class SymbolWildcard(Symbol):
         return True
 
 
-# Helper function to collect paths from root to leaf
-def _root_to_leaf(root: MatchTree, acc: Deque[Union[Label, Index]],
-                  paths: List[List[Union[Label, Index]]]):
+def _root_to_leaf(root: MatchTree,
+                  acc: Deque[Union[Label, Index]],
+                  paths: List[List[Union[Label, Index]]]) -> None:
+    """
+    Recursive helper function to collect paths from root to leaf.
+
+    :param root: Root of the tree
+    :param acc: Stack used for internal bookkeeping
+    :param paths: List of paths collected so far
+    :return:
+    """
     if isinstance(root, TreeNode):
         # if the node is a leaf, collect it
         if not root.get_children():
@@ -212,8 +266,13 @@ def _root_to_leaf(root: MatchTree, acc: Deque[Union[Label, Index]],
         paths.append(list(reversed(path)))
 
 
-# Wrapper function to collect all root-to-leaf paths
 def root_to_leaf_paths(root: MatchTree) -> List[List[Union[Label, Index]]]:
+    """
+    Returns a list of all paths from the root to the leaf nodes of the tree.
+
+    :param root:
+    :return:
+    """
     paths = []
     _root_to_leaf(root, deque(), paths)
     return paths

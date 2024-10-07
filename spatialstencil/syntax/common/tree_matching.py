@@ -39,7 +39,7 @@ class PatternMatcher(Generic[BaseNodeT]):
         self.paths = paths
         self.pattern = pattern
 
-    def match_pattern(self, subject: BaseNode) -> list[Match]:
+    def match_pattern(self, subject: BaseNodeT) -> list[Match]:
         """
         Return a list of matches for the pattern in the subject tree.
         The match contains the root node of the match and the wildcards
@@ -57,7 +57,7 @@ class PatternMatcher(Generic[BaseNodeT]):
 
         return result
 
-    def _collect_wildcards(self, pattern_node: BaseNode, subject_node: BaseNode) -> dict[str, BaseNode]:
+    def _collect_wildcards(self, pattern_node: BaseNodeT, subject_node: BaseNodeT) -> dict[str, BaseNodeT]:
         """
         Collect named wildcards from a pattern and a subject node.
 
@@ -70,8 +70,8 @@ class PatternMatcher(Generic[BaseNodeT]):
         return wildcard_matches
 
     def _collect_named_wildcards(self,
-                                 pattern_node: BaseNode | typing.Sequence[BaseNode],
-                                 subject: BaseNode | float | int | str | bool | list | tuple,
+                                 pattern_node: BaseNodeT | typing.Sequence[BaseNodeT],
+                                 subject: BaseNodeT | float | int | str | bool | list | tuple,
                                  wildcard_matches: dict) -> None:
         """
         Recursively collect named wildcards from a pattern and a subject node.
@@ -98,7 +98,7 @@ class PatternMatcher(Generic[BaseNodeT]):
             for pattern_field, subject_field in zip(pattern_node, subject):
                 self._collect_named_wildcards(pattern_field, subject_field, wildcard_matches)
 
-    def _match_pattern(self, subject: BaseNode) -> set[MatchingBaseNode]:
+    def _match_pattern(self, subject: BaseNodeT) -> list[MatchingBaseNode]:
         subject_tree = MatchingBaseNode.from_base_node(subject)
         matches = _match_pattern(None, subject_tree, self.paths, self.trie)
         return matches  # type: ignore
