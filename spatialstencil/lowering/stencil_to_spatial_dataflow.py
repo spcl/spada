@@ -67,9 +67,6 @@ class ProgramDataflow:
                                          comp: sast.ComputationBlock) -> list[spa.DataflowBlock]:
         """
         Generate dataflow blocks for a computation block.
-
-        :param comp:
-        :return:
         """
 
         # Keep track of a mapping from statements (or views) to participating streams
