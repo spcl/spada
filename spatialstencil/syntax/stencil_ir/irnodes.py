@@ -533,9 +533,6 @@ class Subscript(Node):
     def as_ir(self, indent: int = 0) -> str:
         return f'{self.value.as_ir()}[{", ".join(str(s) for s in self.subscript)}]'
 
-    def from_lark(self, args):
-        return Subscript(args[0], list(args[1]))
-
 
 @dataclass
 class MathCall(Node):

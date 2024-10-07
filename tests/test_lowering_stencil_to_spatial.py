@@ -74,12 +74,9 @@ def test_lowering_finishes():
 
         type_inference.infer_field_extents(program)
         domain = Cartesian(x=Interval(0, 128), y=Interval(0, 128), z=Interval(0, 80))
-        #type_inference.infer_types(program, domain=[128, 128, 80])
         type_inference.infer_field_domains(program, domain)
-        print(program.as_ir())
 
         spatial_program = lower_stencil_to_spatial(program)
-        print(spatial_program.as_ir())
 
         assert subgrids_dont_overlap(spatial_program)
 
