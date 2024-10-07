@@ -16,7 +16,7 @@ from spatialstencil.syntax.common.tree_matching import PatternTransformer
 from spatialstencil.syntax.stencil_ir.irnodes import *
 
 
-class CanonicalExpressionVisitor(NodeVisitor):
+class CanonicalizeExpression(NodeVisitor):
 
     def __init__(self):
         super().__init__()

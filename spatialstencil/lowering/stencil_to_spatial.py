@@ -12,7 +12,7 @@ from spatialstencil.syntax.spatial_ir.canonical_subgrids import canonicalize_sub
 from spatialstencil.syntax.spatial_ir.grid_geometry import split_rectangles
 
 from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
-from spatialstencil.syntax.stencil_ir.canonical_expression_visitor import CanonicalExpressionVisitor
+from spatialstencil.syntax.stencil_ir.canonicalize_expression import CanonicalizeExpression
 from spatialstencil.syntax.stencil_ir.type_inference import infer_scalar_types, infer_types
 
 
@@ -32,7 +32,7 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
 
     # We use a field per identifier NAME, that is, storage is re-used for equal version fields in the same scope.
 
-    canonicalizer = CanonicalExpressionVisitor()
+    canonicalizer = CanonicalizeExpression()
     canonicalizer.visit(stencil)
     infer_scalar_types(stencil, ScalarType.f32, ScalarType.i32)
 
