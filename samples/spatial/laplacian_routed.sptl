@@ -13,7 +13,19 @@ kernel @laplacian<I,J,K> (stream<f32>[I+2, J+2] readonly in_field,
   
   // Copy input data
   phase {
-    compute i16 i, i16 j in [0:I+2, 0:J+2] {
+    compute i16 i, i16 j in [1:I+1, 1:J+1] {
+      await receive(local_input, in_field[i, j])
+    }
+    compute i16 i, i16 j in [0:1, 0:J+2] {
+      await receive(local_input, in_field[i, j])
+    }
+    compute i16 i, i16 j in [I+1:I+2, 0:J+2] {
+      await receive(local_input, in_field[i, j])
+    }
+    compute i16 i, i16 j in [0:I+2, 0:1] {
+      await receive(local_input, in_field[i, j])
+    }
+    compute i16 i, i16 j in [0:I+2, J+1:J+2] {
       await receive(local_input, in_field[i, j])
     }
   }

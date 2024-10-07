@@ -1,6 +1,7 @@
 """
 Canonicalization passes for Spatial IR
 """
+from collections import defaultdict
 import copy
 from dataclasses import dataclass
 from spatialstencil.syntax.spatial_ir import irnodes as spir
@@ -53,10 +54,48 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
     respectively.
     """
     rect_place: dict[tuple[int, int, int, int], spir.PlaceBlock] = {}
-    rect_place: dict[tuple[int, int, int, int], spir.PlaceBlock] = {}
+    rect_dataflow: dict[tuple[int, int, int, int], spir.DataflowBlock] = {}
+    rect_compute: dict[tuple[int, int, int, int], spir.ComputeBlock] = {}
+    # After canonicalize phases, kernel body can only contain phases or place blocks
     for block in kernel.body:
-        pass
-    return kernel
+        rect = block.get_grid_rect()
+        if isinstance(block, spir.PlaceBlock):
+            if rect in rect_place:
+                rect_place[rect].statements.extend(block.statements)
+            else:
+                rect_place[rect] = copy.deepcopy(block)
+        elif isinstance(block, spir.Phase):
+            # Extend place blocks
+            for place in block.place:
+                rect = place.get_grid_rect()
+                if rect in rect_place:
+                    rect_place[rect].statements.extend(place.statements)
+                else:
+                    rect_place[rect] = copy.deepcopy(place)
+            # Extend dataflow blocks
+            for df in block.dataflow:
+                rect = df.get_grid_rect()
+                if rect in rect_dataflow:
+                    rect_dataflow[rect].statements.extend(df.statements)
+                else:
+                    rect_dataflow[rect] = copy.deepcopy(df)
+            # Concatenate compute blocks with an endphase statement
+            for compute in block.compute:
+                rect = compute.get_grid_rect()
+                if rect in rect_compute:
+                    rect_compute[rect].statements.append(spir.EndPhaseStatement())
+                    rect_compute[rect].statements.extend(compute.statements)
+                else:
+                    rect_compute[rect] = copy.deepcopy(compute)
+        else:
+            raise TypeError(f'Unexpected block type "{type(block).__name__}" in kernel. Was ``canonicalize_phases`` '
+                            'called?')
+
+    return spir.Kernel(
+        name=kernel.name,
+        parameters=copy.deepcopy(kernel.parameters),
+        arguments=copy.deepcopy(kernel.arguments),
+        body=list(rect_place.values()) + list(rect_dataflow.values()) + list(rect_compute.values()))
 
 
 @dataclass
@@ -82,12 +121,29 @@ class Rectangle(Generic[T]):
     y_range: tuple[int, int]
     metadata: T
 
+    def __str__(self) -> str:
+        return f'[{self.x_range[0]}:{self.x_range[1]}, {self.y_range[0]}:{self.y_range[1]}]'
+
 
 def consolidate_rectangles_to_equivalence_classes(kernel: spir.Kernel) -> list[Rectangle[PEBlock]]:
     """
     Ensures dataflow/compute/place exist for each equivalence class.
     """
-    return kernel
+    # After inline_phases, there should be one block of each type for each rectangle
+    result: dict[tuple[int, int, int, int], PEBlock] = defaultdict(lambda: PEBlock(None, None, None))
+    for block in kernel.body:
+        rect = block.get_grid_rect()
+        if isinstance(block, spir.PlaceBlock):
+            assert result[rect].place is None
+            result[rect].place = block
+        elif isinstance(block, spir.DataflowBlock):
+            assert result[rect].dataflow is None
+            result[rect].dataflow = block
+        elif isinstance(block, spir.ComputeBlock):
+            assert result[rect].compute is None
+            result[rect].compute = block
+
+    return [Rectangle((k[0], k[1]), (k[2], k[3]), v) for k, v in sorted(result.items())]
 
 
 def reduce_streams(kernel: spir.Kernel) -> spir.Kernel:

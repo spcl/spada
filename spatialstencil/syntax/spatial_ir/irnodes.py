@@ -260,7 +260,7 @@ class SubgridExpression(SpatialNode):
         assert isinstance(self.y_range, RangeExpression)
 
     def get_grid_rect(self) -> tuple[int, int, int, int]:
-        start_x, start_y = self.x_range.stop.value, self.y_range.stop.value
+        start_x, start_y = self.x_range.start.value, self.y_range.start.value
         stop_x, stop_y = self.x_range.stop.value, self.y_range.stop.value
         if not isinstance(start_x, ConstantLiteral):
             raise TypeError(f'Cannot obtain concrete grid size. x range value "{start_x.as_ir()}" is not constant')
