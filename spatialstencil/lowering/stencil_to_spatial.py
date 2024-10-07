@@ -95,7 +95,8 @@ def _construct_arg(name: str, arg_t: sast.FieldType) -> spa.KernelArgument:
     domain = arg_t.domain
     assert isinstance(domain, sast.Cartesian)
 
-    # TODO: Extent to scalar types & constants, detect write-only / readonly fields
+    # TODO: Extend to scalar types & constants
+    # TODO: detect write-only / readonly fields
     array_size_x = domain.x[1] - domain.x[0]
     array_size_y = domain.y[1] - domain.y[0]
     stream_type = spa.StreamType(arg_t.dtype)

@@ -15,12 +15,21 @@ BaseNodeK = TypeVar('BaseNodeK', bound=BaseNode)
 
 @dataclass(frozen=True)
 class Match:
+    """
+    A match contains the root node of the match and the wildcards that were matched in the subtree.
+    """
     root: BaseNode
     wildcards: dict[str, BaseNode]
 
 
 class PatternMatcher(Generic[BaseNodeT]):
+    """
+    Pattern matcher for trees.
 
+    The pattern matcher can be used to match a pattern tree to a subject tree.
+    All subtrees in the subject tree that match the pattern tree are returned.
+    Matches check for the structure and the labels of the nodes in the pattern tree.
+    """
     def __init__(self, pattern: BaseNodeT):
         assert not isinstance(pattern, Wildcard), "Root node cannot be a wildcard (for now)"
 
@@ -31,6 +40,14 @@ class PatternMatcher(Generic[BaseNodeT]):
         self.pattern = pattern
 
     def match_pattern(self, subject: BaseNode) -> list[Match]:
+        """
+        Return a list of matches for the pattern in the subject tree.
+        The match contains the root node of the match and the wildcards
+        that were matched, which are stored in a dictionary.
+
+        :param subject: the subject tree
+        :return: list of matches
+        """
         matches = self._match_pattern(subject)
 
         result = []
@@ -90,8 +107,15 @@ class PatternMatcher(Generic[BaseNodeT]):
 ContextT = TypeVar('ContextT')
 
 
-# Abstract PatternTransformer class
 class PatternTransformer(Generic[BaseNodeT, BaseNodeK, ContextT], ABC):
+    """
+    Abstract base class for pattern transformers.
+
+    The transformer can be used to apply a transformation to a tree based
+    on a pattern match. The pattern match is determined by the pattern
+    tree that is passed to the transformer. The transformer can be used
+    to apply the transformation to the first match or all matches.
+    """
 
     context: ContextT
 
@@ -245,6 +269,13 @@ def _match_pattern(pattern: TreeNode | None, subject: TreeNode, paths=None, trie
 
 
 def _build_trie(pattern: TreeNode) -> tuple[Trie[Symbol], list[list[Symbol]]]:
+    """
+    Build a trie of all root-to-leaf paths and an associated Aho-Corasick automaton from a pattern tree.
+    It returns the trie (which encapsulates an Aho-Corasick automaton) and the paths from the root to the leaf nodes.
+
+    :param pattern:
+    :return:
+    """
 
     assert isinstance(pattern, TreeNode)
     assert isinstance(pattern, TreeNode)
@@ -262,7 +293,9 @@ def _build_trie(pattern: TreeNode) -> tuple[Trie[Symbol], list[list[Symbol]]]:
 
 @dataclass
 class Entry:
+    """
+    Matching algorithm stack entry for internal pre-order book-keeping.
+    """
     node: TreeNode
     state: TrieNode[Symbol]
     visited: int
-
