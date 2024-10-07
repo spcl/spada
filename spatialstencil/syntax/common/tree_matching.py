@@ -196,10 +196,15 @@ class PatternTransformer(Generic[BaseNodeT, BaseNodeK, ContextT], ABC):
             result.append(self.transform(match.root, **match.wildcards))
         return result
 
-    def transform(self, root: BaseNodeT, **wildcards) -> list[BaseNodeK]:
+    def transform(self, root: BaseNodeT, **wildcards: BaseNodeT) -> list[BaseNodeK]:
         """
         This method must be implemented by subclasses to provide
         specific transformations for the pattern.
+
+        :param root: the root node of the match
+        :param wildcards: the wildcards that were matched. Each argument is named after the wildcard name
+        and contains the matched node. This provided a convenient way to access the matched nodes.
+        :return: the transformed nodes, if any, or an empty list if no transformation is applied.
         """
         pass
 
