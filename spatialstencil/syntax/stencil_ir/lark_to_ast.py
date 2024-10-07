@@ -116,10 +116,12 @@ class TreeToAST(lark.Transformer):
             raise SyntaxError('Explicit version 0 (%x#0) is not allowed, please use %x')
         return irnodes.Identifier(*args)
 
-    subscript = irnodes.Subscript.from_lark
     type_info = lambda self, args: irnodes.OperationType(*([arg] for arg in args))
     type_list_info = lambda self, args: irnodes.OperationType(*args)
     return_type_info = lambda self, args: irnodes.OperationType(*args)
+
+    def subscript(self, args, meta=None):
+        return irnodes.Subscript(args[0], list(args[1]))
 
     # Operators
     def unary_op(self, args, meta=None):

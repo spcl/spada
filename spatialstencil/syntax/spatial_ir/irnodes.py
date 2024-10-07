@@ -3,6 +3,7 @@ from typing import Union, Tuple, Optional, Literal
 from spatialstencil.syntax.common import visitor
 from spatialstencil.syntax.common.basenode import BaseNode
 from spatialstencil.syntax.common.types import ScalarType, IRType
+from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle
 
 
 @dataclass
@@ -90,6 +91,7 @@ class StreamType(SpatialNode, IRType):
 
     def as_ir(self, indent: int = 0) -> str:
         return f'stream<{self.element_type.as_ir()}>'
+
 
 
 # Arrays
@@ -190,6 +192,7 @@ class ArraySlice(SpatialNode):
     For single index access: array[i]
     For range access: array[start:end]
     For stride access: array[start:end:stride]
+
     """
     array: Identifier
     indices: list[Union['Expression', 'RangeExpression']]  # Handles single-index or ranges
@@ -225,6 +228,11 @@ class Expression(SpatialNode):
     def as_ir(self, indent: int = 0) -> str:
         return self.value.as_ir()
 
+    def eval(self) -> int | float | Identifier | Parameter | ArraySlice | UnaryOperator | BinaryOperator:
+        if isinstance(self.value, ConstantLiteral):
+            return self.value.value
+        return self.value
+
 
 @dataclass
 class RangeExpression(SpatialNode):
@@ -232,19 +240,41 @@ class RangeExpression(SpatialNode):
     A range expression (start:stop or start:stop:step).
     """
     start: Expression
-    stop: Expression
+    stop: Expression = None
     step: Expression = None
 
     def validate(self) -> None:
         assert isinstance(self.start, Expression)
-        assert isinstance(self.stop, Expression)
+        if self.stop is not None:
+            assert isinstance(self.stop, Expression)
         if self.step is not None:
+            assert self.stop is not None
             assert isinstance(self.step, Expression)
 
     def as_ir(self, indent: int = 0) -> str:
         if self.step:
             return f'{self.start.as_ir()}:{self.stop.as_ir()}:{self.step.as_ir()}'
-        return f'{self.start.as_ir()}:{self.stop.as_ir()}'
+        elif self.stop:
+            return f'{self.start.as_ir()}:{self.stop.as_ir()}'
+        else:
+            return self.start.as_ir()
+
+    @staticmethod
+    def from_args(start: int, stop: int, step: int = None) -> 'RangeExpression':
+        start_expr = Expression(ConstantLiteral(start, ScalarType.i32))
+        stop_expr = Expression(ConstantLiteral(stop, ScalarType.i32))
+        if step is not None:
+            step_expr = Expression(ConstantLiteral(step, ScalarType.i32))
+            return RangeExpression(start_expr, stop_expr, step_expr)
+        return RangeExpression(start_expr, stop_expr)
+
+    def as_tuple(self) -> tuple:
+        if self.step:
+            return self.start.eval(), self.stop.eval(), self.step.eval()
+        elif self.stop:
+            return self.start.eval(), self.stop.eval()
+        else:
+            return self.start.eval(),
 
 
 @dataclass
@@ -254,6 +284,17 @@ class SubgridExpression(SpatialNode):
     """
     x_range: RangeExpression
     y_range: RangeExpression
+
+    @staticmethod
+    def from_tuple(x: tuple[int, int], y: tuple[int, int]) -> 'SubgridExpression':
+        range_x = Expression(ConstantLiteral(x[0], ScalarType.i32))
+        range_x_end = Expression(ConstantLiteral(x[1], ScalarType.i32))
+        range_y = Expression(ConstantLiteral(y[0], ScalarType.i32))
+        range_y_end = Expression(ConstantLiteral(y[1], ScalarType.i32))
+
+        subgrid = SubgridExpression(RangeExpression(range_x, range_x_end),
+                                    RangeExpression(range_y, range_y_end))
+        return subgrid
 
     def validate(self) -> None:
         assert isinstance(self.x_range, RangeExpression)
@@ -275,6 +316,10 @@ class SubgridExpression(SpatialNode):
 
     def as_ir(self, indent: int = 0) -> str:
         return f'[{self.x_range.as_ir()} , {self.y_range.as_ir()}]'
+
+    @staticmethod
+    def from_rectangle(rectangle: Rectangle) -> 'SubgridExpression':
+        return SubgridExpression.from_tuple(rectangle.x_range, rectangle.y_range)
 
 
 @dataclass
@@ -327,6 +372,9 @@ class PlaceBlock(SpatialNode):
 
 @dataclass
 class RoutingHop(SpatialNode):
+    """
+    Represents one hop of dx, dy data movement
+    """
     offset: tuple[int, int]
 
     def as_ir(self, indent: int = 0) -> str:
@@ -480,6 +528,7 @@ class ReceiveStatement(Statement):
         if self.completion_name:
             assert isinstance(self.completion_name, Completion)
 
+
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         if self.completion_name:
@@ -493,10 +542,10 @@ class ReceiveGenerator(SpatialNode):
     """
     Receive data from a stream, used as a generator in a foreach statement.
     """
-    stream_name: Identifier
+    stream_name: Union[Identifier, ArraySlice]
 
     def validate(self) -> None:
-        assert isinstance(self.stream_name, Identifier)
+        assert isinstance(self.stream_name, (Identifier, ArraySlice))
 
     def as_ir(self, indent: int = 0) -> str:
         return f'receive({self.stream_name.as_ir()})'
@@ -516,12 +565,14 @@ class ForeachStatement(Statement):
     completion_name: Optional[Completion] = None
 
     def validate(self) -> None:
+        assert isinstance(self.variables, list)
+        assert isinstance(self.parameter_range, list)
         assert len(self.variables) == len(self.parameter_range)
-        assert all(isinstance(var, TypedIdentifier) for var in self.variables)
-        assert all(isinstance(rng, RangeExpression) for rng in self.parameter_range)
         assert isinstance(self.stream_variable, TypedIdentifier)
         assert isinstance(self.receive_stream, ReceiveGenerator)
         assert all(isinstance(stmt, Statement) for stmt in self.body)
+        assert all(isinstance(var, TypedIdentifier) for var in self.variables)
+        assert all(isinstance(rng, RangeExpression) for rng in self.parameter_range)
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -737,12 +788,12 @@ class Phase(SpatialNode):
         place_str = "\n".join(pl.as_ir(indent + 1) for pl in self.place)
 
         body_str = ""
+        if place_str:
+            body_str += f'{place_str}\n'
         if dataflow_str:
             body_str += f'{dataflow_str}\n'
         if compute_str:
             body_str += f'{compute_str}\n'
-        if place_str:
-            body_str += f'{place_str}\n'
 
         return f'{indent_str}{phase_str}{body_str}{indent_str}}}'
 
@@ -776,6 +827,12 @@ class KernelArgument(SpatialNode):
         if ann_str:
             return f'{self.dtype.as_ir()} {ann_str} {self.identifier.as_ir()}'
         return f'{self.dtype.as_ir()} {self.identifier.as_ir()}'
+
+
+# Tuple of Phase-Id and Block
+BlockInPhase = tuple[int, DataflowBlock | PlaceBlock | ComputeBlock]
+# Rectangle with Phase-Id and Block
+Subgrid = Rectangle[BlockInPhase]
 
 
 @dataclass
@@ -840,6 +897,33 @@ def _combine_grids(grid: tuple[int, int, int, int], current_grid: list[int]):
         current_grid[3] = max(gye, current_grid[3])
     return current_grid
 
+    def subgrids(self) -> list[Subgrid]:
+        rectangles = []
+        phase_id = 1
+        for elem in self.body:
+            if isinstance(elem, Phase):
+                rectangles.extend([Rectangle(a.subgrid.x_range.as_tuple(),
+                                             a.subgrid.y_range.as_tuple(),
+                                             (phase_id, a))
+                                   for a in elem.place])
+
+                rectangles.extend([Rectangle(a.subgrid.x_range.as_tuple(),
+                                             a.subgrid.y_range.as_tuple(),
+                                             (phase_id, a))
+                                  for a in elem.dataflow])
+
+                rectangles.extend([Rectangle(a.subgrid.x_range.as_tuple(),
+                                             a.subgrid.y_range.as_tuple(),
+                                             (phase_id, a))
+                                  for a in elem.compute])
+                phase_id += 1
+            else:
+                assert isinstance(elem, (ComputeBlock, DataflowBlock, PlaceBlock))
+                rectangles.append(Rectangle(elem.subgrid.x_range.as_tuple(),
+                                            elem.subgrid.y_range.as_tuple(),
+                                            (0, elem)))
+
+        return rectangles
 
 # Specialized visitors
 

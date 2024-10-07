@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from collections import deque
 import pprint
 from enum import Enum
+from typing import Generic
+
 
 
 @dataclass
@@ -109,6 +111,11 @@ class BaseNode:
         pass  # Nothing to validate
 
     def __post_init__(self):
+        # Check if there are any wildcards in the node, if so, skip validation
+        for _, field in self.iter_fields():
+            if isinstance(field, Wildcard):
+                return
+
         self.validate()
 
     def pretty(self) -> str:
@@ -127,11 +134,10 @@ class BaseNode:
             except AttributeError:
                 pass
 
-    def iter_child_nodes(self, ir_node_class: type['BaseNode'] = None):
+    def iter_child_nodes(self):
         """
         Yield all direct child AST/IR nodes of node.
         """
-        ir_node_class = ir_node_class or BaseNode
         for _, field in self.iter_fields():
             if isinstance(field, BaseNode):
                 yield field
@@ -151,3 +157,52 @@ class BaseNode:
             node = todo.popleft()
             todo.extend(node.iter_child_nodes())
             yield node
+
+
+T = typing.TypeVar('T', bound=typing.Any)
+
+
+class Wildcard(Generic[T], BaseNode):
+    """
+    Represents a wildcard in the tree.
+    """
+
+    def __init__(self, name: str = ''):
+        self.name = name
+
+    def __str__(self):
+        return f'Wildcard[{self.get_type().__name__}]({self.name})'
+
+    def __repr__(self):
+        return str(self)
+
+    def bind(self) -> typing.Any:
+        """
+        Masks the wildcard type, allowing it to be used
+        as part of the base node structure.
+
+        :return:
+        """
+        return self
+
+    def __call__(self, *args, **kwargs) -> typing.Any:
+        """
+        Masks the wildcard type, allowing it to be used
+        as part of the base node structure.
+
+        :return:
+        """
+        return self
+
+    def get_type(self):
+        """
+        Gets the type restriction of the wildcard.
+        If no type restriction is provided, defaults to Any.
+
+        :return: The type restriction of the wildcard.
+        """
+
+        if hasattr(self, '__orig_class__'):
+            return self.__orig_class__.__args__[0]
+        else:
+            return typing.Any  # Fallback to Any if no type argument is provided

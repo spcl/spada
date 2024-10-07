@@ -15,7 +15,7 @@
                 : view<[?,?,?], {(-1, 0, 0), (0, 0, 0)}, f32>
                 -> view<[?,?,?], {(0, 0, 0)}, f32>, view<[?,?,?], {(0, 0, 0)}, f32>
             {
-                return %in[0, 0, 0] + %in[-1, 0, 0],  4 * %in[-1, 0, 0]
+                return %in[0, 0, 0] + %in[-1, 0, 0],  4 * %in[-1, 0, 0] : f32, f32
             }
         %out_mat_1 = spst.materialize(%out_1) : view<[?,?,?], {(0, 0, 0)}, f32>
                                              -> view<[?,?,?], {(0, 0, 0), (0, 1, 0)}, f32>
@@ -25,12 +25,12 @@
         %out_3 = spst.statement(%out_mat_1)
             : view<[?,?,?], {(0, 0, 0), (0, 1, 0)}, f32>
             -> view<[?,?,?], {(0, 0, 0)}, f32> {
-                return %out_mat_1[0, 0, 0] - %out_mat_1[0, 1, 0]
+                return %out_mat_1[0, 0, 0] - %out_mat_1[0, 1, 0] : f32
             }
         %out_4 = spst.statement(%out_mat_2)
             : view<[?,?,?], {(0, 1, 0)}, f32>
             -> view<[?,?,?], {(0, 0, 0)}, f32> {
-                return 2 * %out_mat_2[0, 1, 0]
+                return 2 * %out_mat_2[0, 1, 0] : f32
             }
         return %out_3, %out_4: view<[?,?,?], {(0, 0, 0)}, f32>, view<[?,?,?], {(0, 0, 0)}, f32>
     }

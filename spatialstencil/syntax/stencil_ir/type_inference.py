@@ -169,9 +169,7 @@ class TypeInference(sast.NodeTransformer):
             if self.in_statement:
                 node.operation_type.source[i] = scalar_type
             else:
-                field_type = sast.ViewType.empty()
-                field_type.dtype = scalar_type
-                node.operation_type.source[i] = field_type
+                node.operation_type.source[i].dtype = scalar_type
 
         return node
 
@@ -180,7 +178,6 @@ class TypeInference(sast.NodeTransformer):
         node.operation_type.source[0] = output_type
         if node.result.name not in self.field_types:
             self.field_types[node.result.name] = output_type
-        node.operation_type.destination[0] = output_type
         return node
 
     # Field operations
@@ -230,6 +227,13 @@ class TypeInference(sast.NodeTransformer):
 
     def visit_ComputationBlock(self, node: sast.ComputationBlock):
         node = self.generic_visit(node)
+
+        # Use return value to infer output scalar types
+        assert isinstance(node.body[-1], sast.ReturnOp)
+        retvals = node.body[-1].operation_type.source
+        for dst, retval in zip(node.outputs, retvals):
+            self.field_types[dst.name] = retval.dtype
+
         self._modify_typeinfo(node.operation_type, node.inputs, node.outputs)
         return node
 

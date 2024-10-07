@@ -522,7 +522,7 @@ class OperationConverter(ast.NodeTransformer):
         value = self.visit(node.value)
         assert isinstance(node.slice, ast.Tuple)  # Ensures single value rather than slices
         subscript = ast.literal_eval(node.slice)
-        return sast.Subscript(value, subscript)
+        return sast.Subscript(value, list(subscript))
 
     def visit_Name(self, node: ast.Name) -> sast.Identifier:
         return _parse_field(node.id)
