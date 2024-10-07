@@ -93,7 +93,6 @@ class StreamType(SpatialNode, IRType):
         return f'stream<{self.element_type.as_ir()}>'
 
 
-
 # Arrays
 @dataclass
 class ArrayType(SpatialNode, IRType):
@@ -292,8 +291,7 @@ class SubgridExpression(SpatialNode):
         range_y = Expression(ConstantLiteral(y[0], ScalarType.i32))
         range_y_end = Expression(ConstantLiteral(y[1], ScalarType.i32))
 
-        subgrid = SubgridExpression(RangeExpression(range_x, range_x_end),
-                                    RangeExpression(range_y, range_y_end))
+        subgrid = SubgridExpression(RangeExpression(range_x, range_x_end), RangeExpression(range_y, range_y_end))
         return subgrid
 
     def validate(self) -> None:
@@ -527,7 +525,6 @@ class ReceiveStatement(Statement):
         assert isinstance(self.stream_name, (Identifier, ArraySlice))
         if self.completion_name:
             assert isinstance(self.completion_name, Completion)
-
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -875,6 +872,33 @@ class Kernel(SpatialNode):
         return f'kernel @{self.name}<{param_str}>({arg_str}) {{\n{body_str}\n}}' if self.name \
             else f'kernel<{param_str}>({arg_str}) {{\n{body_str}\n}}'
 
+    def subgrids(self) -> list[Subgrid]:
+        rectangles = []
+        phase_id = 1
+        for elem in self.body:
+            if isinstance(elem, Phase):
+                rectangles.extend([
+                    Rectangle(a.subgrid.x_range.as_tuple(), a.subgrid.y_range.as_tuple(), (phase_id, a))
+                    for a in elem.place
+                ])
+
+                rectangles.extend([
+                    Rectangle(a.subgrid.x_range.as_tuple(), a.subgrid.y_range.as_tuple(), (phase_id, a))
+                    for a in elem.dataflow
+                ])
+
+                rectangles.extend([
+                    Rectangle(a.subgrid.x_range.as_tuple(), a.subgrid.y_range.as_tuple(), (phase_id, a))
+                    for a in elem.compute
+                ])
+                phase_id += 1
+            else:
+                assert isinstance(elem, (ComputeBlock, DataflowBlock, PlaceBlock))
+                rectangles.append(
+                    Rectangle(elem.subgrid.x_range.as_tuple(), elem.subgrid.y_range.as_tuple(), (0, elem)))
+
+        return rectangles
+
 
 # Helper functions
 def _combine_grids(grid: tuple[int, int, int, int], current_grid: list[int]):
@@ -897,33 +921,6 @@ def _combine_grids(grid: tuple[int, int, int, int], current_grid: list[int]):
         current_grid[3] = max(gye, current_grid[3])
     return current_grid
 
-    def subgrids(self) -> list[Subgrid]:
-        rectangles = []
-        phase_id = 1
-        for elem in self.body:
-            if isinstance(elem, Phase):
-                rectangles.extend([Rectangle(a.subgrid.x_range.as_tuple(),
-                                             a.subgrid.y_range.as_tuple(),
-                                             (phase_id, a))
-                                   for a in elem.place])
-
-                rectangles.extend([Rectangle(a.subgrid.x_range.as_tuple(),
-                                             a.subgrid.y_range.as_tuple(),
-                                             (phase_id, a))
-                                  for a in elem.dataflow])
-
-                rectangles.extend([Rectangle(a.subgrid.x_range.as_tuple(),
-                                             a.subgrid.y_range.as_tuple(),
-                                             (phase_id, a))
-                                  for a in elem.compute])
-                phase_id += 1
-            else:
-                assert isinstance(elem, (ComputeBlock, DataflowBlock, PlaceBlock))
-                rectangles.append(Rectangle(elem.subgrid.x_range.as_tuple(),
-                                            elem.subgrid.y_range.as_tuple(),
-                                            (0, elem)))
-
-        return rectangles
 
 # Specialized visitors
 
