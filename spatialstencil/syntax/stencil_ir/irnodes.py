@@ -574,7 +574,6 @@ class Expression(Node):
         if isinstance(self.value, (int, float, Identifier, Subscript, MathCall)):
             return 0
         if isinstance(self.value, UnaryOperator):
-            print(self.value.value, "Unary")
             return 1 + self.value.value.depth()
         if isinstance(self.value, BinaryOperator):
             return 1 + max(self.value.left.depth(), self.value.right.depth())
