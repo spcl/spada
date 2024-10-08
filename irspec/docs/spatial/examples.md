@@ -298,7 +298,7 @@ kernel <I, J, K>hdiff(stream<f32>[I+2, J+2] readonly in_stream,
         // See the 2D laplacian example
         // We store in_field_east and in_field_south
 
-        dataflow i16 i, i16 j in [1:I, 1:J] {
+        compute i16 i, i16 j in [1:I, 1:J] {
     
             completion f = map i32 k in [0:K] {
                 lap_field[k] = in_field[k] * 4;
