@@ -35,18 +35,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     kernel = canonicalization.inline_phases(kernel)
     print(kernel.as_ir())
 
-    # Create mapping between SpIR blocks and PE rectangles
-    # TODO: create empty blocks as necessary
+    # Create mapping between SpIR blocks and PE rectangles. Creates empty blocks as necessary
     rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
-
-    # Correctness assertion
-    for rect in rectangles:
-        if rect.metadata.compute is None:
-            raise ValueError(f'Malformed Spatial IR program: rectangle {rect} has no compute block')
-        if rect.metadata.dataflow is None:
-            raise ValueError(f'Malformed Spatial IR program: rectangle {rect} has no dataflow block')
-        if rect.metadata.place is None:
-            raise ValueError(f'Malformed Spatial IR program: rectangle {rect} has no place block')
 
     # Collect scalar argument types
     scalar_argument_types = []

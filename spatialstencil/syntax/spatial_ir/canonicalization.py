@@ -5,6 +5,7 @@ from collections import defaultdict
 import copy
 from dataclasses import dataclass
 from spatialstencil.syntax.spatial_ir import irnodes as spir
+from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle
 
 
 def canonicalize_phases(kernel: spir.Kernel) -> spir.Kernel:
@@ -109,22 +110,6 @@ class PEBlock:
     compute: spir.ComputeBlock
 
 
-# From grid_geometry.py (awaiting merge)
-from typing import Generic, TypeVar
-
-T = TypeVar('T')
-
-
-@dataclass(frozen=True)
-class Rectangle(Generic[T]):
-    x_range: tuple[int, int]
-    y_range: tuple[int, int]
-    metadata: T
-
-    def __str__(self) -> str:
-        return f'[{self.x_range[0]}:{self.x_range[1]}, {self.y_range[0]}:{self.y_range[1]}]'
-
-
 def consolidate_rectangles_to_equivalence_classes(kernel: spir.Kernel) -> list[Rectangle[PEBlock]]:
     """
     Ensures dataflow/compute/place exist for each equivalence class.
@@ -143,7 +128,25 @@ def consolidate_rectangles_to_equivalence_classes(kernel: spir.Kernel) -> list[R
             assert result[rect].compute is None
             result[rect].compute = block
 
+    # Fill in remainder of PEBlock with empty scopes (e.g., blocks without dataflow)
+    for rect, pe in result.items():
+        if pe.place is None:
+            pe.place = spir.PlaceBlock(_make_vars(), spir.SubgridExpression.from_tuple(rect[0:2], rect[2:4]), [])
+        if pe.dataflow is None:
+            pe.dataflow = spir.DataflowBlock(_make_vars(), spir.SubgridExpression.from_tuple(rect[0:2], rect[2:4]), [])
+        if pe.compute is None:
+            pe.compute = spir.ComputeBlock(_make_vars(), spir.SubgridExpression.from_tuple(rect[0:2], rect[2:4]), [])
+
     return [Rectangle((k[0], k[1]), (k[2], k[3]), v) for k, v in sorted(result.items())]
+
+def _make_vars():
+    """
+    Helper function that creates two unused variables for an empty block.
+    """
+    return [
+        spir.TypedIdentifier(spir.ScalarType.u16, spir.Identifier('__i', 0)),
+        spir.TypedIdentifier(spir.ScalarType.u16, spir.Identifier('__j', 0))
+    ]
 
 
 def reduce_streams(kernel: spir.Kernel) -> spir.Kernel:
