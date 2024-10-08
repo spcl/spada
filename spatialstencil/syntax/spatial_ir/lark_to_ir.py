@@ -151,7 +151,7 @@ class TreeToSpatialIR(lark.Transformer):
             args = args[1:]
         return cls(*args, completion_name=completion)
 
-    for_stmt = lambda self, args: self._scope_wrapper(irnodes.ForStatement, args)
+    for_stmt = lambda self, args: irnodes.ForStatement.from_lark(args)
     map_stmt = lambda self, args: self._scope_wrapper(irnodes.MapStatement, args)
     async_stmt = irnodes.AsyncBlock.from_lark
 
