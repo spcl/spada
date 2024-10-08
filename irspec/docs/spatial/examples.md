@@ -30,34 +30,22 @@ kernel vadv<I,J,K>(stream<f32>[I, J] utens_stage,
   }
   
   phase {
-
-    // Set up communication streams
-    // The only PE-PE communication is for wcon, which is sent to the west  
-    // We additionally set up a stream for the inputs and outputs
-    dataflow i16 i, i16 j in [0:I, 0:J] {
-      stream<f32> u_stage_c = u_stage[i, j];
-      stream<f32> wcon_c = wcon[i, j];
-      stream<f32> u_pos_c = u_pos[i, j];
-      stream<f32> utens_c = utens[i, j];
-      stream<f32> utens_stage_c = utens_stage[i, j];
-    }
     
     // Copy the data
-    
     compute i16 i, i16 j in [0:I, 0:J] {
-        foreach k, x in [0:K], receive(u_stage_c) {
+        foreach k, x in [0:K], receive(u_stage[i, j]) {
             u_stage_l[k] = x;
         }
-        foreach k, x in [0:K], receive(wcon_c) {
+        foreach k, x in [0:K], receive(wcon[i, j]) {
             wcon_l[k] = x;
         }
-        foreach k, x in [0:K], receive(u_pos_c) {
+        foreach k, x in [0:K], receive(u_pos[i, j]) {
             u_pos_l[k] = x;
         }
-        foreach k, x in [0:K], receive(utens_c) {
+        foreach k, x in [0:K], receive(utens[i, j]) {
             utens_l[k] = x;
         }
-        foreach k, x in [0:K], receive(utens_stage_c) {
+        foreach k, x in [0:K], receive(utens_stage[i, j]) {
             utens_stage_l[k] = x;
         }
         // Exploits implicit completions at the end of each phase
@@ -91,9 +79,6 @@ kernel vadv<I,J,K>(stream<f32>[I, J] utens_stage,
     // We additionally set up a stream for the outputs
     dataflow i16 i, i16 j in [0:I, 0:J] {
       stream<f32> westwards = relative_stream(-1, 0);
-      
-      stream<f32> utens_stage_c = utens_stage[i, j];
-      stream<f32> datacol_c = datacol[i, j];
     }
   
     ////
@@ -150,8 +135,8 @@ kernel vadv<I,J,K>(stream<f32>[I, J] utens_stage,
         }
   
         // Copy the data to the output
-        send(datacol_l, datacol_c);
-        send(utens_stage_l, utens_stage_c);
+        send(datacol_l, datacol[i, j]);
+        send(utens_stage_l, utens_stage[i, j]);
     }
   }
 
@@ -183,18 +168,10 @@ kernel laplacian<I,J,K> (stream<f32>[I+2, J+2] readonly in_field,
   /// Copy input data
   
   phase {
-  
-    dataflow i16 i, i16 j in [0:I+2, 0:J+2] {
-      stream<f32> in_field_l = in_field[i, j];
-    }
-  
     compute i16 i, i16 j in [0:I+2, 0:J+2] {
-      foreach k, x in [0:K], receive(in_field_l) {
-        local_input[k] = x;
-      }
+      receive(lap_field[i, j], local_input);
     }
   }
-  
 
   phase {
     // Set up communication streams
@@ -206,10 +183,6 @@ kernel laplacian<I,J,K> (stream<f32>[I+2, J+2] readonly in_field,
        
     }
 
-    dataflow i16 i, i16 j in [1:I+1, 1:J+1] {
-        stream<f32> lap_field_l = lap_field[i, j];
-    }
-  
     // Edge senders
     compute i16 i, i16 j in [0, 1:J] {
         // Streaming send to the right
@@ -252,7 +225,7 @@ kernel laplacian<I,J,K> (stream<f32>[I+2, J+2] readonly in_field,
         // ...
 
         // after all computation has finished:
-        await send(local_result, lap_field_l);   
+        await send(local_result, lap_field[i, j]);   
     }  
   }
 }
@@ -277,12 +250,12 @@ def horizontal_diffusion(in_field: Field3D, out_field: Field3D,
 
 
 ```rust title="Horizontal Diffusion in Spatial IR"
-kernel <I, J, K>hdiff(stream<f32>[I, J] readonly in_stream,
+kernel <I, J, K>hdiff(stream<f32>[I+2, J+2] readonly in_stream,
                       stream<f32>[I, J] writeonly out_stream,
                       stream<f32>[I, J] readonly coeff_stream) {
 
     // Data placement
-    place i16 i, i16 j in [0:I, 0:J] {
+    place i16 i, i16 j in [0:I+1, 0:J+1] {
         f32[K] in_field;
         // in field of the east neighbor
         f32[K] in_field_east;
@@ -298,18 +271,11 @@ kernel <I, J, K>hdiff(stream<f32>[I, J] readonly in_stream,
     
     // Read input
     phase {
-        dataflow i16 i, i16 j in [0:I, 0:J] {
-            stream<f32> in_field_l = in_field[i, j];
-            stream<f32> coeff_l = coeff[i, j];
+        compute i16 i, i16 j in [1:I, 1:J] {
+           receive(coeff_stream[i-1, j-1], coeff);
         }
-        
-        compute i16 i, i16 j in [0:I, 0:J] {
-            foreach k, x in [0:K], receive(in_field_l) {
-                in_field[k] = x;
-            }
-            foreach k, x in [0:K], receive(coeff_l) {
-                coeff[k] = x;
-            }
+        compute i16 i, i16 j in [0:I+1, 0:J+1] {
+            receive(in_stream[i, j], in_field);
         }
     }
     
@@ -319,7 +285,7 @@ kernel <I, J, K>hdiff(stream<f32>[I, J] readonly in_stream,
     phase {
     
         // Set up communication streams
-        dataflow i16 i, i16 j in [0:I+2, 0:J+2] {
+        dataflow i16 i, i16 j in [0:I+1, 0:J+1] {
             stream<f32> eastwards = relative_stream(1, 0);
             stream<f32> westwards = relative_stream(-1, 0);
             stream<f32> northwards = relative_stream(0, -1);
@@ -329,34 +295,39 @@ kernel <I, J, K>hdiff(stream<f32>[I, J] readonly in_stream,
         // See the 2D laplacian example
         // We store in_field_east and in_field_south
 
-        completion f = map i32 k in [0:K] {
-            lap_field[k] = in_field[k] * 4;
+        dataflow i16 i, i16 j in [1:I, 1:J] {
+    
+            completion f = map i32 k in [0:K] {
+                lap_field[k] = in_field[k] * 4;
+            }
+      
+            comp c = send(lap_field, westwards);
+    
+            await f;
+            
+            // Result needed: store in in_field_east
+            await foreach i32 k, f32 x in [0:K], receive(westwards) {
+                in_field_east[k] = x;
+            }
+            // Then, decrement the lap_field using the stored in_field_east
+            await map i32 k in [0:K] {
+                lap_field[k] = lap_field[k] - in_field_east[k];
+            }
+            
+            await c;
+    
+            comp c2 = send(local_input, eastwards);
+            
+            // result not needed, decrement directly.
+            await foreach i32 k, f32 x in [0:K], receive(eastwards) {
+                lap_field[k] = lap_field[k] - x;
+            }
+            
+            await c2;
+            // ...
         }
-  
-        comp c = send(lap_field, westwards);
-
-        await f;
-        
-        // Result needed: store in in_field_east
-        await foreach i32 k, f32 x in [0:K], receive(westwards) {
-            in_field_east[k] = x;
-        }
-        // Then, decrement the lap_field using the stored in_field_east
-        await map i32 k in [0:K] {
-            lap_field[k] = lap_field[k] - in_field_east[k];
-        }
-        
-        await c;
-
-        comp c2 = send(local_input, eastwards);
-        
-        // result not needed, decrement directly.
-        await foreach i32 k, f32 x in [0:K], receive(eastwards) {
-            lap_field[k] = lap_field[k] - x;
-        }
-        
-        await c2;
-        // ...
+       
+        // Boundary conditions (omitted)
     }
     
     phase {
@@ -364,7 +335,7 @@ kernel <I, J, K>hdiff(stream<f32>[I, J] readonly in_stream,
         // Note that we could re-use the same streams as in the previous phase
         // And we could also merge the two phases into one
     
-        dataflow i16 i, i16 j in [0:I, 0:J] {
+        dataflow i16 i, i16 j in [0:I+1, 0:J+1] {
             // Note that the directions are reversed compared to gt4py because
             // we specify the offsets to send to, wheres it specifies the offsets to read from
             stream<f32> west = relative_stream(-1, 0);
@@ -422,7 +393,7 @@ kernel <I, J, K>hdiff(stream<f32>[I, J] readonly in_stream,
             // We may overlap sending of fly with the computation of out_field
             await c5;
             
-            send(out_field, out_stream);
+            send(out_field, out_stream[i-1, j-1);
         }
         
         compute i16 i, i16 j in [0, 1:J-1] {
@@ -484,22 +455,22 @@ kernel conv<J>(stream<f32>[J] readonly input,
             y = x * kernel[1];
 
             // Send the data to the right
-            comp_east = send(x, eastwards);
+            comp_west = send(x, westwards);
 
-            await foreach i16 k, f32 x2 in [0:1], receive(eastwards) {
+            await foreach i16 k, f32 x2 in [0:1], receive(westwards) {
               y = y + x2 * kernel[0];
             }
 
-            await comp_east;
+            await comp_west;
 
             // Send the data to the left
-            comp_west = send(x, westwards);
+            comp_east = send(x, eastwards);
 
-            await foreach i16 k, f32 x3 in [0:1], receive(westwards) {
+            await foreach i16 k, f32 x3 in [0:1], receive(eastwards) {
                y = y + x3 * kernel[2];
             }
 
-            await comp_west;
+            await comp_east;
 
             // Send the result to the output
             await send(y, output[i]);
@@ -510,13 +481,13 @@ kernel conv<J>(stream<f32>[J] readonly input,
     compute i16 i, i16 j in [0, 0] {
         // Streaming receive
         foreach f32 x in receive(input[i]) {
-            // Send the data to the right
+            // Send the data to the left
             // S1
             comp_east = send(x, eastwards);
             // S2
             y = x * kernel[1];
             // S3
-            await foreach i16 x, f32 y in [0:1], receive(westwards) {
+            await foreach i16 x, f32 y in [0:1], receive(eastwards) {
                 // S4
                 y = y + x * kernel[2];
             }

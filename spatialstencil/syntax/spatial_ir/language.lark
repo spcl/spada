@@ -105,7 +105,7 @@ subscript : identifier "[" subscript_slice "]"
 ///////////////////////////////////////////////////
 // Grid/Subgrid expressions
 
-range_expression : value_expr ":" value_expr (":" value_expr)?
+range_expression : value_expr (":" value_expr)? (":" value_expr)?
 subgrid_expression : "[" range_expression ("," range_expression)* "]"
 subgrid_expression_2d : "[" range_expression "," range_expression "]"
 ///////////////////////////////////////////////////
