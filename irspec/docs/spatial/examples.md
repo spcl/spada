@@ -169,7 +169,7 @@ kernel laplacian<I,J,K> (stream<f32>[I+2, J+2] readonly in_field,
   
   phase {
     compute i16 i, i16 j in [0:I+2, 0:J+2] {
-      receive(lap_field[i, j], local_input);
+      await receive(lap_field[i, j], local_input);
     }
   }
 
@@ -272,10 +272,10 @@ kernel <I, J, K>hdiff(stream<f32>[I+2, J+2] readonly in_stream,
     // Read input
     phase {
         compute i16 i, i16 j in [1:I, 1:J] {
-           receive(coeff_stream[i-1, j-1], coeff);
+           await receive(coeff, coeff_stream[i-1, j-1]);
         }
         compute i16 i, i16 j in [0:I+1, 0:J+1] {
-            receive(in_stream[i, j], in_field);
+            await receive(in_field, in_stream[i, j]);
         }
     }
     
@@ -393,7 +393,7 @@ kernel <I, J, K>hdiff(stream<f32>[I+2, J+2] readonly in_stream,
             // We may overlap sending of fly with the computation of out_field
             await c5;
             
-            send(out_field, out_stream[i-1, j-1);
+            await send(out_field, out_stream[i-1, j-1);
         }
         
         compute i16 i, i16 j in [0, 1:J-1] {
@@ -496,7 +496,7 @@ kernel conv<J>(stream<f32>[J] readonly input,
             
             // S6
             // Send the result to the output
-            send(y, output_local);
+            await send(y, output_local);
         }
     }
 

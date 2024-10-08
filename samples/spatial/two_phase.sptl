@@ -7,7 +7,7 @@ kernel @two_phase<K> (stream<f32>[4] readonly in,
 
     phase {
         compute i32 i, i32 j in [0:4, 0] {
-            await receive(in[i], a)
+            await receive(a, in[i])
         }
     }
 
