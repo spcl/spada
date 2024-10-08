@@ -94,8 +94,8 @@ kernel vadv<I,J,K>(stream<f32>[I, J] utens_stage,
   
     compute i16 i, i16 j in [1:I, 0:J] {
         
-        send(wcon_local[0:1], westwards);
-        send(wcon_local[1:K], westwards);
+        completion c1 = send(wcon_local[0:1], westwards);
+        completion c2 = send(wcon_local[1:K], westwards);
 
         // base of the forward
         await foreach i32 k, f32 x in [0:1], receive(westwards) {
@@ -134,9 +134,12 @@ kernel vadv<I,J,K>(stream<f32>[I, J] utens_stage,
           utens_stage_l[k] = dtr_stage * (datacol_l[k] - u_pos_l[k]);
         }
   
+        await c1
+        await c2
+  
         // Copy the data to the output
-        send(datacol_l, datacol[i, j]);
-        send(utens_stage_l, utens_stage[i, j]);
+        await send(datacol_l, datacol[i, j]);
+        await send(utens_stage_l, utens_stage[i, j]);
     }
   }
 
@@ -186,13 +189,13 @@ kernel laplacian<I,J,K> (stream<f32>[I+2, J+2] readonly in_field,
     // Edge senders
     compute i16 i, i16 j in [0, 1:J] {
         // Streaming send to the right
-        send(local_input, eastwards);
+        completion c = send(local_input, eastwards);
         // We receive nothing
     }
     
     compute i16 i, i16 j in [I+1, 1:J] {
         // Streaming send to the left
-        send(tosend, westwards);
+        completion c = send(tosend, westwards);
         // We receive nothing
     }
     // ...
@@ -204,7 +207,7 @@ kernel laplacian<I,J,K> (stream<f32>[I+2, J+2] readonly in_field,
         }
   
         // No data race, both map and send are reading from local_input
-        send(local_input, westwards);
+        completion w1 = send(local_input, westwards);
 
         // Example of an await for a completion.
         await f;
@@ -218,7 +221,7 @@ kernel laplacian<I,J,K> (stream<f32>[I+2, J+2] readonly in_field,
         // Writing to the same array from multiple foreach blocks concurrently
         // is considered a data race.
         // Hence, we need to run one after the other.
-        send(local_input, eastwards);
+        completion e1 = send(local_input, eastwards);
         await foreach i32 k, f32 x in [0:K], receive(eastwards) {
           local_result[k] = local_result[k] - x;
         }
@@ -301,7 +304,7 @@ kernel <I, J, K>hdiff(stream<f32>[I+2, J+2] readonly in_stream,
                 lap_field[k] = in_field[k] * 4;
             }
       
-            comp c = send(lap_field, westwards);
+            completion c = send(lap_field, westwards);
     
             await f;
             
@@ -316,7 +319,7 @@ kernel <I, J, K>hdiff(stream<f32>[I+2, J+2] readonly in_stream,
             
             await c;
     
-            comp c2 = send(local_input, eastwards);
+            completion c2 = send(local_input, eastwards);
             
             // result not needed, decrement directly.
             await foreach i32 k, f32 x in [0:K], receive(eastwards) {
@@ -455,7 +458,7 @@ kernel conv<J>(stream<f32>[J] readonly input,
             y = x * kernel[1];
 
             // Send the data to the right
-            comp_west = send(x, westwards);
+            completion comp_west = send(x, westwards);
 
             await foreach i16 k, f32 x2 in [0:1], receive(westwards) {
               y = y + x2 * kernel[0];
@@ -464,7 +467,7 @@ kernel conv<J>(stream<f32>[J] readonly input,
             await comp_west;
 
             // Send the data to the left
-            comp_east = send(x, eastwards);
+            completion comp_east = send(x, eastwards);
 
             await foreach i16 k, f32 x3 in [0:1], receive(eastwards) {
                y = y + x3 * kernel[2];
@@ -483,7 +486,7 @@ kernel conv<J>(stream<f32>[J] readonly input,
         foreach f32 x in receive(input[i]) {
             // Send the data to the left
             // S1
-            comp_east = send(x, eastwards);
+            completion comp_east = send(x, eastwards);
             // S2
             y = x * kernel[1];
             // S3
