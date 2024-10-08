@@ -136,6 +136,11 @@ class TreeToSpatialIR(lark.Transformer):
     field_declaration = irnodes.FieldDeclaration.from_lark
     subgrid_expression_2d = irnodes.SubgridExpression.from_lark
 
+
+    def hop(self, args):
+        o = (args[0], args[1])
+        return irnodes.RoutingHop(o)
+
     def stream_declaration(self, args):
         args[0] = StreamType(args[0])
         return irnodes.RelativeStreamDeclaration(*args)

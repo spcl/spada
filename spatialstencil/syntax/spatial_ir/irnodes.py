@@ -359,7 +359,12 @@ class RoutingHop(SpatialNode):
     """
     Represents one hop of dx, dy data movement
     """
-    offset = tuple[int, int]
+    offset: tuple[int, int]
+
+    def validate(self) -> None:
+        assert isinstance(self.offset, tuple)
+        assert len(self.offset) == 2
+        assert all(isinstance(i, int) for i in self.offset)
 
     def as_ir(self, indent: int = 0) -> str:
         return f'({self.offset[0]}, {self.offset[1]})'
@@ -375,7 +380,8 @@ class RoutingDeclaration(SpatialNode):
 
     def validate(self) -> None:
         if isinstance(self.hops, list):
-            for dx, dy in self.hops:
+            for r in self.hops:
+                dx, dy = r.offset
                 assert abs(dx) + abs(dy) == 1, "Each hop must have an absolute sum of 1."
 
     def as_ir(self, indent: int = 0) -> str:
