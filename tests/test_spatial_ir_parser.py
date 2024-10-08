@@ -103,10 +103,16 @@ def test_spatial_roundtrip_two_phase_unrouted():
     _rountrip_test(file)
 
 
+def test_spatial_roundtrip_two_phase_split():
+    file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spatial', 'two_phase_split.sptl')
+    _rountrip_test(file)
+
+
 if __name__ == '__main__':
     test_spatial_roundtrip_laplacian()
     test_spatial_visitor()
     test_spatial_roundtrip_two_phase()
     test_spatial_roundtrip_two_phase_unrouted()
+    test_spatial_roundtrip_two_phase_split()
     test_spatial_roundtrip_forward()
     test_spatial_roundtrip_backward()
