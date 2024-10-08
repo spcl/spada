@@ -73,7 +73,33 @@ def test_spatial_roundtrip_two_phase():
     assert ir_1 == ir_2
 
 
+def test_spatial_roundtrip_forward():
+    """
+    Tests a roundtrip IR->parse->IR->parse->IR for differences.
+    """
+    file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spatial', 'forward_sum.sptl')
+    program = parser.parse_file(file)
+    ir_1 = program.as_ir()
+    program2 = parser.parse_string(ir_1)
+    ir_2 = program2.as_ir()
+    assert ir_1 == ir_2
+
+
+def test_spatial_roundtrip_backward():
+    """
+    Tests a roundtrip IR->parse->IR->parse->IR for differences.
+    """
+    file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spatial', 'backward_sum.sptl')
+    program = parser.parse_file(file)
+    ir_1 = program.as_ir()
+    program2 = parser.parse_string(ir_1)
+    ir_2 = program2.as_ir()
+    assert ir_1 == ir_2
+
+
 if __name__ == '__main__':
     test_spatial_roundtrip_laplacian()
     test_spatial_visitor()
     test_spatial_roundtrip_two_phase()
+    test_spatial_roundtrip_forward()
+    test_spatial_roundtrip_backward()

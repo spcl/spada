@@ -1,0 +1,16 @@
+/**
+ * Simple vertical aggregation without any communication
+ **/
+kernel @add<N,K>(stream<f32>[N, N] readonly a,
+                 stream<f32>[N, N] writeonly out) {
+    place u16 i, u16 j in [0:N, 0:N] {
+        f32 local_a;
+    }
+    compute u16 i, u16 j in [0:N, 0:N] {
+        await receive(local_a, a[i, j]);
+        for i32 i in [1:K] {
+            local_a[i] = local_a[i-1] + local_a[i];
+        }
+        await send(local_a, out[i, j]);
+    }
+}
