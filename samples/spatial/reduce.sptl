@@ -7,14 +7,14 @@
         f32 local
     }
     dataflow u16 i, u16 j in [N-1:N, 0:1] {
-        stream<f32> snd = relative_stream(-1, 0) {
+        stream<f32> westwards = relative_stream(-1, 0) {
             hops = [(-1, 0)],
             channel = 0
         }
     }
     compute u16 i, u16 j in [N-1:N, 0:1] {
         await receive(local, inp[i])
-        await send(local_a, snd)
+        await send(local, westwards)
     }
 
     // Middle
@@ -23,20 +23,16 @@
         f32 rcv_val
     }
     dataflow u16 i, u16 j in [1:N-1, 0:1] {
-        stream<f32> rcv = relative_stream(1, 0) {
-            hops = [(1, 0)],
-            channel = 0
-        }
-        stream<f32> snd = relative_stream(-1, 0) {
+        stream<f32> westwards = relative_stream(-1, 0) {
             hops = [(-1, 0)],
             channel = 0
         }
     }
     compute u16 i, u16 j in [1:N-1, 0:1] {
         await receive(local, inp[i])
-        await receive(rcv_val, rcv)
+        await receive(rcv_val, westwards)
         rcv_val = rcv_val + local
-        await send(rcv_val, snd)
+        await send(rcv_val, westwards)
     }
 
     // End
@@ -45,14 +41,14 @@
         f32 rcv_val
     }
     dataflow u16 i, u16 j in [0:1, 0:1] {
-        stream<f32> rcv = relative_stream(1, 0) {
-            hops = [(1, 0)],
+        stream<f32> westwards = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
             channel = 0
         }
     }
     compute u16 i, u16 j in [0:1, 0:1] {
         await receive(local, inp[i])
-        await receive(rcv_val, rcv)
+        await receive(rcv_val, westwards)
         rcv_val = rcv_val + local
         await send(rcv_val, out)
     }
