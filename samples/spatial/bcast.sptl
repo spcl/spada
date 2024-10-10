@@ -1,0 +1,38 @@
+
+kernel @add<N,K>(stream<f32> readonly a_in, stream<f32>[N, N] writeonly out) {
+
+    place u16 i, u16 j in [0:N, 0:N] {
+        f32[K] a;
+    }
+
+    dataflow i16 i, i16 j in [0:N, 0:N] {
+        multistream<f32> bcast = broadcast(0, 0) {
+            hops = auto,
+            channels = 0
+        }
+    }
+
+    compute i16 i, i16 j in [1:N, 1:N] {
+        await receive(a, bcast)
+        await send(a, out[i, j])
+    }
+
+    compute i16 i, i16 j in [0, 0] {
+       await receive(a, a_in)
+       await send(a, bcast)
+       await send(a, out[i, j])
+    }
+
+    compute i16 i, i16 j in [0, 1:N] {
+        await foreach i32 k, f32 x in [0:K], receive(bcast) {
+            a[k] = x + 1
+        }
+        await send(a, out[i, j])
+    }
+
+    compute i16 i, i16 j in [1:N, 0] {
+        await receive(a, bcast)
+        await send(a, out[i, j])
+    }
+
+}
