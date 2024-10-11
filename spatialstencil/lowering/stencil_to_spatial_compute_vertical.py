@@ -1,16 +1,8 @@
-import copy
-from dataclasses import dataclass
-from typing import TypeVar, Generic
-
 from spatialstencil.lowering.stencil_to_spatial_dataflow import ProgramDataflow
 from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
 from spatialstencil.lowering.versioning import Versioning
-from spatialstencil.syntax.common.basenode import Wildcard
-from spatialstencil.syntax.common.tree_matching import PatternMatcher, PatternTransformer
 from spatialstencil.syntax.common.types import ScalarType
-from spatialstencil.syntax.common.visitor import IRNodeVisitor
-from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle, group_rectangles_by_domain, split_rectangles
-from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
+from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle
 import spatialstencil.syntax.spatial_ir.irnodes as spa
 import spatialstencil.syntax.stencil_ir.irnodes as sast
 from spatialstencil.syntax.stencil_ir.irnodes import ComputationBlock
