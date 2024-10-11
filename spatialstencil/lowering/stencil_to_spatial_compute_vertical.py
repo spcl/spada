@@ -45,9 +45,7 @@ class VerticalComputeVisitor(sast.ScopedNodeVisitor):
         if node.schedule == sast.ComputationType.FORWARD:
             range_expr = spa.RangeExpression.from_args(z_range[0], z_range[1])
         else:
-            # TODO Discuss: Should we support backward iteration?
-            # Otherwise, we need to change the index calculations in the expressions
-            range_expr = spa.RangeExpression.from_args(z_range[1] - 1, z_range[0] - 1)
+            range_expr = spa.RangeExpression.from_args(z_range[1] - 1, z_range[0] - 1, - 1)
 
         for_loop = spa.ForStatement(
             variables=[self.iteration_variable],
