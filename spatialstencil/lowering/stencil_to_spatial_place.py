@@ -1,6 +1,7 @@
 import copy
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import Mapping, Set
 
 import spatialstencil.syntax.stencil_ir.irnodes as sast
 import spatialstencil.syntax.spatial_ir.irnodes as spa
@@ -25,6 +26,8 @@ class ProgramPlacement:
         self.versioning = versioning
         self._storage_map = defaultdict(dict)
         self.subgrid_var_type = subgrid_var_type
+        # contains the set of output variables of the program
+        self._program_fields: dict[str, sast.Identifier] = dict()
 
     def place_program(self,
                       program: sast.Program) -> list[spa.PlaceBlock]:
@@ -42,6 +45,7 @@ class ProgramPlacement:
             # Allocate a field for the output
             field = self._allocate_field(out, out_t.dtype, domain)
             fields.extend(field)
+            self._program_fields[out.name] = out
 
         blocks = self._abstract_fields_to_place_blocks(fields)
 
@@ -81,6 +85,9 @@ class ProgramPlacement:
                 field = self._allocate_field(op.result, out_t.dtype, domain, out_t.extent.extents)
                 fields.extend(field)
 
+        # If the computation is a vertical stencil, it overwrites the storage of the output
+        # Hence, the storage of the output is linked
+
         blocks = self._abstract_fields_to_place_blocks(fields)
 
         return blocks
@@ -96,6 +103,7 @@ class ProgramPlacement:
             # TODO: Extend to scalar types
             field = self._allocate_field(inp, inp_t.dtype, domain)
             place_blocks.extend(field)
+            self._program_fields[inp.name] = inp
 
         return place_blocks
 
@@ -119,6 +127,11 @@ class ProgramPlacement:
         if identifier in self._storage_map:
             if offset in self._storage_map[identifier]:
                 return self._storage_map[identifier][offset]
+        elif identifier.name in self._program_fields:
+            # It must be an output or input of the program
+            identifier = self._program_fields[identifier.name]
+            if offset in self._storage_map[identifier]:
+                return self._storage_map[identifier][offset]
         raise ValueError(f"Storage for {identifier} not found")
 
     def _allocate_field(self,
@@ -136,7 +149,7 @@ class ProgramPlacement:
         for offset in offsets:
             spa_identifier = self.versioning.next_version(f'{identifier.name}_{offset[0]}_{offset[1]}_{offset[2]}')
 
-            field_type = spa.ArrayType(data_type, [domain.z[1] - domain.z[0]])
+            field_type = spa.ArrayType(data_type, [domain.z[1]])
 
             self._set_storage(identifier, offset, spa_identifier, field_type)
 

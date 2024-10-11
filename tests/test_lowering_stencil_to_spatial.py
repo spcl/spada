@@ -135,6 +135,29 @@ def test_horizontal_stencil_transformer():
     assert len(r) > 0, "No match found"
 
 
+def test_vertical_stencil():
+    files = [
+        Path(__file__).parent / Path('../samples/spst/vertical_intervals.spst'),
+        Path(__file__).parent / Path('../samples/spst/vertical_simple.spst'),
+        Path(__file__).parent / Path('../samples/spst/vertical_backward_simple.spst'),
+        Path(__file__).parent / Path('../samples/spst/vertical_readwrite.spst'),
+    ]
+
+    for file in files:
+        with open(file, 'r') as f:
+            program = parser.parse_file(f)
+
+        type_inference.infer_field_extents(program)
+        domain = Cartesian(x=Interval(0, 128), y=Interval(0, 128), z=Interval(0, 80))
+        type_inference.infer_field_domains(program, domain)
+        print(program.as_ir())
+        spatial_program = lower_stencil_to_spatial(program)
+
+        print(spatial_program.as_ir())
+        assert subgrids_dont_overlap(spatial_program)
+
+
 if __name__ == '__main__':
     test_horizontal_stencil_transformer()
     test_lowering_finishes()
+    test_vertical_stencil()

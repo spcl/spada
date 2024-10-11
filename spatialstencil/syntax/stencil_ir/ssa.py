@@ -31,6 +31,9 @@ class SSAVisitor(sast.ScopedNodeVisitor):
         super().__init__()
         self._current_version_in_scope = dict()
 
+    def get_scope(self):
+        return self._current_scope[0]
+
     def _get_version(self, name: str) -> int:
         """
         Returns the current version of a variable in the current scope.
@@ -91,7 +94,6 @@ class SSAVisitor(sast.ScopedNodeVisitor):
         # Increment the version of all identifiers that the statement assigns to in the current scope
         # This is done AFTER visiting the nodes nested in the statement
         self.generic_visit(node)
-
         for out in node.outputs:
             self._increment_version(out)
 

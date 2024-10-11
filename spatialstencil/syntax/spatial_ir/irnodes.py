@@ -266,7 +266,10 @@ class RangeExpression(SpatialNode):
         if step is not None:
             step_expr = Expression(ConstantLiteral(step, ScalarType.i32))
             return RangeExpression(start_expr, stop_expr, step_expr)
-        return RangeExpression(start_expr, stop_expr)
+        if abs(start-stop) == 1:
+            return RangeExpression(start_expr)
+        else:
+            return RangeExpression(start_expr, stop_expr)
 
     def as_tuple(self) -> tuple:
         if self.step:
