@@ -13,6 +13,9 @@ nav:
     - Routing Semantics: spatial/routing.md
     - Parameterized Semantics: spatial/parametric.md
     - Examples: spatial/examples.md
+  - Collective IR:
+    - Design Goals: collective/design_goals.md
+    - Specification: collective/collective.md
   - Dataflow Task IR: dataflowtask/dataflowtask.md
 
 markdown_extensions:
