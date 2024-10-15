@@ -14,7 +14,7 @@ from spatialstencil.syntax.stencil_ir.extent_inference import infer_field_extent
 def infer_types(program: sast.Program,
                 default_float_dtype: sast.ScalarType = sast.ScalarType.f32,
                 default_int_dtype: sast.ScalarType = sast.ScalarType.i32,
-                domain: tuple[int] | None = None):
+                domain: sast.Cartesian | None = None):
     """
     Infers all types in a Stencil IR program with optional domain size or halo extents.
     If domain size is not given, shapes will remain unknown ("?"). If halo is not given,
