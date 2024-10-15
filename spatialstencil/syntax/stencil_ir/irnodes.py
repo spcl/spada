@@ -42,7 +42,7 @@ class Node(BaseNode):
 @dataclass
 class AnyType(Node, IRType):
 
-    def as_ir(self) -> str:
+    def as_ir(self, indent: int = 0) -> str:
         return "?"
 
     def is_unknown(self) -> bool:
