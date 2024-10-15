@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from spatialstencil.lowering.stencil_to_spatial_compute_vertical import VerticalComputeVisitor
+from spatialstencil.lowering.stencil_to_spatial_compute_fwbw import ForwardBackwardComputeVisitor
 from spatialstencil.lowering.stencil_to_spatial_dataflow import ProgramDataflow
 from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
 from spatialstencil.lowering.versioning import Versioning
@@ -28,7 +28,7 @@ class ProgramCompute:
         self.dataflow = dataflow
         self.placement = placement
         self.visitor = ParallelComputeVisitor(placement, versioning, dataflow)
-        self.vertical_visitor = VerticalComputeVisitor(placement, versioning, dataflow)
+        self.vertical_visitor = ForwardBackwardComputeVisitor(placement, versioning, dataflow)
         self.grid_var_t = subgrid_var_type
 
     def generate_computation(self, comp: sast.ComputationBlock) -> list[spa.ComputeBlock]:

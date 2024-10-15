@@ -10,7 +10,7 @@ from spatialstencil.syntax.stencil_ir.irnodes import ComputationBlock
 AbstractStatement = Rectangle[tuple[int, spa.Statement]]
 
 
-class VerticalComputeVisitor(sast.ScopedNodeVisitor):
+class ForwardBackwardComputeVisitor(sast.ScopedNodeVisitor):
 
     current_statement: sast.StatementBlock | None
     iteration_variable: spa.TypedIdentifier | None
