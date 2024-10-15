@@ -128,9 +128,12 @@ class ProgramPlacement:
         # the field is placed in the domain of the argument
         place_blocks = []
         for inp, inp_t in zip(scope.inputs, scope.operation_type.source):
+            if isinstance(inp_t, ScalarType):
+                # Scalar types are converted to kernel arguments, need to allocation
+                continue
+
             domain = inp_t.domain.add(self.get_shift())
             # Allocate a field for the input
-            # TODO: Extend to scalar types
             field = self._allocate_field(inp, inp_t.dtype, domain)
             place_blocks.extend(field)
             self._program_scope_fields[inp.name] = inp
@@ -153,7 +156,7 @@ class ProgramPlacement:
 
     def get_storage(self,
                     identifier: sast.Identifier,
-                    offset: sast.Offset = sast.Offset.zero()) -> tuple[spa.Identifier, spa.ArrayType]:
+                    offset: sast.Offset = sast.Offset.zero()) -> tuple[spa.Identifier, spa.ArrayType] | None:
         if identifier in self._storage_map:
             if offset in self._storage_map[identifier]:
                 return self._storage_map[identifier][offset]
@@ -162,7 +165,8 @@ class ProgramPlacement:
             identifier = self._program_scope_fields[identifier.name]
             if offset in self._storage_map[identifier]:
                 return self._storage_map[identifier][offset]
-        raise ValueError(f"Storage for {identifier} not found")
+        else:
+            return None
 
     def _allocate_field(self,
                         identifier: sast.Identifier,

@@ -191,9 +191,15 @@ class ExpressionTranslator(sast.NodeVisitor):
         self.translation_stack.append(spa.UnaryOperator(node.op, operand))
 
     def visit_Identifier(self, node: sast.Identifier):
+        # This MUST be an access to a scalar argument, because we
+        # repalced accessed to fields with an explicit subscript
         array = self.placement.get_storage(node)
-        access = self.iteration_variable.identifier
-        result = spa.ArraySlice(array[0], [spa.Expression(access)])
+        if array:
+            access = self.iteration_variable.identifier
+            result = spa.ArraySlice(array[0], [spa.Expression(access)])
+        else:
+            assert node.version == 0, f"{node.as_ir()} must be input"
+            result = spa.Identifier(node.name, node.version)
         self.translation_stack.append(result)
 
     def visit_TernaryOperator(self, node: sast.TernaryOperator):

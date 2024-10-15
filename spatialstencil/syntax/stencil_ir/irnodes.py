@@ -444,6 +444,11 @@ class Identifier(Node):
     name: str
     version: int = 0
 
+    def validate(self) -> None:
+        assert isinstance(self.name, str)
+        assert isinstance(self.version, int)
+        assert self.version >= 0
+
     def as_ir(self, indent: int = 0) -> str:
         if self.version != 0:
             return f'%{self.name}#{self.version}'
