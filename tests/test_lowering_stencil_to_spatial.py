@@ -141,6 +141,7 @@ def test_vertical_stencil():
         Path(__file__).parent / Path('../samples/spst/vertical_simple.spst'),
         Path(__file__).parent / Path('../samples/spst/vertical_backward_simple.spst'),
         Path(__file__).parent / Path('../samples/spst/vertical_readwrite.spst'),
+        Path(__file__).parent / Path('../samples/spst/vertical_horizontal_refactored.spst'),
     ]
 
     for file in files:
