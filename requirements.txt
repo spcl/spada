@@ -7,3 +7,8 @@ numpy~=1.24.4
 matplotlib~=3.7.5
 hilbertcurve~=2.0.5
 pycairo~=1.26.1
+
+mkdocs~=1.5.3
+mkdocs-material~=9.2.7
+mkdocs-material-extensions~=1.2
+pymdown-extensions~=10.2.1
