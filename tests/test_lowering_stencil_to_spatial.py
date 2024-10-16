@@ -179,8 +179,31 @@ def test_scalar_arguments():
         assert subgrids_dont_overlap(spatial_program)
 
 
+def test_vadv():
+    files = [
+        Path(__file__).parent / Path('../samples/spst/vadv.spst'),
+    ]
+    for file in files:
+        with open(file, 'r') as f:
+            program = parser.parse_file(f)
+
+        domain = Cartesian(x=Interval(0, 128), y=Interval(0, 128), z=Interval(0, 80))
+        type_inference.infer_types(program, domain=domain)
+
+        spatial_program = lower_stencil_to_spatial(program)
+
+        assert len(spatial_program.as_ir())
+
+        print(spatial_program.as_ir())
+
+        assert subgrids_dont_overlap(spatial_program)
+
+
+
+
 if __name__ == '__main__':
     test_horizontal_stencil_transformer()
     test_lowering_finishes()
     test_vertical_stencil_finishes()
     test_scalar_arguments()
+    test_vadv()
