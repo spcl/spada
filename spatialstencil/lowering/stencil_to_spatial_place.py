@@ -174,7 +174,6 @@ class ProgramPlacement:
                         domain: sast.Cartesian,
                         offsets: list[sast.Offset] = None) -> list[AbstractFieldDeclaration]:
         # Allocate a field for the input
-        # TODO: Extend to scalar types
         assert domain is not None, f"Domain for input {identifier} not found"
         if offsets is None:
             offsets = [sast.Offset.zero()]
@@ -182,7 +181,9 @@ class ProgramPlacement:
         result = []
         for offset in offsets:
             spa_identifier = self.versioning.next_version(f'{identifier.name}_{offset[0]}_{offset[1]}_{offset[2]}')
-
+            assert domain.z[0] >= 0, "Z dimension must be non-negative"
+            # Not that this might over-allocate the z-dimension, which is done to simplify the address calculations
+            # We expect this temporary storage to be optimized away in a later pass
             field_type = spa.ArrayType(data_type, [domain.z[1]])
 
             self._set_storage(identifier, offset, spa_identifier, field_type)

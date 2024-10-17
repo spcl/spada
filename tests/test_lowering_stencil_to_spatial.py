@@ -199,8 +199,6 @@ def test_vadv():
         assert subgrids_dont_overlap(spatial_program)
 
 
-
-
 if __name__ == '__main__':
     test_horizontal_stencil_transformer()
     test_lowering_finishes()

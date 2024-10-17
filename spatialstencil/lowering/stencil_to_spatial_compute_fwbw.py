@@ -110,8 +110,7 @@ class ForwardBackwardComputeVisitor(sast.ScopedNodeVisitor):
         self.body_stmts.append(assign)
 
     def visit_MaterializeOp(self, op: sast.MaterializeOp):
-        # TODO ?
-        pass
+        raise ValueError("MaterializeOp not supported in forward / backward compute")
 
 
 class ExpressionTranslator(sast.NodeVisitor):
