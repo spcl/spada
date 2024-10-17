@@ -1,7 +1,7 @@
 %res = spst.program @ssaexample(%tin, %f2) {}
     : field<[?,?,?], f32> , field<[?,?,?], f32>
     -> field<[?,?,?], f32> {
-  %qstar = spst.computation (%tin, %f2) {
+  %qstar#4 = spst.computation (%tin, %f2) {
    schedule = PARALLEL,
    interval = [0:None, 0:None, 0:None]
   } : spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32>, spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32> -> view<[?,?,?], {(?, ?, ?)}, f32> {
@@ -29,18 +29,18 @@
     }
     return %qstar#3 : view<[?,?,?], {(?, ?, ?)}, f32>
   }
-  %qstar#1 = spst.computation (%qstar, %f2) {
+  %qstar#7 = spst.computation (%qstar#4, %f2) {
    schedule = PARALLEL,
    interval = [0:None, 0:None, 0:None]
   } : spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32>, spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32> -> view<[?,?,?], {(?, ?, ?)}, f32> {
-    %qstar#1 = spst.statement (%qstar, %f2) : spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32>, spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32> -> spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32> {
-        spst.return %f2[0, 0, 0] + %qstar
+    %qstar#5 = spst.statement (%qstar#4, %f2) : spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32>, spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32> -> spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32> {
+        spst.return %f2[0, 0, 0] + %qstar#4
     }
-    %qstar_mat = spst.materialize(%qstar#1) : spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32> -> spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32>
-    %qstar#2 = spst.statement (%qstar_mat, %qstar#1) : spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32>, spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32> -> spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32> {
-        spst.return (%qstar#1 - 1) * %qstar_mat[0, 0, 0] + %qstar#1[0, 0, 0]
+    %qstar_mat = spst.materialize(%qstar#5) : spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32> -> spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32>
+    %qstar#6 = spst.statement (%qstar_mat, %qstar#5) : spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32>, spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32> -> spst.view<[?:?, ?:?, ?:?], {(?, ?, ?)}, f32> {
+        spst.return (%qstar#5 - 1) * %qstar_mat[0, 0, 0] + %qstar#5[0, 0, 0]
     }
-    return %qstar#2 : view<[?,?,?], {(?, ?, ?)}, f32>
+    return %qstar#6 : view<[?,?,?], {(?, ?, ?)}, f32>
   }
-  return %qstar#1: view<[?,?,?], {(?, ?, ?)}, f32>
+  return %qstar#7: view<[?,?,?], {(?, ?, ?)}, f32>
 }

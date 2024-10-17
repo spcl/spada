@@ -97,7 +97,7 @@ class ProgramDataflow:
                         self._set_stream(stmt.value, stmt.result, extent, identifier)
 
                         # Generate stream
-                        x_range, y_range = self.get_x_y_range(out_t, dx, dy)
+                        x_range, y_range = self.get_x_y_range(out_t, -dx, -dy)
 
                         astream = AbstractStream(x_range, y_range, metadata)
                         abstract_streams.append(astream)
@@ -126,7 +126,7 @@ class ProgramDataflow:
                                 self._set_stream(access, stmt.outputs[0], extent, identifier)
 
                                 # Generate stream
-                                x_range, y_range = self.get_x_y_range(out_t, dx, dy)
+                                x_range, y_range = self.get_x_y_range(out_t, -dx, -dy)
 
                                 astream = AbstractStream(x_range, y_range, metadata)
                                 abstract_streams.append(astream)
@@ -178,4 +178,10 @@ class ProgramDataflow:
                    send_domain.x[1] + self.offset_domain[1])
         y_range = (send_domain.y[0] + self.offset_domain[0],
                    send_domain.y[1] + self.offset_domain[1])
+
+        assert x_range[0] >= 0
+        assert x_range[1] >= x_range[0]
+        assert y_range[0] >= 0
+        assert y_range[1] >= y_range[0]
+
         return x_range, y_range

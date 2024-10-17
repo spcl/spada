@@ -42,7 +42,7 @@ class Node(BaseNode):
 @dataclass
 class AnyType(Node, IRType):
 
-    def as_ir(self) -> str:
+    def as_ir(self, indent: int = 0) -> str:
         return "?"
 
     def is_unknown(self) -> bool:
@@ -443,6 +443,11 @@ class Identifier(Node):
     """
     name: str
     version: int = 0
+
+    def validate(self) -> None:
+        assert isinstance(self.name, str)
+        assert isinstance(self.version, int)
+        assert self.version >= 0
 
     def as_ir(self, indent: int = 0) -> str:
         if self.version != 0:

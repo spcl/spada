@@ -6,15 +6,6 @@ import spatialstencil.syntax.stencil_ir.irnodes as sast
 from spatialstencil.syntax.stencil_ir.irnodes import ComputationBlock, Program
 
 
-@dataclass
-class ScopedVersion:
-    """
-    Represents a version of a variable in a given scope.
-    """
-    scope: sast.ComputationBlock | sast.Program
-    version: int
-
-
 class SSAVisitor(sast.ScopedNodeVisitor):
     """
     A node visitor that transforms a given program into SSA form.
@@ -25,7 +16,7 @@ class SSAVisitor(sast.ScopedNodeVisitor):
     and it is guaranteed that the version of a variable is unique in a given scope.
     """
 
-    __current_version_in_scope: Mapping[str, list[ScopedVersion]]
+    __current_version: Mapping[str, int]
 
     def __init__(self):
         super().__init__()
@@ -33,42 +24,30 @@ class SSAVisitor(sast.ScopedNodeVisitor):
 
     def _get_version(self, name: str) -> int:
         """
-        Returns the current version of a variable in the current scope.
-        If the variable is not defined in the current scope, -1 is returned.
+        Returns the current version of a variable.
+        If the variable is not defined yet, -1 is returned.
 
         :param name: The name of the variable.
         :return: The current version of the variable.
         """
         if name not in self._current_version_in_scope:
             return -1
-        scope = self.get_scope()
-        for version in self._current_version_in_scope[name]:
-            if version.scope == scope:
-                return version.version
-        return -1
 
-    def _set_version(self, identifier: sast.Identifier, version: int, scope=None):
+        return self._current_version_in_scope[name]
+
+    def _set_version(self, identifier: sast.Identifier, version: int):
         """
-        Sets the version of a variable in the current scope.
+        Sets the version of a variable.
         Modifies the identifier in place and updates the internal state (current version).
 
         :param identifier: The identifier to set the version for.
         :param version: The version to set.
-        :param scope: The scope to set the version for. If None, the current scope is used.
         :return:
         """
         name = identifier.name
         identifier.version = version
-        if scope is None:
-            scope = self.get_scope()
-        if name not in self._current_version_in_scope:
-            self._current_version_in_scope[name] = [ScopedVersion(scope, version)]
-        else:
-            for i, v in enumerate(self._current_version_in_scope[name]):
-                if v.scope == scope:
-                    self._current_version_in_scope[name][i] = ScopedVersion(scope, version)
-                    return
-            self._current_version_in_scope[name].append(ScopedVersion(scope, version))
+
+        self._current_version_in_scope[name] = version
 
     def _increment_version(self, identifier: sast.Identifier):
         """
@@ -80,8 +59,6 @@ class SSAVisitor(sast.ScopedNodeVisitor):
         current_version = self._get_version(identifier.name)
         self._set_version(identifier, current_version + 1)
         assert identifier.version == current_version + 1
-        # Assert there is at most one version of the identifier in the current scope
-        assert len([v for v in self._current_version_in_scope[identifier.name] if v.scope == self.get_scope()]) == 1
 
     def visit_Identifier(self, node: sast.Identifier):
         # Set the version of the identifier to the current version in the current scope
@@ -91,7 +68,6 @@ class SSAVisitor(sast.ScopedNodeVisitor):
         # Increment the version of all identifiers that the statement assigns to in the current scope
         # This is done AFTER visiting the nodes nested in the statement
         self.generic_visit(node)
-
         for out in node.outputs:
             self._increment_version(out)
 
@@ -127,7 +103,7 @@ class SSAVisitor(sast.ScopedNodeVisitor):
         # Define the inputs of the computation with the current version
         for inp in computation.inputs:
             version = self._get_version(inp.name)
-            self._set_version(inp, version, scope=computation)
+            self._set_version(inp, version)
 
     def post_visit_ComputationBlock(self, computation: ComputationBlock):
         # Increment the version of all identifiers that the computation assigns to in the current scope.

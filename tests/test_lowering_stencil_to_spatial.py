@@ -14,6 +14,7 @@ from spatialstencil.syntax.stencil_ir.irnodes import *
 import spatialstencil.syntax.spatial_ir.irnodes as spa
 
 from spatialstencil.lowering.stencil_to_spatial import lower_stencil_to_spatial
+from spatialstencil.syntax.stencil_ir.refactor_forward_backward_stencils import RefactorForwardBackwardStencils
 
 
 class DummyProgramPlacement(ProgramPlacement):
@@ -79,6 +80,7 @@ def test_lowering_finishes():
         spatial_program = lower_stencil_to_spatial(program)
 
         assert subgrids_dont_overlap(spatial_program)
+        assert len(spatial_program.as_ir())
 
 
 def test_horizontal_stencil_transformer():
@@ -135,6 +137,71 @@ def test_horizontal_stencil_transformer():
     assert len(r) > 0, "No match found"
 
 
+def test_vertical_stencil_finishes():
+    files = [
+        Path(__file__).parent / Path('../samples/spst/vertical_intervals.spst'),
+        Path(__file__).parent / Path('../samples/spst/vertical_simple.spst'),
+        Path(__file__).parent / Path('../samples/spst/vertical_backward_simple.spst'),
+        Path(__file__).parent / Path('../samples/spst/vertical_readwrite.spst'),
+        Path(__file__).parent / Path('../samples/spst/vertical_horizontal_refactored.spst'),
+        Path(__file__).parent / Path('../samples/spst/vertical_horizontal.spst'),
+    ]
+
+    for file in files:
+        with open(file, 'r') as f:
+            program = parser.parse_file(f)
+
+        domain = Cartesian(x=Interval(0, 128), y=Interval(0, 128), z=Interval(0, 80))
+        type_inference.infer_types(program, domain=domain)
+
+        spatial_program = lower_stencil_to_spatial(program)
+
+        assert subgrids_dont_overlap(spatial_program)
+        assert len(spatial_program.as_ir())
+
+def test_scalar_arguments():
+    files = [
+        Path(__file__).parent / Path('../samples/spst/scalar_arguments.spst'),
+    ]
+    for file in files:
+        with open(file, 'r') as f:
+            program = parser.parse_file(f)
+
+        domain = Cartesian(x=Interval(0, 128), y=Interval(0, 128), z=Interval(0, 80))
+        type_inference.infer_types(program, domain=domain)
+
+        spatial_program = lower_stencil_to_spatial(program)
+
+        assert len(spatial_program.as_ir())
+
+        print(spatial_program.as_ir())
+
+        assert subgrids_dont_overlap(spatial_program)
+
+
+def test_vadv():
+    files = [
+        Path(__file__).parent / Path('../samples/spst/vadv.spst'),
+    ]
+    for file in files:
+        with open(file, 'r') as f:
+            program = parser.parse_file(f)
+
+        domain = Cartesian(x=Interval(0, 128), y=Interval(0, 128), z=Interval(0, 80))
+        type_inference.infer_types(program, domain=domain)
+
+        spatial_program = lower_stencil_to_spatial(program)
+
+        assert len(spatial_program.as_ir())
+
+        print(spatial_program.as_ir())
+
+        assert subgrids_dont_overlap(spatial_program)
+
+
 if __name__ == '__main__':
     test_horizontal_stencil_transformer()
     test_lowering_finishes()
+    test_vertical_stencil_finishes()
+    test_scalar_arguments()
+    test_vadv()

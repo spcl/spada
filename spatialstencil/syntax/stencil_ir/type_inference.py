@@ -14,7 +14,7 @@ from spatialstencil.syntax.stencil_ir.extent_inference import infer_field_extent
 def infer_types(program: sast.Program,
                 default_float_dtype: sast.ScalarType = sast.ScalarType.f32,
                 default_int_dtype: sast.ScalarType = sast.ScalarType.i32,
-                domain: tuple[int] | None = None):
+                domain: sast.Cartesian | None = None):
     """
     Infers all types in a Stencil IR program with optional domain size or halo extents.
     If domain size is not given, shapes will remain unknown ("?"). If halo is not given,
@@ -120,14 +120,29 @@ def infer_scalar_types(program: sast.Program, default_float_dtype: sast.ScalarTy
     inferrer = TypeInference(default_float_dtype, default_int_dtype)
 
     # Collect program global fields. If type is unknown, use default float type
-    for field, dtype in zip(program.inputs, program.operation_type.source):
-        if dtype.dtype == sast.ScalarType.UNKNOWN:
-            dtype.dtype = default_float_dtype
-        inferrer.field_types[field.name] = dtype.dtype
-    for field, dtype in zip(program.outputs, program.operation_type.destination):
-        if dtype.dtype == sast.ScalarType.UNKNOWN:
-            dtype.dtype = default_float_dtype
-        inferrer.field_types[field.name] = dtype.dtype
+    for i in range(len(program.inputs)):
+        field = program.inputs[i]
+        dtype = program.operation_type.source[i]
+        if isinstance(dtype, (sast.FieldType, sast.ViewType)):
+            if dtype.dtype == sast.ScalarType.UNKNOWN:
+                dtype.dtype = default_float_dtype
+            inferrer.field_types[field.name] = dtype.dtype
+        else:
+            if dtype == sast.ScalarType.UNKNOWN:
+                program.operation_type.source[i] = default_float_dtype
+            inferrer.field_types[field.name] = program.operation_type.source[i]
+
+    for i in range(len(program.outputs)):
+        field = program.outputs[i]
+        dtype = program.operation_type.destination[i]
+        if isinstance(dtype, sast.FieldType):
+            if dtype.dtype == sast.ScalarType.UNKNOWN:
+                dtype.dtype = default_float_dtype
+            inferrer.field_types[field.name] = dtype.dtype
+        else:
+            if dtype == sast.ScalarType.UNKNOWN:
+                program.operation_type.destination[i] = default_float_dtype
+            inferrer.field_types[field.name] = program.operation_type.destination[i]
 
     # Run type inference throughout program
     inferrer.visit(program)

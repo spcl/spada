@@ -6,7 +6,7 @@ from spatialstencil.syntax.stencil_ir import type_inference, parser, canonicaliz
 from spatialstencil.syntax.stencil_ir.irnodes import ScalarType, Program, Cartesian, Interval, Offset, Extent, \
     StatementBlock, MaterializeOp, ComputationBlock, ReturnOp
 
-from spatialstencil.syntax.stencil_ir.ssa import ScopedVersion, SSAVisitor
+from spatialstencil.syntax.stencil_ir.ssa import SSAVisitor
 
 class TestTypeInference(unittest.TestCase):
 
