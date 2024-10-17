@@ -24,7 +24,7 @@ class RefactorForwardBackwardStencils(ScopedNodeVisitor):
                 self._refactor_node(node)
 
     def _refactor_node(self, node: Subscript):
-        assert node.value.version == 0, "In Forward/Backwards, horizontally-offset access must be to readonly fields"
+        assert node.value.version == 0, "In Forward/Backward stencils, horizontally-offset access must be to readonly fields"
         new_variable_name = f"_refactored_{node.value.name}_{node.subscript[0]}_{node.subscript[1]}"
         new_variable = Identifier(new_variable_name)
         if node.value not in self.refactored:
