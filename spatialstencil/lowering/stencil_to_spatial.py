@@ -13,8 +13,9 @@ from spatialstencil.syntax.spatial_ir.grid_geometry import split_rectangles
 
 from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
 from spatialstencil.syntax.stencil_ir.canonicalize_expression import CanonicalizeExpression
+from spatialstencil.syntax.stencil_ir.refactor_forward_backward_stencils import RefactorForwardBackwardStencils
 from spatialstencil.syntax.stencil_ir.type_inference import infer_scalar_types, infer_types
-
+from spatialstencil.syntax.stencil_ir.ssa import SSAVisitor
 
 def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
     """Lower a stencil to a spatial program.
@@ -30,11 +31,20 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
     # (2) DATAFLOW: Collect communication channels
     # (3) COMPUTE: Go through statements, generate code for them by sending through channels and using the placed fields
 
-    # We use a field per identifier NAME, that is, storage is re-used for equal version fields in the same scope.
+    # Preprocessing
+    refactor = RefactorForwardBackwardStencils()
+    refactor.visit(stencil)
+
+    ssa = SSAVisitor()
+    ssa.visit(stencil)
+
+    domain = stencil.operation_type.destination[0].domain
+    infer_types(stencil, ScalarType.f32, ScalarType.i32, domain)
 
     canonicalizer = CanonicalizeExpression()
     canonicalizer.visit(stencil)
-    infer_scalar_types(stencil, ScalarType.f32, ScalarType.i32)
+
+    infer_types(stencil, ScalarType.f32, ScalarType.i32, domain)
 
     domain_collector = DomainCollector()
     domain_collector.visit(stencil)
@@ -90,20 +100,22 @@ def _ith_output_name(i: int) -> str:
     return f'kernel_out_{i}'
 
 
-def _construct_arg(name: str, arg_t: sast.FieldType) -> spa.KernelArgument:
-    assert isinstance(arg_t, sast.FieldType)
-    domain = arg_t.domain
-    assert isinstance(domain, sast.Cartesian)
+def _construct_arg(name: str, arg_t: sast.FieldType | ScalarType) -> spa.KernelArgument:
+    if isinstance(arg_t, sast.FieldType):
+        domain = arg_t.domain
+        assert isinstance(domain, sast.Cartesian)
+        # TODO: detect write-only / readonly fields
+        array_size_x = domain.x[1] - domain.x[0]
+        array_size_y = domain.y[1] - domain.y[0]
+        stream_type = spa.StreamType(arg_t.dtype)
 
-    # TODO: Extend to scalar types & constants
-    # TODO: detect write-only / readonly fields
-    array_size_x = domain.x[1] - domain.x[0]
-    array_size_y = domain.y[1] - domain.y[0]
-    stream_type = spa.StreamType(arg_t.dtype)
-
-    array_type = spa.ArrayType(stream_type, [array_size_x, array_size_y])
-    identifier = spa.Identifier(f'_{name}', 0)
-    return spa.KernelArgument(array_type, identifier)
+        array_type = spa.ArrayType(stream_type, [array_size_x, array_size_y])
+        identifier = spa.Identifier(f'_{name}', 0)
+        return spa.KernelArgument(array_type, identifier)
+    else:
+        assert isinstance(arg_t, ScalarType)
+        identifier = spa.Identifier(f'_{name}', 0)
+        return spa.KernelArgument(arg_t, identifier)
 
 
 def input_phase(body: list[spa.PlaceBlock],

@@ -13,6 +13,7 @@ The modifications are done in-place on the IR nodes.
 from spatialstencil.lowering.versioning import Versioning
 from spatialstencil.syntax.common.basenode import Wildcard
 from spatialstencil.syntax.common.tree_matching import PatternTransformer
+from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
 from spatialstencil.syntax.stencil_ir.irnodes import *
 
 
@@ -29,6 +30,12 @@ class CanonicalizeExpression(NodeVisitor):
 
         new_stmts = []
         todo = []
+        input_type: dict[Identifier, DataType] = dict()
+        for inp, inp_t in zip(node.inputs, node.operation_type.source):
+            input_type[inp] = inp_t
+
+        self.explicit_field_access.set_context(input_type)
+
         for stmt in node.body:
             if isinstance(stmt, AssignOp):
                 self.explicit_field_access.apply(stmt.value)
@@ -96,7 +103,7 @@ class SingleNonLocalAccess(PatternTransformer[AssignOp | ReturnOp, AssignOp, Non
         return [new_assign]
 
 
-class ExplicitFieldAccess(PatternTransformer[Expression, None, None]):
+class ExplicitFieldAccess(PatternTransformer[Expression, None, dict[Identifier, DataType]]):
 
     e = Expression(Wildcard[Identifier]('arg')())
 
@@ -105,8 +112,11 @@ class ExplicitFieldAccess(PatternTransformer[Expression, None, None]):
 
     def transform(self, root: Expression, arg: Identifier = None, **wildcards) -> list:
         assert isinstance(arg, Identifier)
-        root.value = Subscript(arg, [0, 0, 0])
+        if arg not in self.get_context() or not isinstance(self.get_context()[arg], ScalarType):
+            root.value = Subscript(arg, [0, 0, 0])
+
         return []
+
 
 
 class ExpressionSimplifier(PatternTransformer[AssignOp | ReturnOp, AssignOp, None]):

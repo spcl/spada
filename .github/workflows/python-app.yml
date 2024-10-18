@@ -24,6 +24,11 @@ jobs:
       with:
         python-version: "3.10"
 
+    - name: Install Cairo
+      run: |
+        sudo apt-get update
+        sudo apt install libcairo2-dev pkg-config python3-dev      
+
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
@@ -34,7 +39,6 @@ jobs:
       run: |
         . /etc/os-release
         echo "Using Ubuntu version $UBUNTU_CODENAME"
-        sudo apt-get update
         sudo apt-get install -y build-essential libssl-dev uuid-dev libgpgme11-dev squashfs-tools
         wget -q -O singularity.deb https://github.com/sylabs/singularity/releases/download/v4.2.1/singularity-ce_4.2.1-${UBUNTU_CODENAME}_amd64.deb
         sudo apt install ./singularity.deb

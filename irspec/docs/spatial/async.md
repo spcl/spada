@@ -186,22 +186,22 @@ of the interleaving of concurrent operations.
     
       compute i16 i, i16 j in [0, 0] {
          // S_1
-         completion c1 = foreach f32 x, i16 k in receive(eastwards), [0:K] {
+         completion c1 = foreach f32 x, i16 k in receive(westwards), [0:K] {
             a[k] = 2 * x
          }
          // S_2
          await c1;
          // S_3
-         completion c2 = send(a, westwards);
+         completion c2 = send(a, eastwards);
       }
     
       compute i16 i, i16 j in [1, 0] {
          // S_4
-         completion c3 = send(a, eastwards);
+         completion c3 = send(a, westwards);
          // S_5 (data race)
          a[0] = 0;
          // S_6
-         completion c4 = foreach f32 x, i16 k in receive(westwards), [0:K] {
+         completion c4 = foreach f32 x, i16 k in receive(eastwards), [0:K] {
             // S_7 (correctly synchronized)
             a[k] = x;
          }
@@ -238,18 +238,18 @@ of the interleaving of concurrent operations.
     }
     
     dataflow i16 i, i16 j in [0:4, 0] {
-        stream<f32> eastwards = relative_stream(1, 0);
+        stream<f32> westwards = relative_stream(-1, 0);
     }
     
     compute i16 i, i16 j in [0, 0] {
       // Receive twice:
       // The receives must be synchronized
       // S_1
-      await foreach i16 k, f32 x in [0:K], receive(eastwards) {
+      await foreach i16 k, f32 x in [0:K], receive(westwards) {
           a[k] = x + 1;
       }
       // S_2
-      await foreach i16 k, f32 x in [0:K], receive(eastwards) {
+      await foreach i16 k, f32 x in [0:K], receive(westwards) {
           a[k] = a[k] + x;
       }
     }
@@ -257,22 +257,22 @@ of the interleaving of concurrent operations.
     compute i16 i, i16 j in [1:4, 0] {
        // S_3
        // Receive (concurrent with send)
-       completion c2 = foreach i16 k, f32 x in [0:K], receive(eastwards) {
+       completion c2 = foreach i16 k, f32 x in [0:K], receive(westwards) {
           // S_4
           a[k] = x + 1;
        }
        // S_5
-       await send(a, eastwards);
+       await send(a, westwards);
        
        // S_6
-       completion c3 = send(b, eastwards);
+       completion c3 = send(b, westwards);
        
        // S_7
        await c2;
        
        // S_8
        // Receive (concurrent with send)
-       completion c4 = foreach i16 k, f32 x in [0:K], receive(eastwards) {
+       completion c4 = foreach i16 k, f32 x in [0:K], receive(westwards) {
           // S_9
           a[k] = a[k] + x;
        }
@@ -314,26 +314,26 @@ of the interleaving of concurrent operations.
     
       compute i16 i, i16 j in [0, 0] {
          // S_1
-         completion c1 = foreach i16 k, f32 x in [0:K], receive(eastwards) {
+         completion c1 = foreach i16 k, f32 x in [0:K], receive(westwards) {
             a[k] = x;
          }
          // S_2
          await c1;
          // S_3
-         completion c2 = send(a, westwards);
+         completion c2 = send(a, eastwards);
     
          // Another ping
          // S_4
-         await foreach i16 k, f32 x in [0:K], receive(eastwards) {
+         await foreach i16 k, f32 x in [0:K], receive(westwards) {
             a[k] = x;
          }
       }
     
       compute i16 i, i16 j in [1, 0] {
          // S_5
-         completion c3 = send(a, eastwards);
+         completion c3 = send(a, westwards);
          // S_6
-         completion c4 = foreach i16 k, f32 x in [0:K], receive(westwards) {
+         completion c4 = foreach i16 k, f32 x in [0:K], receive(eastwards) {
             // S (correctly synchronized)
             a[k] = x;
          }
@@ -342,7 +342,7 @@ of the interleaving of concurrent operations.
          
          // Another ping
          // S_8 (implicitly synchronized through the ping-pong)
-         completion c5 = send(a, eastwards);
+         completion c5 = send(a, westwards);
       }
     }
     ```
@@ -379,12 +379,12 @@ of the interleaving of concurrent operations.
     }
     
     dataflow i16 i, i16 j in [0:K, 0] {
-        stream<f32> eastwards = relative_stream(1, 0);
+        stream<f32> westwards = relative_stream(-1, 0);
     }
     
     compute i16 i, i16 j in [0, 0] {
         // S_1
-        await foreach x, k in [0:K], receive(eastwards) {
+        await foreach x, k in [0:K], receive(westwards) {
             // S_2
             a[k] = a[k] + x;
         }
@@ -392,16 +392,16 @@ of the interleaving of concurrent operations.
     
     compute i16 i, i16 j in [1:K-1, 0] {
         // S_3
-        await foreach i16 k, f32 x in [0:K], receive(eastwards) {
+        await foreach i16 k, f32 x in [0:K], receive(westwards) {
             a[k] = a[k] + x;
         }
         // S_4
-        completion c1 = send(a, eastwards);
+        completion c1 = send(a, westwards);
     }
     
     compute i16 i, i16 j in [K, 0] {
         // S_5
-        completion c1 = send(a, eastwards);
+        completion c1 = send(a, westwards);
     }
     ```
     

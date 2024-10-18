@@ -1,0 +1,43 @@
+
+%pres_1 = spst.program (%in, %fac) {} :
+       field<[?, ?, ?], f32>,
+       f32
+    -> field<[?, ?, ?], f32>
+{
+    %res_1 = spst.computation (%in, %fac)
+    {
+        schedule =  FORWARD,
+        interval = [0:None, 0:None, 0:-1]
+    } : view<[?,?,?], {(?, ?, ?)}, f32>,
+        f32
+      -> view<[?,?,?], {(?, ?, ?)}, f32>
+    {
+        %out_1 = spst.statement(%in, %fac)
+                : view<[?,?,?], {(?, ?, ?)}, f32>,
+                  f32
+                -> view<[?,?,?], {(?, ?, ?)}, f32>
+            {
+                %a = %in[0, 0, 0] - %in[0, 0, 1]
+                return %a * %fac
+            }
+        return %out_1 : view<[?,?,?], {(?, ?, ?)}, f32>
+    }
+    %res_1#1 = spst.computation (%fac, %in)
+    {
+        schedule =  FORWARD,
+        interval = [0:None, 0:None, -1:None]
+    } : f32,
+        view<[?,?,?], {(?, ?, ?)}, f32>
+      -> view<[?,?,?], {(?, ?, ?)}, f32>
+    {
+        %out_1 = spst.statement(%fac, %in)
+                :  f32,
+                   view<[?,?,?], {(?, ?, ?)}, f32>
+                -> view<[?,?,?], {(?, ?, ?)}, f32>
+            {
+                return %in[0, 0, 0] * %fac
+            }
+        return %out_1 : view<[?,?,?], {(?, ?, ?)}, f32>
+    }
+    return %res_1#1 : view<[?,?,?], {(?, ?, ?)}, f32>
+}

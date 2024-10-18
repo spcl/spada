@@ -1,0 +1,81 @@
+kernel @two_phase<K> (stream<f32>[4] readonly in,
+                          stream<f32> readonly out ) {
+
+    place i16 i, i16 j in [0, 0] {
+        f32[K] a
+    }
+
+    place i16 i, i16 j in [1, 0] {
+        f32[K] a
+    }
+
+    place i16 i, i16 j in [3, 0] {
+        f32[K] a
+    }
+
+    place i16 i, i16 j in [4, 0] {
+        f32[K] a
+    }
+
+    phase {
+        dataflow i32 i, i32 j in [0, 0] {
+            stream<f32> hop1 = relative_stream(-1, 0) {
+              hops = [(-1, 0)],
+              channel = 0
+            }
+            stream<f32> hop2 = relative_stream(-2, 0) {
+              hops = [(-1, 0), (-1, 0)],
+              channel = 0
+            }
+        }
+        dataflow i32 i, i32 j in [1, 0] {
+            stream<f32> hop1 = relative_stream(-1, 0) {
+              hops = [(-1, 0)],
+              channel = 0
+            }
+        }
+        dataflow i32 i, i32 j in [2, 0] {
+            stream<f32> hop1 = relative_stream(-1, 0) {
+              hops = [(-1, 0)],
+              channel = 0
+            }
+            stream<f32> hop2 = relative_stream(-2, 0) {
+              hops = [(-1, 0), (-1, 0)],
+              channel = 0
+            }
+        }
+        dataflow i32 i, i32 j in [3, 0] {
+            stream<f32> hop1 = relative_stream(-1, 0) {
+              hops = [(-1, 0)],
+              channel = 0
+            }
+        }
+        compute i32 i, i32 j in [0, 0] {
+            await receive(a, in[i])
+            await foreach f32 k, i32 x in [0:K], receive(hop1) {
+              a[k] = a[k] + x
+            }
+            await foreach f32 k, i32 x in [0:K], receive(hop2) {
+              a[k] = a[k] + x
+            }
+            await send(a, out)
+        }
+        compute i32 i, i32 j in [1, 0] {
+            await receive(a, in[i])
+            await send(a, hop1)
+        }
+        compute i32 i, i32 j in [2, 0] {
+            await receive(a, in[i])
+            await foreach f32 k, i32 x in [0:K], receive(hop1) {
+              a[k] = a[k] + x
+            }
+            await send(a, hop2)
+        }
+        compute i32 i, i32 j in [3, 0] {
+            await receive(a, in[i])
+            await send(a, hop1)
+
+        }
+    }
+
+}

@@ -71,6 +71,7 @@ class Identifier(SpatialNode):
     def validate(self) -> None:
         assert isinstance(self.name, str)
         assert isinstance(self.version, int)
+        assert self.version >= 0
 
     def as_ir(self, indent: int = 0) -> str:
         if self.version == 0:
@@ -265,7 +266,10 @@ class RangeExpression(SpatialNode):
         if step is not None:
             step_expr = Expression(ConstantLiteral(step, ScalarType.i32))
             return RangeExpression(start_expr, stop_expr, step_expr)
-        return RangeExpression(start_expr, stop_expr)
+        if abs(start-stop) == 1:
+            return RangeExpression(start_expr)
+        else:
+            return RangeExpression(start_expr, stop_expr)
 
     def as_tuple(self) -> tuple:
         if self.step:
@@ -374,6 +378,11 @@ class RoutingHop(SpatialNode):
     Represents one hop of dx, dy data movement
     """
     offset: tuple[int, int]
+
+    def validate(self) -> None:
+        assert isinstance(self.offset, tuple)
+        assert len(self.offset) == 2
+        assert all(isinstance(i, int) for i in self.offset)
 
     def as_ir(self, indent: int = 0) -> str:
         return f'({self.offset[0]}, {self.offset[1]})'

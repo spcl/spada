@@ -445,6 +445,20 @@ Any completion that is never `await`ed is assumed to have an implicit `await` at
 See the [Semantics of Asynchronous Statements](../async#semantics-of-asynchronous-statements) for more details
 on the semantics of `await`.
 
+The `awaitall` shorthand is used to await all outstanding completions in a `compute` block.
+```rust
+completion f = ...
+completion g = ...
+awaitall;
+```
+This is equivalent to:
+```rust
+completion f = ...
+completion g = ...
+await f;
+await g;
+```
+
 ### Streaming Data with `send`
 
 Inside a `compute` block, the `send` statement sends data asynchronously through a `stream`.
@@ -487,7 +501,7 @@ always execute in [local order](../async#local-order).
 
 ### Receiving Streaming Data with `receive`
 
-Inside a `compute` block, the `receive` operation wraps a stream to receive a stream of data from it.
+Inside a `compute` block, the `receive` generator operation wraps a stream to receive a stream of data from it.
 
 ```rust
 receive(stream_name)
@@ -512,6 +526,7 @@ it merely declares the existence of a stream edge.
 
 As a consequence, within each `compute` block, correctly synchronized `receive`s **from the same stream** 
 always execute in [local program order](../asnyc/#local-order).
+
 
 ### Processing Data Streams with `foreach`
 
@@ -579,6 +594,24 @@ After the completion triggers, the stream may be used for other sends or receive
 
     *Failure to uniquely match nested `send`s and `receives` results
     in incorrect stream edges and raises a compilation error.*
+
+### Receive Statement
+
+A `receive` statement is a shorthand for a `foreach` loop that receives every element in the stream and 
+assigns it to an array.
+
+```rust
+completion completion_name = receive(stream_name, identifier) {
+  // Assignment statements
+}
+```
+
+Is equivalent to (in case the stream sends K elements):
+```rust
+completion completion_name = foreach type k, type x in [0:K], receive(stream_name) {
+  identifier[k] = x
+}
+```
 
 ### Processing arrays asynchronously with `map`
 

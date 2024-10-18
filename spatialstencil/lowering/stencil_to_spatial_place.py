@@ -1,6 +1,7 @@
 import copy
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import Mapping, Set
 
 import spatialstencil.syntax.stencil_ir.irnodes as sast
 import spatialstencil.syntax.spatial_ir.irnodes as spa
@@ -25,23 +26,42 @@ class ProgramPlacement:
         self.versioning = versioning
         self._storage_map = defaultdict(dict)
         self.subgrid_var_type = subgrid_var_type
+        # contains the set of output variables of the program
+        self._program_scope_fields: dict[str, sast.Identifier] = dict()
 
     def place_program(self,
                       program: sast.Program) -> list[spa.PlaceBlock]:
         # Allocate a field for each argument of the program
         # the field is placed in the domain of the argument
         fields = self._place_inputs(program, self.domains)
+        fields.extend(self._place_outputs(program))
 
-        return_op = program.computations[-1]
-        assert isinstance(return_op, sast.ReturnOp)
+        # Go over each computation and collect the union of the domain for each variable NAME
+        # that is not an input or output
+        # create storage for each such name and associate it with the program scope fields
 
-        for out, out_t in zip(return_op.values, program.operation_type.destination):
-            out = out.value
-            assert isinstance(out, sast.Identifier)
-            domain = self.domains.get_shifted_domain(out, program)
-            # Allocate a field for the output
-            field = self._allocate_field(out, out_t.dtype, domain)
-            fields.extend(field)
+        # Pass 1: Collect domain
+        domain_of_variable: dict[str, sast.Cartesian] = dict()
+        for comp in program.computations:
+            if isinstance(comp, sast.ComputationBlock):
+                for out_id, out_type in zip(comp.outputs, comp.operation_type.destination):
+                    assert isinstance(out_type, sast.ViewType)
+                    assert isinstance(out_type.domain, sast.Cartesian)
+                    domain = out_type.domain.add(self.get_shift())
+
+                    if out_id.name not in domain_of_variable:
+                        domain_of_variable[out_id.name] = domain
+                    else:
+                        domain_of_variable[out_id.name] = domain_of_variable[out_id.name].union(domain)
+
+        # Pass 2: Allocate fields
+        for comp in program.computations:
+            if isinstance(comp, sast.ComputationBlock):
+                for out_id, out_type in zip(comp.outputs, comp.operation_type.destination):
+                    if out_id.name not in self._program_scope_fields:
+                        domain = domain_of_variable[out_id.name]
+                        fields.extend(self._allocate_field(out_id, out_type.dtype, domain))
+                        self._program_scope_fields[out_id.name] = out_id
 
         blocks = self._abstract_fields_to_place_blocks(fields)
 
@@ -57,7 +77,7 @@ class ProgramPlacement:
                 out_t = op.operation_type.destination[0]
                 assert isinstance(out_t, sast.ViewType)
                 assert isinstance(out_t.domain, sast.Cartesian)
-                domain = out_t.domain.add(self.domains.get_shift())
+                domain = out_t.domain.add(self.get_shift())
                 # Place the outputs of the statement block
                 for out in op.outputs:
                     # Allocate a field for the output
@@ -76,14 +96,31 @@ class ProgramPlacement:
 
             elif isinstance(op, sast.MaterializeOp):
                 out_t = op.operation_type.destination[0]
-                domain = out_t.domain.add(self.domains.get_shift())
+                domain = out_t.domain.add(self.get_shift())
                 # Allocate a field for the result
                 field = self._allocate_field(op.result, out_t.dtype, domain, out_t.extent.extents)
                 fields.extend(field)
 
+        # If the computation is a vertical stencil, it overwrites the storage of the output
+        # Hence, the storage of the output is linked
+
         blocks = self._abstract_fields_to_place_blocks(fields)
 
         return blocks
+
+    def _place_outputs(self, program: sast.Program):
+        fields = []
+        return_op = program.computations[-1]
+        assert isinstance(return_op, sast.ReturnOp)
+        for out, out_t in zip(return_op.values, program.operation_type.destination):
+            out = out.value
+            assert isinstance(out, sast.Identifier)
+            domain = out_t.domain.add(self.get_shift())
+            # Allocate a field for the output
+            field = self._allocate_field(out, out_t.dtype, domain)
+            fields.extend(field)
+            self._program_scope_fields[out.name] = out
+        return fields
 
     def _place_inputs(self, scope: sast.Program | sast.ComputationBlock,
                       domains: DomainCollector) -> list[AbstractFieldDeclaration]:
@@ -91,11 +128,15 @@ class ProgramPlacement:
         # the field is placed in the domain of the argument
         place_blocks = []
         for inp, inp_t in zip(scope.inputs, scope.operation_type.source):
-            domain = domains.get_shifted_domain(inp, scope)
+            if isinstance(inp_t, ScalarType):
+                # Scalar types are converted to kernel arguments, need to allocation
+                continue
+
+            domain = inp_t.domain.add(self.get_shift())
             # Allocate a field for the input
-            # TODO: Extend to scalar types
             field = self._allocate_field(inp, inp_t.dtype, domain)
             place_blocks.extend(field)
+            self._program_scope_fields[inp.name] = inp
 
         return place_blocks
 
@@ -115,11 +156,17 @@ class ProgramPlacement:
 
     def get_storage(self,
                     identifier: sast.Identifier,
-                    offset: sast.Offset = sast.Offset.zero()) -> tuple[spa.Identifier, spa.ArrayType]:
+                    offset: sast.Offset = sast.Offset.zero()) -> tuple[spa.Identifier, spa.ArrayType] | None:
         if identifier in self._storage_map:
             if offset in self._storage_map[identifier]:
                 return self._storage_map[identifier][offset]
-        raise ValueError(f"Storage for {identifier} not found")
+        elif identifier.name in self._program_scope_fields:
+            # It must be an output or input of the program
+            identifier = self._program_scope_fields[identifier.name]
+            if offset in self._storage_map[identifier]:
+                return self._storage_map[identifier][offset]
+        else:
+            return None
 
     def _allocate_field(self,
                         identifier: sast.Identifier,
@@ -127,7 +174,6 @@ class ProgramPlacement:
                         domain: sast.Cartesian,
                         offsets: list[sast.Offset] = None) -> list[AbstractFieldDeclaration]:
         # Allocate a field for the input
-        # TODO: Extend to scalar types
         assert domain is not None, f"Domain for input {identifier} not found"
         if offsets is None:
             offsets = [sast.Offset.zero()]
@@ -135,8 +181,10 @@ class ProgramPlacement:
         result = []
         for offset in offsets:
             spa_identifier = self.versioning.next_version(f'{identifier.name}_{offset[0]}_{offset[1]}_{offset[2]}')
-
-            field_type = spa.ArrayType(data_type, [domain.z[1] - domain.z[0]])
+            assert domain.z[0] >= 0, "Z dimension must be non-negative"
+            # Not that this might over-allocate the z-dimension, which is done to simplify the address calculations
+            # We expect this temporary storage to be optimized away in a later pass
+            field_type = spa.ArrayType(data_type, [domain.z[1]])
 
             self._set_storage(identifier, offset, spa_identifier, field_type)
 

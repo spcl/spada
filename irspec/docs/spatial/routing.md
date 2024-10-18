@@ -88,44 +88,44 @@ and record the stream $F$, channel $C$, and corresponding stream edge.
     ```rust
     // 1D 2-phase reduce for 4 PEs
     place i16 i, i16 j in [0:4, 0] {
-        f32[K] a;
+        f32[K] a
     }
     
     phase {
       dataflow i32 i, i32 j in [0:4, 0] {
         stream<f32> hop1 = relative_stream(-1, 0) {
-          hops = [(-1, 0)];
-          channel = 0;
+          hops = [(-1, 0)],
+          channel = 0
         };
       }
-      compute i32 i, i32 j in [1:4:2] {
-        send(a, hop1);
+      compute i32 i, i32 j in [1:4:2, 0] {
+        await send(a, hop1)
       }
-      compute i32 i, i32 j in [0:4:2] {
-        foreach i32 k, i32 x in [0:K], receive(hop1) {
-          a[k] += x
+      compute i32 i, i32 j in [0:4:2, 0] {
+        await foreach f32 k, i32 x in [0:K], receive(hop1) {
+          a[k] = a[k] + x
         }
       }
     }
-    
+
     phase {
       dataflow i32 i, i32 j in [0:4, 0] {
         stream<f32> hop2 = relative_stream(-2, 0) {
-          hops = [(-1, 0), (-1, 0)];
-          channel = 0;
-        };
-      }
-    
-      compute i32 i, i32 j in [2, 0] {
-        send(a, hop2);
-      }
-    
-      compute i32 i, i32 j in [0, 0] {
-        foreach i32 k, i32 x in [0:K], receive(hop2) {
-          a[k] += x
+          hops = [(-1, 0), (-1, 0)],
+          channel = 0
         }
       }
-    
+
+      compute i32 i, i32 j in [2, 0] {
+        await send(a, hop2)
+      }
+
+      compute i32 i, i32 j in [0, 0] {
+        await foreach f32 k, i32 x in [0:K], receive(hop2) {
+          a[k] = a[k] + x
+        }
+      }
+
     }
     ```
     

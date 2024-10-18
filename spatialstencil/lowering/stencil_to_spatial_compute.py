@@ -1,14 +1,12 @@
-import copy
 from dataclasses import dataclass
-from typing import TypeVar, Generic
 
+from spatialstencil.lowering.stencil_to_spatial_compute_fwbw import ForwardBackwardComputeVisitor
 from spatialstencil.lowering.stencil_to_spatial_dataflow import ProgramDataflow
 from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
 from spatialstencil.lowering.versioning import Versioning
 from spatialstencil.syntax.common.basenode import Wildcard
-from spatialstencil.syntax.common.tree_matching import PatternMatcher, PatternTransformer
+from spatialstencil.syntax.common.tree_matching import PatternTransformer
 from spatialstencil.syntax.common.types import ScalarType
-from spatialstencil.syntax.common.visitor import IRNodeVisitor
 from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle, group_rectangles_by_domain, split_rectangles
 from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
 import spatialstencil.syntax.spatial_ir.irnodes as spa
@@ -29,7 +27,8 @@ class ProgramCompute:
         self.versioning = versioning
         self.dataflow = dataflow
         self.placement = placement
-        self.visitor = ComputeVisitor(placement, versioning, dataflow)
+        self.visitor = ParallelComputeVisitor(placement, versioning, dataflow)
+        self.vertical_visitor = ForwardBackwardComputeVisitor(placement, versioning, dataflow)
         self.grid_var_t = subgrid_var_type
 
     def generate_computation(self, comp: sast.ComputationBlock) -> list[spa.ComputeBlock]:
@@ -37,11 +36,13 @@ class ProgramCompute:
         Generate a computation block.
 
         """
-        assert comp.schedule == sast.ComputationType.PARALLEL
-
         # Generate the compute block
-        self.visitor.visit(comp)
-        body = self.visitor.stmts
+        if comp.schedule == sast.ComputationType.PARALLEL:
+            self.visitor.visit(comp)
+            body = self.visitor.stmts
+        else:
+            self.vertical_visitor.visit(comp)
+            body = self.vertical_visitor.stmts
 
         # Merge all statements into a compute blocks
 
@@ -84,8 +85,7 @@ class TransformerContext:
     # Indicates that we are operating on the index-th result of the statement
     index: int = 0
 
-
-class ComputeVisitor(sast.ScopedNodeVisitor):
+class ParallelComputeVisitor(sast.ScopedNodeVisitor):
 
     def __init__(self, placement: ProgramPlacement,
                  versioning: Versioning[spa.Identifier],
@@ -550,7 +550,6 @@ class HorizontalStencilTransformer(
         assert remote is not None
         assert dx is not None
         assert dy is not None
-
 
         context = self.get_context()
         compute_block, stmt_block = context.comp, context.stmt

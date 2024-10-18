@@ -98,20 +98,23 @@ class DomainCollector(sast.ScopedNodeVisitor):
         # Add all the inputs to the domain collector
         assert isinstance(self.get_scope(), sast.ComputationBlock)
         for inp, inp_t in zip(computation.inputs, computation.operation_type.source):
-            self._add_domain(inp, inp_t.domain)
+            if isinstance(inp_t, sast.ViewType):
+                assert isinstance(inp_t.domain, sast.Cartesian)
+                self._add_domain(inp, inp_t.domain)
 
         self.generic_visit(computation)
 
     def do_visit_Program(self, program: Program):
         # Add all the inputs to the domain collector
         for inp, inp_t in zip(program.inputs, program.operation_type.source):
-            self._add_domain(inp, inp_t.domain)
+            if isinstance(inp_t, sast.FieldType):
+                assert isinstance(inp_t.domain, sast.Cartesian)
+                self._add_domain(inp, inp_t.domain)
 
-        return_stmt = program.computations[-1]
-        for out, out_t in zip(return_stmt.values, program.operation_type.destination):
-            out = out.value
-            assert isinstance(out, sast.Identifier)
-            self._add_domain(out, out_t.domain)
+        for out, out_t in zip(program.outputs, program.operation_type.source):
+            if isinstance(out_t, sast.FieldType):
+                assert isinstance(out_t.domain, sast.Cartesian)
+                self._add_domain(out, out_t.domain)
 
         self.generic_visit(program)
 
