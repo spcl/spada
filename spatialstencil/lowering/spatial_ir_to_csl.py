@@ -3,7 +3,8 @@ Converts routed Spatial IR code to Cerebras CSL.
 """
 
 from io import StringIO
-from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization
+import networkx as nx
+from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, analysis
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
 from spatialstencil.syntax.csl import constants as csl
 from spatialstencil.syntax.csl.codefile import CodeFile
@@ -78,18 +79,19 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
         for (@range(i16, {ys}, {ye}, 1)) |pe_y| {{
             @set_tile_code(pe_x, pe_y, "{code_filename}", .{{  }});
         }}
-    }}''')
+    }}\n''')
 
     # Emit routing instructions
-    layout_code.write('// Routes\n')
+    layout_code.write('    // Routes\n')
     for rinst in routing_instructions:
         layout_code.write(rinst + '\n')
 
     # Emit symbol names for arguments and kernel
     for argument in kernel.arguments:
+        shape = f'[{", ".join(s.as_ir() for s in argument.dtype.shape)}]' if len(argument.dtype.shape) > 0 else ''
         layout_code.write(f'''
-    @export_name("{argument.identifier.name}", [{argument.dtype.shape}]{argument.dtype.element_type}, 
-                  {"false" if argument.writeonly else "true"});''')
+    @export_name("{argument.identifier.name}", {shape}{argument.dtype.element_type.element_type.as_ir()}, 
+                 {"false" if argument.writeonly else "true"});''')
 
     layout_code.write(f'''
     @export_name("{kernel.name}", fn({", ".join(scalar_argument_types)})void);
@@ -119,7 +121,7 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     #     * Make (unique) DSDs out of memory accesses in compute blocks
     #     * Generate routing instructions from dataflow blocks
     #     * Make unique colors out of streams, reduce number of streams
-    _collect_and_allocate_colors(rect.metadata)
+    color_map = _collect_and_allocate_colors(rect.metadata, header)
     _collect_and_generate_arrays(rect.metadata.place, header, footer)  # TODO: Use @export_symbol here
     dsds = _collect_unique_dsds(rect.metadata, header)
     routing_instructions.append(_collect_routes(rect.metadata.dataflow))
@@ -133,6 +135,7 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     #    * First phase begin is done as part of the kernel function call
     #    * (re)cycle task IDs based on ``csl.{DATA,LOCAL,CONTROL}_TASK_IDS``
     dag = analysis.to_task_dag(rect.metadata.compute)
+    task_map = _create_task_ids(dag)
 
     # Convert compute blocks' contents:
     # Preprocessing pass: FMA fusion
@@ -160,3 +163,47 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
 
     # Finalize code generation by concatenating carets
     return header.getvalue() + '\n' + current_code.getvalue() + '\n' + footer.getvalue()
+
+
+def _collect_and_allocate_colors(rect: PEBlock, header: StringIO) -> dict[int, int]:
+    """
+    Returns a mapping of each channel to a CSL color.
+    """
+    # TODO
+    return {}
+
+
+def _collect_and_generate_arrays(place: spir.PlaceBlock, header: StringIO, footer: StringIO):
+    """
+    Generates array allocation and symbol exports from a rectangle's ``place`` block.
+
+    :param place: The ``place`` block to generate from.
+    :param header: A code generator stream for a file's header (where the array would be defined).
+    :param footer: A code generator stream for a file's footer (where the array would be exported).
+    """
+    # TODO: Use @export_symbol here
+    pass
+
+
+def _collect_unique_dsds(rect: PEBlock, header: StringIO) -> list[str]:
+    """
+    Returns a list of DSD descriptors
+    """
+    # TODO
+    return []
+
+
+def _collect_routes(dataflow: spir.DataflowBlock) -> str:
+    """
+    Returns a code segement to add to the layout CSL file.
+    """
+    return '    // route'
+
+
+def _create_task_ids(task_dag: nx.DiGraph) -> dict[spir.Statement, int]:
+    """
+    Creates a mapping between tasks and physical task IDs.
+    """
+    # TODO
+    # TODO: Consider explicitly defining data/local/control tasks in return value.
+    return {}

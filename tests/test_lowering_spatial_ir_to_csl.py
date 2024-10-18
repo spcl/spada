@@ -16,9 +16,13 @@ def test_add():
     kernel = parser.parse_file(file)
     kernel = passes.concretize_parameters(kernel, N=32)
     kernel = passes.constexpr_propagation(kernel)
-    print(kernel.as_ir())
     csl_files = lower_spatial_ir_to_csl(kernel)
-    print(csl_files)
+    for f in csl_files:
+        print('=============')
+        print(f.filename, ':')
+        print(f.code)
+        print('=============')
+
 
 
 def test_reduce():

@@ -93,6 +93,11 @@ class StreamType(SpatialNode, IRType):
     def as_ir(self, indent: int = 0) -> str:
         return f'stream<{self.element_type.as_ir()}>'
 
+    @property
+    def shape(self) -> list[Union[int, 'Expression']]:
+        # This is here to consolidate data type analysis
+        return []
+
 
 # Arrays
 @dataclass
@@ -111,6 +116,11 @@ class ArrayType(SpatialNode, IRType):
     def as_ir(self, indent: int = 0) -> str:
         dims = ", ".join(str(dim.as_ir() if isinstance(dim, SpatialNode) else dim) for dim in self.shape)
         return f'{self.base_type.as_ir()}[{dims}]'
+
+    @property
+    def element_type(self) -> ScalarType:
+        # This is here to consolidate data types when generating code
+        return self.base_type
 
 
 @dataclass
@@ -266,7 +276,7 @@ class RangeExpression(SpatialNode):
         if step is not None:
             step_expr = Expression(ConstantLiteral(step, ScalarType.i32))
             return RangeExpression(start_expr, stop_expr, step_expr)
-        if abs(start-stop) == 1:
+        if abs(start - stop) == 1:
             return RangeExpression(start_expr)
         else:
             return RangeExpression(start_expr, stop_expr)
