@@ -82,18 +82,18 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     }}\n''')
 
     # Emit routing instructions
-    layout_code.write('    // Routes\n')
+    layout_code.write('\n    // Routes\n')
     for rinst in routing_instructions:
         layout_code.write(rinst + '\n')
 
     # Emit symbol names for arguments and kernel
+    layout_code.write('\n    // Arguments\n')
     for argument in kernel.arguments:
-        shape = f'[{", ".join(s.as_ir() for s in argument.dtype.shape)}]' if len(argument.dtype.shape) > 0 else ''
-        layout_code.write(f'''
-    @export_name("{argument.identifier.name}", {shape}{argument.dtype.element_type.element_type.as_ir()}, 
-                 {"false" if argument.writeonly else "true"});''')
+        layout_code.write(f'    @export_name("{argument.identifier.name}", {dtype_as_csl(argument.dtype)}, '
+                          f'{"false" if argument.writeonly else "true"});\n')
 
     layout_code.write(f'''
+    // Kernel
     @export_name("{kernel.name}", fn({", ".join(scalar_argument_types)})void);
 }}''')
     csl_codes.append(CodeFile('layout.csl', layout_code.getvalue()))
@@ -122,7 +122,7 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     #     * Generate routing instructions from dataflow blocks
     #     * Make unique colors out of streams, reduce number of streams
     color_map = _collect_and_allocate_colors(rect.metadata, header)
-    _collect_and_generate_arrays(rect.metadata.place, header, footer)  # TODO: Use @export_symbol here
+    _collect_and_generate_fields(rect.metadata.place, header, footer)
     dsds = _collect_unique_dsds(rect.metadata, header)
     routing_instructions.append(_collect_routes(rect.metadata.dataflow))
 
@@ -173,16 +173,22 @@ def _collect_and_allocate_colors(rect: PEBlock, header: StringIO) -> dict[int, i
     return {}
 
 
-def _collect_and_generate_arrays(place: spir.PlaceBlock, header: StringIO, footer: StringIO):
+def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, footer: StringIO):
     """
     Generates array allocation and symbol exports from a rectangle's ``place`` block.
 
     :param place: The ``place`` block to generate from.
     :param header: A code generator stream for a file's header (where the array would be defined).
-    :param footer: A code generator stream for a file's footer (where the array would be exported).
+    :param footer: A code generator stream for a file's footer (the comptime block where the array would be exported).
     """
-    # TODO: Use @export_symbol here
-    pass
+    header.write('// Place block\n')
+    for field_dec in place.statements:
+        name = field_dec.field_name.name
+        header.write(f'var {name}: {dtype_as_csl(field_dec.dtype)};\n')
+
+        header.write(f'var __{name}_ptr = &{name};\n')
+        footer.write(f'    @export_symbol(__{name}_ptr, "{name}");\n')
+    header.write('\n')
 
 
 def _collect_unique_dsds(rect: PEBlock, header: StringIO) -> list[str]:
@@ -207,3 +213,19 @@ def _create_task_ids(task_dag: nx.DiGraph) -> dict[spir.Statement, int]:
     # TODO
     # TODO: Consider explicitly defining data/local/control tasks in return value.
     return {}
+
+
+def dtype_as_csl(dtype: spir.ScalarType | spir.StreamType | spir.ArrayType) -> str:
+    """
+    Returns a CSL syntactic equivalent to a Spatial IR data type.
+
+    :param dtype: Spatial IR data type.
+    :return: CSL string representing the given data type.
+    """
+    if isinstance(dtype, spir.ScalarType):
+        return dtype.as_ir()
+    if isinstance(dtype, spir.StreamType):
+        return dtype.element_type.as_ir()
+    if isinstance(dtype, spir.ArrayType):
+        shape = f'[{", ".join(s.as_ir() for s in dtype.shape)}]' if len(dtype.shape) > 0 else ''
+        return shape + dtype_as_csl(dtype.base_type)
