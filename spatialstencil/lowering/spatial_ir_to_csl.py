@@ -135,7 +135,7 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     #    * First phase begin is done as part of the kernel function call
     #    * (re)cycle task IDs based on ``csl.{DATA,LOCAL,CONTROL}_TASK_IDS``
     dag = analysis.to_task_dag(rect.metadata.compute)
-    task_map = _create_task_ids(dag)
+    task_map = _bind_statements_to_tasks(rect.metadata.compute, dag)
 
     # Convert compute blocks' contents:
     # Preprocessing pass: FMA fusion
@@ -165,12 +165,43 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     return header.getvalue() + '\n' + current_code.getvalue() + '\n' + footer.getvalue()
 
 
-def _collect_and_allocate_colors(rect: PEBlock, header: StringIO) -> dict[int, int]:
+def _collect_and_allocate_colors(rect: PEBlock, header: StringIO) -> dict[str, int]:
     """
-    Returns a mapping of each channel to a CSL color.
+    Returns a mapping of each stream to a CSL color, and adds an allocation there.
+
+    :param rect: The rectangle to use.
+    :param header: A code generator stream for a file's header (where the declarations are).
+    :return: Dictionary mapping each stream to its respective color
     """
-    # TODO
-    return {}
+    result: dict[int, int] = {}
+
+    if rect.dataflow.statements:
+        header.write('// Colors\n')
+
+    # Collect colors from streams in dataflow
+    for stream_decl in rect.dataflow.statements:
+        name = name_to_csl(stream_decl.stream_name)
+        if stream_decl.routing is None:
+            raise SyntaxError(f'Non-routed stream "{name}". When generating CSL, Spatial IR code must have all streams '
+                              'routed.')
+        if stream_decl.routing.channel == 'auto':
+            raise SyntaxError(f'"auto" stream channel found in stream "{name}". All streams must be concretized prior '
+                              'to lowering to CSL')
+        if stream_decl.routing.channel not in csl.COLORS:
+            raise SyntaxError(f'Too many communication channels allocated for CSL: stream {name} has channel '
+                              f'{stream_decl.routing.channel}')
+
+        # Add to mapping
+        result[name] = csl.COLORS[stream_decl.routing.channel]
+        # Declare color
+        header.write(f'const {name}_color: color = @get_color({result[name]});\n')
+
+    # TODO(later): Are there any additional colors to collect from compute?
+
+    if result:
+        header.write('\n')
+
+    return result
 
 
 def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, footer: StringIO):
@@ -183,7 +214,7 @@ def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, foote
     """
     header.write('// Place block\n')
     for field_dec in place.statements:
-        name = field_dec.field_name.name
+        name = name_to_csl(field_dec.field_name)
         header.write(f'var {name}: {dtype_as_csl(field_dec.dtype)};\n')
 
         header.write(f'var __{name}_ptr = &{name};\n')
@@ -195,6 +226,7 @@ def _collect_unique_dsds(rect: PEBlock, header: StringIO) -> list[str]:
     """
     Returns a list of DSD descriptors
     """
+    header.write('// DSDs\n')
     # TODO
     return []
 
@@ -206,7 +238,7 @@ def _collect_routes(dataflow: spir.DataflowBlock) -> str:
     return '    // route'
 
 
-def _create_task_ids(task_dag: nx.DiGraph) -> dict[spir.Statement, int]:
+def _bind_statements_to_tasks(compute: spir.ComputeBlock, task_dag: nx.DiGraph) -> dict[analysis.TaskDAGNode, int]:
     """
     Creates a mapping between tasks and physical task IDs.
     """
@@ -229,3 +261,16 @@ def dtype_as_csl(dtype: spir.ScalarType | spir.StreamType | spir.ArrayType) -> s
     if isinstance(dtype, spir.ArrayType):
         shape = f'[{", ".join(s.as_ir() for s in dtype.shape)}]' if len(dtype.shape) > 0 else ''
         return shape + dtype_as_csl(dtype.base_type)
+
+
+def name_to_csl(name: spir.Identifier) -> str:
+    """
+    Returns a CSL syntactic equivalent to a Spatial IR identifier.
+
+    :param name: Spatial IR identifier.
+    :return: Compilable CSL string representing the identifier.
+    """
+    if name.version == 0:
+        return name.name
+    else:
+        return f'{name.name}__{name.version}'

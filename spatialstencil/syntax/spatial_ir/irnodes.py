@@ -662,6 +662,12 @@ class ForStatement(Statement):
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
         return f'{indent_str}for {vars_str} in [{rng_str}] {{\n{body_str}\n{indent_str}}}'
 
+    @property
+    def completion_name(self):
+        # This property is added to maintain compatibility with all other statements that have this property
+        # Completion is always None (for statements are synchronous)
+        return None
+
 
 # Asynchronous Block
 @dataclass
@@ -718,6 +724,12 @@ class AssignmentStatement(Statement):
         indent_str = '  ' * indent
         return f'{indent_str}{self.destination.as_ir()} = {self.source.as_ir()}'
 
+    @property
+    def completion_name(self):
+        # This property is added to maintain compatibility with all other statements that have this property
+        # Completion is always None (free assignment statements are synchronous)
+        return None
+
 
 class AwaitAllStatement(Statement):
     """
@@ -728,6 +740,12 @@ class AwaitAllStatement(Statement):
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         return f'{indent_str}awaitall'
+
+    @property
+    def completion_name(self):
+        # This property is added to maintain compatibility with all other statements that have this property
+        # Completion is always None (awaitall statements are synchronous)
+        return None
 
 
 # Compute Block
