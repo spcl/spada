@@ -9,11 +9,11 @@ kernel @two_phase<K> (stream<f32>[4] readonly in,
         f32[K] a
     }
 
-    place i16 i, i16 j in [3, 0] {
+    place i16 i, i16 j in [2, 0] {
         f32[K] a
     }
 
-    place i16 i, i16 j in [4, 0] {
+    place i16 i, i16 j in [3, 0] {
         f32[K] a
     }
 
