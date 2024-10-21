@@ -317,7 +317,14 @@ class SubgridExpression(SpatialNode):
 
     def get_grid_rect(self) -> tuple[int, int, int, int]:
         start_x, start_y = self.x_range.start.value, self.y_range.start.value
-        stop_x, stop_y = self.x_range.stop.value, self.y_range.stop.value
+        if self.x_range.stop is None:
+            stop_x = ConstantLiteral(start_x.value + 1, start_x.dtype)
+        else: 
+            stop_x = self.x_range.stop.value
+        if self.y_range.stop is None:
+            stop_y = ConstantLiteral(start_y.value + 1, start_y.dtype)
+        else: 
+            stop_y = self.y_range.stop.value
         if not isinstance(start_x, ConstantLiteral):
             raise TypeError(f'Cannot obtain concrete grid size. x range value "{start_x.as_ir()}" is not constant')
         if not isinstance(start_y, ConstantLiteral):

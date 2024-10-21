@@ -121,3 +121,37 @@ def get_identifier_types(place: spir.PlaceBlock) -> dict[spir.Identifier, spir.S
         else:  # Array type
             result[decl.field_name] = decl.dtype.base_type.element_type
     return result
+
+
+class _SendRecvCollector(spir.NodeVisitor):
+
+    def __init__(self):
+        super().__init__()
+        self.sends: set[spir.Identifier] = set()
+        self.receives: set[spir.Identifier] = set()
+
+    def _get_underlying_stream(self, node: spir.Identifier | spir.ArraySlice) -> spir.Identifier:
+        if isinstance(node, spir.ArraySlice):
+            return node.array
+        return node
+
+    def visit_ReceiveStatement(self, node: spir.ReceiveStatement):
+        self.receives.add(self._get_underlying_stream(node.stream_name))
+
+    def visit_ReceiveGenerator(self, node: spir.ReceiveGenerator):
+        self.sends.add(self._get_underlying_stream(node.stream_name))
+
+    def visit_SendStatement(self, node: spir.SendStatement):
+        self.sends.add(self._get_underlying_stream(node.stream_name))
+
+
+def sends_and_receives(compute: spir.ComputeBlock) -> dict[spir.Identifier, tuple[bool, bool]]:
+    """
+    Returns, for each stream, whether it is used in a send or receive operation.
+
+    :return: Dictionary mapping stream identifiers to a 2-tuple of (is_sent, is_received).
+    """
+    collector = _SendRecvCollector()
+    collector.visit(compute)
+    all_identifiers = {k for k in collector.sends | collector.receives}
+    return {k: (k in collector.sends, k in collector.receives) for k in all_identifiers}

@@ -24,11 +24,24 @@ def test_add():
         print('=============')
 
 
-
 def test_reduce():
     file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spatial', 'reduce.sptl')
     kernel = parser.parse_file(file)
     kernel = passes.concretize_parameters(kernel, N=32)
+    kernel = passes.constexpr_propagation(kernel)
+    print(kernel.as_ir())
+    csl_files = lower_spatial_ir_to_csl(kernel)
+    for f in csl_files:
+        print('=============')
+        print(f.filename, ':')
+        print(f.code)
+        print('=============')
+
+
+def test_two_phase_split():
+    file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spatial', 'two_phase_split.sptl')
+    kernel = parser.parse_file(file)
+    kernel = passes.concretize_parameters(kernel, K=32)
     kernel = passes.constexpr_propagation(kernel)
     print(kernel.as_ir())
     csl_files = lower_spatial_ir_to_csl(kernel)
@@ -56,3 +69,4 @@ if __name__ == '__main__':
     test_add()
     test_reduce()
     test_laplacian()
+    test_two_phase_split()

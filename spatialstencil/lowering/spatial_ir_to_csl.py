@@ -82,6 +82,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     for (@range(i16, {xs}, {xe}, 1)) |pe_x| {{
         for (@range(i16, {ys}, {ye}, 1)) |pe_y| {{
             @set_tile_code(pe_x, pe_y, "{code_filename}", .{{  }});
+{_collect_routes(rect.metadata.dataflow, rect.metadata.compute)}
         }}
     }}\n''')
 
@@ -128,7 +129,6 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     color_map = _collect_and_allocate_colors(rect.metadata, header)
     _collect_and_generate_fields(rect.metadata.place, header, footer)
     dsds = _collect_unique_dsds(rect.metadata, header)
-    routing_instructions.append(_collect_routes(rect.metadata.dataflow))
 
     # Convert compute block subgraphs into tasks:
     #    * Make task DAG out of computations
@@ -173,8 +173,8 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
 
     current_code.write(f'''
 task exit_task() void {{
-        // On completion, unblock command stream
-        sys_mod.unblock_cmd_stream();
+    // On completion, unblock command stream
+    sys_mod.unblock_cmd_stream();
 }}''')
 
     # Finalize footer
@@ -259,13 +259,61 @@ def _collect_unique_dsds(rect: PEBlock, header: StringIO) -> list[tuple[str, Dat
     return dsds
 
 
-def _collect_routes(dataflow: spir.DataflowBlock) -> str:
+def _route_dir(dx: int, dy: int):
+    """
+    Helper function that returns directions for routing: (source, target).
+    """
+    assert abs(dx + dy) == 1
+    if dx == -1:
+        return ('EAST', 'WEST')
+    elif dx == 1:
+        return ('WEST', 'EAST')
+    elif dy == -1:
+        return ('SOUTH', 'NORTH')
+    elif dy == 1:
+        return ('NORTH', 'SOUTH')
+
+
+def _collect_routes(dataflow: spir.DataflowBlock, compute: spir.ComputeBlock) -> str:
     """
     Returns a code segement to add to the layout CSL file.
     """
+    INDENT = 12 * ' '
+    result = ''
     # Test whether a receive/send statement are called for creating inbound/outbound routes
-    # For each hop, make a color WEST-EAST/NORTH-SOUTH pair. For the first hop, pair with RAMP
-    return '    // route'
+    sends_recvs = analysis.sends_and_receives(compute)
+
+    # For each hop, make a color WEST-EAST/NORTH-SOUTH pair. For the first and last hop, pair with RAMP
+    for stream in dataflow.statements:
+        if stream.stream_name not in sends_recvs:  # Skip unused streams
+            continue
+        color_name = name_to_csl(stream.stream_name) + '_color'
+
+        if len(stream.routing.hops) == 1:  # Inbound and outbound generated together
+            route_rx = (_route_dir(*stream.routing.hops[0].offset)[0], 'RAMP')
+            route_tx = ('RAMP', _route_dir(*stream.routing.hops[0].offset)[1])
+            sent, received = sends_recvs[stream.stream_name]
+            if sent:
+                result += INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                    color_name, route_tx[0], route_tx[1])
+            if received:
+                result += INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                    color_name, route_rx[0], route_rx[1])
+        else:
+            first_hop = stream.routing.hops[0]
+            route = ('RAMP', _route_dir(*first_hop.offset)[1])
+            result += INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                color_name, route[0], route[1])
+            for hop in stream.routing.hops[1:]:
+                route = _route_dir(*hop.offset)
+                result += INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                    color_name, route[0], route[1])
+            # last_hop = stream.routing.hops[-1]
+            # route = (_route_dir(*last_hop.offset)[0], 'RAMP')
+            # result += INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+            #     color_name, route[0], route[1])
+
+    return result
 
 
 def _bind_statements_to_tasks(compute: spir.ComputeBlock, task_dag: nx.DiGraph) -> dict[analysis.TaskDAGNode, int]:
