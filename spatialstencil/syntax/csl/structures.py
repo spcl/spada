@@ -1,0 +1,60 @@
+from dataclasses import dataclass
+from enum import Enum, auto
+
+
+class DSDType(Enum):
+    mem1d = auto()  # 1-dimensional access
+    mem4d = auto()  # 2-4 dimensional access
+    fabin = auto()  # Fabric-to-PE
+    fabout = auto()  # PE-to-fabric
+
+
+class DataStructureDescriptor:
+    """
+    Data Structure Descriptor (DSD) defines ways to read arrays.
+    """
+
+    def as_csl(self) -> str:
+        """
+        Returns the CSL representation of this object.
+        """
+        raise NotImplementedError
+
+
+@dataclass
+class MemoryAccessDSD(DataStructureDescriptor):
+    """
+    A DSD that defines a 1D-4D memory access on PE-local memory.
+    """
+    dsd_type: DSDType
+    array: str
+    extent: list[int]
+    idxvars: list[str]
+    expression: list[str]
+
+    def __post_init__(self):
+        assert self.dsd_type in (DSDType.mem1d, DSDType.mem4d)
+        assert 1 <= len(self.extent) <= 4
+        assert len(self.idxvars) == len(self.expression)
+        assert len(self.idxvars) == len(self.extent)
+
+    def as_csl(self) -> str:
+        return (f'@get_dsd({self.dsd_type.name}_dsd, .{{ .tensor_access = '
+                f'|{",".join(self.idxvars)}|{{{",".join(self.extent)}}} '
+                f'-> {self.array}[{", ".join(self.expression)}] }})')
+
+
+@dataclass
+class FabricDSD(DataStructureDescriptor):
+    """
+    A DSD that defines communication between the PE and the fabric.
+    """
+    dsd_type: DSDType
+    color: str
+    extent: int
+
+    def __post_init__(self):
+        assert self.dsd_type in (DSDType.fabin, DSDType.fabout)
+
+    def as_csl(self) -> str:
+        return f'@get_dsd({self.dsd_type.name}_dsd, .{{ .extent = {self.extent}, .fabric_color = {self.color}}})'

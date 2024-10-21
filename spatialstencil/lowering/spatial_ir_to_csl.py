@@ -7,6 +7,7 @@ import networkx as nx
 from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, analysis
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
 from spatialstencil.syntax.csl import constants as csl
+from spatialstencil.syntax.csl.structures import DataStructureDescriptor
 from spatialstencil.syntax.csl.codefile import CodeFile
 
 
@@ -242,13 +243,20 @@ def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, foote
     header.write('\n')
 
 
-def _collect_unique_dsds(rect: PEBlock, header: StringIO) -> list[str]:
+def _collect_unique_dsds(rect: PEBlock, header: StringIO) -> list[tuple[str, DataStructureDescriptor]]:
     """
-    Returns a list of DSD descriptors
+    Returns a list of DSDs and generates them in the header.
     """
+    dsds: list[tuple[str, DataStructureDescriptor]] = []
+
+    # TODO: Find DSDs
+
+    # Generate appropriate header code
     header.write('// DSDs\n')
-    # TODO
-    return []
+    for name, dsd in dsds:
+        header.write(f'const {name} = {dsd.as_csl()};\n')
+
+    return dsds
 
 
 def _collect_routes(dataflow: spir.DataflowBlock) -> str:
