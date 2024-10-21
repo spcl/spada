@@ -39,6 +39,9 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     # Create mapping between SpIR blocks and PE rectangles. Creates empty blocks as necessary
     rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
 
+    # Lower array receives and sends to foreach and for, respectively
+    canonicalization.lower_bulk_communication(rectangles)
+
     # Collect scalar argument types
     scalar_argument_types = []
     scalar_arguments = []
@@ -137,8 +140,11 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     dag = analysis.to_task_dag(rect.metadata.compute)
     task_map = _bind_statements_to_tasks(rect.metadata.compute, dag)
 
+    # TODO: Collect all scalar types for foreach receivers. Every sequential foreach can recycle index var
+
     # Convert compute blocks' contents:
     # Preprocessing pass: FMA fusion
+    # Convert receives/sends from/to arguments to memcpy
     # Communication calls:
     #    * Become async calls
     # ``map``:
@@ -150,10 +156,24 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     #   * Wavelet-triggered task as fallback
     # Rebinding tasks (i.e., recycling IDs) between phases becomes switch-case on the variable that maintains
     # the current phase
+    def _get_stmt(node: analysis.TaskDAGNode):
+        return rect.metadata.compute.statements[node.statement_id]
+
+    source_tasks = [
+        _get_stmt(n) for n in dag if dag.in_degree(n) == 0 and not isinstance(_get_stmt(n), spir.ForeachStatement)
+    ]
 
     # Write entry point code
     current_code.write(f'''fn {kernel.name}({", ".join(scalar_arguments)}) void {{
-  sys_mod.unblock_cmd_stream();
+''')
+    for task in source_tasks:
+        current_code.write(f'    @activate({task});\n')
+    current_code.write('}\n')
+
+    current_code.write(f'''
+task exit_task() void {{
+        // On completion, unblock command stream
+        sys_mod.unblock_cmd_stream();
 }}''')
 
     # Finalize footer
@@ -235,6 +255,8 @@ def _collect_routes(dataflow: spir.DataflowBlock) -> str:
     """
     Returns a code segement to add to the layout CSL file.
     """
+    # Test whether a receive/send statement are called for creating inbound/outbound routes
+    # For each hop, make a color WEST-EAST/NORTH-SOUTH pair. For the first hop, pair with RAMP
     return '    // route'
 
 

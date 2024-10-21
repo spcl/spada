@@ -89,3 +89,35 @@ def to_task_dag(compute: spir.ComputeBlock) -> nx.DiGraph:
             last_node = node
 
     return result
+
+
+def get_identifier_sizes(place: spir.PlaceBlock) -> dict[spir.Identifier, list[int]]:
+    """
+    Returns a dictionary mapping each identifier to its dimensions, or an empty list if scalar.
+    """
+    result = {}
+    for decl in place.statements:
+        if isinstance(decl.dtype, spir.ScalarType):
+            result[decl.field_name] = []
+        else:  # Array type
+            evaluated_shape = []
+            for s in decl.dtype.shape:
+                if isinstance(s, int):
+                    evaluated_shape.append(s)
+                else:
+                    evaluated_shape.append(s.eval())
+            result[decl.field_name] = evaluated_shape
+    return result
+
+
+def get_identifier_types(place: spir.PlaceBlock) -> dict[spir.Identifier, spir.ScalarType]:
+    """
+    Returns a dictionary mapping each identifier to its data type.
+    """
+    result = {}
+    for decl in place.statements:
+        if isinstance(decl.dtype, spir.ScalarType):
+            result[decl.field_name] = decl.dtype
+        else:  # Array type
+            result[decl.field_name] = decl.dtype.base_type.element_type
+    return result

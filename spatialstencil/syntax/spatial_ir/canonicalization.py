@@ -4,7 +4,7 @@ Canonicalization passes for Spatial IR
 from collections import defaultdict
 import copy
 from dataclasses import dataclass
-from spatialstencil.syntax.spatial_ir import irnodes as spir
+from spatialstencil.syntax.spatial_ir import irnodes as spir, analysis
 from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle
 
 
@@ -139,6 +139,7 @@ def consolidate_rectangles_to_equivalence_classes(kernel: spir.Kernel) -> list[R
 
     return [Rectangle((k[0], k[1]), (k[2], k[3]), v) for k, v in sorted(result.items())]
 
+
 def _make_vars():
     """
     Helper function that creates two unused variables for an empty block.
@@ -155,3 +156,77 @@ def reduce_streams(kernel: spir.Kernel) -> spir.Kernel:
     """
     # TODO(later)
     return kernel
+
+
+class _BulkCommunicationLowerer(spir.NodeTransformer):
+
+    def __init__(self, place: spir.PlaceBlock):
+        super().__init__()
+        self.identifier_sizes = analysis.get_identifier_sizes(place)
+        self.identifier_dtypes = analysis.get_identifier_types(place)
+
+    def visit_ReceiveStatement(self, node: spir.ReceiveStatement):
+        sz = node.get_size(self.identifier_sizes)
+        if len(sz) == 0:  # Scalar receive
+            return self.generic_visit(node)
+
+        # Array receive, make a foreach node
+        new_node = spir.ForeachStatement(
+            [spir.TypedIdentifier(spir.ScalarType.u16, spir.Identifier(f'__k{i}', 0)) for i in range(len(sz))],
+            [
+                # ``0:size`` for every dimension
+                spir.RangeExpression(
+                    spir.Expression(spir.ConstantLiteral(0, spir.ScalarType.u16)),
+                    spir.Expression(spir.ConstantLiteral(s, spir.ScalarType.u16))) for s in sz
+            ],
+            spir.TypedIdentifier(self.identifier_dtypes[node.local_array], spir.Identifier(f'__x', 0)),
+            spir.ReceiveGenerator(node.stream_name),
+            [
+                # ``arr[__k0, ...] = __x``
+                spir.AssignmentStatement(
+                    spir.ArraySlice(
+                        copy.deepcopy(node.local_array),
+                        [spir.Expression(spir.Identifier(f'__k{i}', 0)) for i in range(len(sz))]),
+                    spir.Expression(spir.Identifier(f'__x', 0))),
+            ],
+            node.completion_name)
+
+        return new_node
+
+    # NOTE: No need for this, the ``.extent`` DSD field in CSL takes care of that. Additionally, the completion moving
+    #       into the for loop does not make sense.
+    # def visit_SendStatement(self, node: spir.SendStatement):
+    #     sz = node.get_size(self.identifier_sizes)
+    #     if len(sz) == 0:  # Scalar send
+    #         return self.generic_visit(node)
+
+    #     # Array send, make a for node
+    #     new_node = spir.ForStatement(
+    #         [spir.TypedIdentifier(spir.ScalarType.u16, spir.Identifier(f'__k{i}', 0)) for i in range(len(sz))],
+    #         [
+    #             # ``0:size`` for every dimension
+    #             spir.RangeExpression(
+    #                 spir.Expression(spir.ConstantLiteral(0, spir.ScalarType.u16)),
+    #                 spir.Expression(spir.ConstantLiteral(s, spir.ScalarType.u16))) for s in sz
+    #         ],
+    #         [
+    #             # ``send(arr[__k0, ...], stream)``
+    #             spir.SendStatement(
+    #                 spir.ArraySlice(
+    #                     copy.deepcopy(node.local_array),
+    #                     [spir.Expression(spir.Identifier(f'__k{i}', 0)) for i in range(len(sz))]), node.stream_name,
+    #                 node.completion_name)
+    #         ])
+
+    #     return new_node
+
+
+def lower_bulk_communication(rectangles: list[Rectangle[PEBlock]]) -> None:
+    """
+    Lowers top-level array ``receive`` and ``send`` operations to foreach and for loops, respectively.
+    The array operations are shorthands for a row-major (C-order) loop over the communication operations.
+
+    :param rectangles: A list of PE block rectangles to lower computations within.
+    """
+    for rect in rectangles:
+        rect.metadata.compute = _BulkCommunicationLowerer(rect.metadata.place).visit(rect.metadata.compute)

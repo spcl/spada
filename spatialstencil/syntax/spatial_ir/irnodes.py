@@ -78,6 +78,9 @@ class Identifier(SpatialNode):
             return self.name
         return f'{self.name}#{self.version}'
 
+    def __hash__(self) -> int:
+        return hash((Identifier, self.name, self.version))
+
 
 # Streams
 @dataclass
@@ -529,6 +532,20 @@ class SendStatement(Statement):
             return f'{indent_str}{self.completion_name.as_ir()} = send({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
         return f'{indent_str}await send({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
 
+    def get_size(self, identifier_sizes: dict[Identifier, list[int]]) -> list[int]:
+        """
+        Returns the total number of elements passed through the stream during this operation as a list of dimensions.
+        If the operation is a scalar operation, an empty list will be returned.
+
+        :param identifier_sizes: A dictionary mapping identifiers to their respective sizes.
+        :return: A list of dimensions representing the extents of the operation, or an empty list if scalar.
+        """
+        if isinstance(self.local_array, ArraySlice):
+            raise NotImplementedError('Not yet implemented')
+        if self.local_array not in identifier_sizes:
+            raise NameError(f'{self.local_array.as_ir()} is not registered in its corresponding `place` block.')
+        return identifier_sizes[self.local_array]
+
 
 @dataclass
 class ReceiveStatement(Statement):
@@ -550,6 +567,20 @@ class ReceiveStatement(Statement):
         if self.completion_name:
             return f'{indent_str}{self.completion_name.as_ir()} = receive({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
         return f'{indent_str}await receive({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
+
+    def get_size(self, identifier_sizes: dict[Identifier, list[int]]) -> list[int]:
+        """
+        Returns the total number of elements passed through the stream during this operation as a list of dimensions.
+        If the operation is a scalar operation, an empty list will be returned.
+
+        :param identifier_sizes: A dictionary mapping identifiers to their respective sizes.
+        :return: A list of dimensions representing the extents of the operation, or an empty list if scalar.
+        """
+        if isinstance(self.local_array, ArraySlice):
+            raise NotImplementedError('Not yet implemented')
+        if self.local_array not in identifier_sizes:
+            raise NameError(f'{self.local_array.as_ir()} is not registered in its corresponding `place` block.')
+        return identifier_sizes[self.local_array]
 
 
 # Receive generator
