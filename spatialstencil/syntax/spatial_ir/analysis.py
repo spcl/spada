@@ -139,7 +139,7 @@ class _SendRecvCollector(spir.NodeVisitor):
         self.receives.add(self._get_underlying_stream(node.stream_name))
 
     def visit_ReceiveGenerator(self, node: spir.ReceiveGenerator):
-        self.sends.add(self._get_underlying_stream(node.stream_name))
+        self.receives.add(self._get_underlying_stream(node.stream_name))
 
     def visit_SendStatement(self, node: spir.SendStatement):
         self.sends.add(self._get_underlying_stream(node.stream_name))

@@ -41,7 +41,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
 
     # Lower array receives and sends to foreach and for, respectively
-    canonicalization.lower_bulk_communication(rectangles)
+    # (maybe unnecessary given that bulk send/receive can be implemented with fabout/fabin)
+    # canonicalization.lower_bulk_communication(rectangles)
 
     # Collect scalar argument types
     scalar_argument_types = []
@@ -64,6 +65,9 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     grid_rect = kernel.get_grid_rect()
     rect_size = grid_rect[1], grid_rect[3]
 
+    # Collect unique routes for all rectangles
+    routes_per_rectangle = _collect_routes(rectangles)
+
     layout_code.write(f'''layout {{
     // Rectangle and code setup
     @set_rectangle{rect_size};''')
@@ -82,7 +86,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     for (@range(i16, {xs}, {xe}, 1)) |pe_x| {{
         for (@range(i16, {ys}, {ye}, 1)) |pe_y| {{
             @set_tile_code(pe_x, pe_y, "{code_filename}", .{{  }});
-{_collect_routes(rect.metadata.dataflow, rect.metadata.compute)}
+{routes_per_rectangle[(xs, ys)]}
         }}
     }}\n''')
 
@@ -217,8 +221,6 @@ def _collect_and_allocate_colors(rect: PEBlock, header: StringIO) -> dict[str, i
         # Declare color
         header.write(f'const {name}_color: color = @get_color({result[name]});\n')
 
-    # TODO(later): Are there any additional colors to collect from compute?
-
     if result:
         header.write('\n')
 
@@ -274,44 +276,71 @@ def _route_dir(dx: int, dy: int):
         return ('NORTH', 'SOUTH')
 
 
-def _collect_routes(dataflow: spir.DataflowBlock, compute: spir.ComputeBlock) -> str:
+def _collect_routes(rectangles: list[Rectangle[PEBlock]]) -> dict[tuple[int, int], str]:
     """
-    Returns a code segement to add to the layout CSL file.
+    Creates a parametric version of the Routing Graph (see the Spatial IR specification for more information) and
+    returns a dictionary of code segements to add to the layout CSL file based on the streams.
+
+    :param rectangles: All rectangles involved in this kernel.
+    :return: A dictionary mapping the starting point of each rectangle to a string representing the layout instructions.
     """
     INDENT = 12 * ' '
-    result = ''
-    # Test whether a receive/send statement are called for creating inbound/outbound routes
-    sends_recvs = analysis.sends_and_receives(compute)
+    result = {}
 
-    # For each hop, make a color WEST-EAST/NORTH-SOUTH pair. For the first and last hop, pair with RAMP
-    for stream in dataflow.statements:
-        if stream.stream_name not in sends_recvs:  # Skip unused streams
-            continue
-        color_name = name_to_csl(stream.stream_name) + '_color'
+    # TODO: Make routing instructions unique
+    # Create a routing graph
+    for rect in rectangles:
+        # Test whether a receive/send statement are called for creating inbound/outbound routes
+        sends_recvs = analysis.sends_and_receives(rect.metadata.compute)
+        inst = ''
 
-        if len(stream.routing.hops) == 1:  # Inbound and outbound generated together
-            route_rx = (_route_dir(*stream.routing.hops[0].offset)[0], 'RAMP')
-            route_tx = ('RAMP', _route_dir(*stream.routing.hops[0].offset)[1])
-            sent, received = sends_recvs[stream.stream_name]
-            if sent:
-                result += INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                    color_name, route_tx[0], route_tx[1])
-            if received:
-                result += INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                    color_name, route_rx[0], route_rx[1])
-        else:
-            first_hop = stream.routing.hops[0]
-            route = ('RAMP', _route_dir(*first_hop.offset)[1])
-            result += INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                color_name, route[0], route[1])
-            for hop in stream.routing.hops[1:]:
-                route = _route_dir(*hop.offset)
-                result += INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                    color_name, route[0], route[1])
-            # last_hop = stream.routing.hops[-1]
-            # route = (_route_dir(*last_hop.offset)[0], 'RAMP')
-            # result += INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-            #     color_name, route[0], route[1])
+        # For each hop, make a color WEST-EAST/NORTH-SOUTH pair. For the first and last hop, pair with RAMP
+        for stream in rect.metadata.dataflow.statements:
+            if stream.stream_name not in sends_recvs:  # Skip unused streams
+                continue
+            color_name = name_to_csl(stream.stream_name) + '_color'
+
+            if len(stream.routing.hops) == 1:  # Inbound and outbound generated together
+                route = _route_dir(*stream.routing.hops[0].offset)
+                sent, received = sends_recvs[stream.stream_name]
+                if sent:
+                    inst += INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                        color_name, 'RAMP', route[1])
+                if received:
+                    inst += INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                        color_name, route[0], 'RAMP')
+            else:  # Multi-hop
+                sent, received = sends_recvs[stream.stream_name]
+                if sent:
+                    first_hop = stream.routing.hops[0]
+                    route = ('RAMP', _route_dir(*first_hop.offset)[1])
+                    inst += INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                        color_name, route[0], route[1])
+                    cur_offx = 0
+                    cur_offy = 0
+                    for hop in stream.routing.hops[1:]:
+                        route = _route_dir(*hop.offset)
+                        cur_offx += hop.offset[0]
+                        cur_offy += hop.offset[1]
+                        inst += INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                            cur_offx, cur_offy, color_name, route[0], route[1])
+                if received:
+                    cur_offx = 0
+                    cur_offy = 0
+                    last_hop = stream.routing.hops[-1]
+                    route = (_route_dir(*last_hop.offset)[0], 'RAMP')
+                    inst += INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                        cur_offx, cur_offy, color_name, route[0], route[1])
+                    cur_offx += last_hop.offset[0]
+                    cur_offy += last_hop.offset[1]
+                    for hop in reversed(stream.routing.hops[:-1]):
+                        route = _route_dir(*hop.offset)
+                        inst += INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                            cur_offx, cur_offy, color_name, route[0], route[1])
+                        cur_offx += hop.offset[0]
+                        cur_offy += hop.offset[1]
+
+        result[(rect.x_range[0], rect.y_range[0])] = inst
 
     return result
 
@@ -319,9 +348,10 @@ def _collect_routes(dataflow: spir.DataflowBlock, compute: spir.ComputeBlock) ->
 def _bind_statements_to_tasks(compute: spir.ComputeBlock, task_dag: nx.DiGraph) -> dict[analysis.TaskDAGNode, int]:
     """
     Creates a mapping between tasks and physical task IDs.
+    Acts by coarsening the task DAG to CSL tasks (data or local, based on statement type), and adds ``@activate`` or
+    ``@unblock`` statements based on edge types.
     """
-    # TODO
-    # TODO: Consider explicitly defining data/local/control tasks in return value.
+    # TODO: Consider explicitly defining data/local tasks in return value.
     return {}
 
 

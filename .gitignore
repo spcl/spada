@@ -155,3 +155,4 @@ cython_debug/
 #.idea/
 /.vscode/
 *.png
+/*.dot
