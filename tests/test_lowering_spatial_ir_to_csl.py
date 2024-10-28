@@ -64,9 +64,24 @@ def test_laplacian():
         print('=============')
 
 
+def test_forward_sum():
+    file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spatial', 'forward_sum.sptl')
+    kernel = parser.parse_file(file)
+    kernel = passes.concretize_parameters(kernel, N=31, K=30)
+    kernel = passes.constexpr_propagation(kernel)
+    print(kernel.as_ir())
+    csl_files = lower_spatial_ir_to_csl(kernel)
+    for f in csl_files:
+        print('=============')
+        print(f.filename, ':')
+        print(f.code)
+        print('=============')
+
+
 if __name__ == '__main__':
     test_non_concrete_program()
     test_add()
     test_reduce()
     test_laplacian()
     test_two_phase_split()
+    test_forward_sum()
