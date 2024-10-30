@@ -5,6 +5,8 @@ from spatialstencil.syntax.common.basenode import BaseNode
 from spatialstencil.syntax.common.types import ScalarType, IRType
 from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle
 
+from lark import Tree
+
 
 @dataclass
 class SpatialNode(BaseNode):
@@ -39,7 +41,7 @@ class ConstantLiteral(SpatialNode):
 
     def as_ir(self, indent: int = 0) -> str:
         return str(self.value)
-
+    
 
 # Parameters
 @dataclass
@@ -91,6 +93,21 @@ class StreamType(SpatialNode, IRType):
 
     def as_ir(self, indent: int = 0) -> str:
         return f'stream<{self.dtype.as_ir()}>'
+    
+
+
+@dataclass
+class MultiStreamType(SpatialNode, IRType):
+    """
+    A multistream type that handles collective communication patterns.
+    """
+    dtype: ScalarType
+
+    def validate(self) -> None:
+        assert isinstance(self.dtype, ScalarType)
+
+    def as_ir(self, indent: int = 0) -> str:
+        return f'multistream<{self.dtype.as_ir()}>'
 
 
 
@@ -100,7 +117,7 @@ class ArrayType(SpatialNode, IRType):
     """
     An array type of a scalar or stream, with one or more dimensions.
     """
-    base_type: Union[ScalarType, StreamType]
+    base_type: Union[ScalarType, StreamType, MultiStreamType]
     shape: list[Union[int, 'Expression']]
 
     def validate(self) -> None:
@@ -118,7 +135,7 @@ class TypedIdentifier(SpatialNode):
     """
     A variable identifier (e.g., x, y, my_variable) with a type.
     """
-    dtype: Union[ScalarType, StreamType, ArrayType]
+    dtype: Union[ScalarType, StreamType, MultiStreamType, ArrayType]
     identifier: Identifier
 
     def validate(self) -> None:
@@ -383,12 +400,51 @@ class RoutingDeclaration(SpatialNode):
             for r in self.hops:
                 dx, dy = r.offset
                 assert abs(dx) + abs(dy) == 1, "Each hop must have an absolute sum of 1."
+        if isinstance(self.hops, Tree):
+            self.hops = self.hops.data
+        
+        # this doesn't work for self.channel != "auto"
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         hops_str = "auto" if self.hops == "auto" else f"[{', '.join(hop.as_ir() for hop in self.hops)}]"
         channel_str = "auto" if self.channel == "auto" else str(self.channel)
         return f"{indent_str}hops = {hops_str},\n{indent_str}channel = {channel_str}"
+    
+
+@dataclass
+class ReduceRoutingDeclaration(SpatialNode):
+    """
+    A routing declaration for a reduce, optionally specifying hops and channel.
+    """
+    hops: Literal["auto"] = "auto"  # list of hops or 'auto'
+    channel: Union[int, Literal["auto"]] = "auto"  # Channel ID or 'auto'
+    graph: int = 0
+    op: int = 0
+
+    def validate(self) -> None:
+        if isinstance(self.hops, list):
+            for r in self.hops:
+                dx, dy = r.offset
+                assert abs(dx) + abs(dy) == 1, "Each hop must have an absolute sum of 1."
+        if isinstance(self.hops, Tree):
+            self.hops = self.hops.data
+
+        # test this for self.channel != "auto"
+        if isinstance(self.channel, Tree):
+            self.channel = self.channel.data
+
+        assert isinstance(self.graph, int)
+        assert isinstance(self.op, int)
+
+
+    def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
+        hops_str = "auto"
+        channel_str = "auto" if self.channel == "auto" else str(self.channel)
+        graph_str = str(self.graph)
+        op_str = str(self.op)
+        return f"{indent_str}hops = {hops_str},\n{indent_str}channel = {channel_str},\n{indent_str}graph = {graph_str},\n{indent_str}op = {op_str}"
 
 
 @dataclass
@@ -419,6 +475,38 @@ class RelativeStreamDeclaration(SpatialNode):
         return f'{indent_str}stream<{self.dtype.dtype.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
 
 
+@dataclass
+class MulStreamDeclaration(SpatialNode):
+    """
+    A stream declaration inside a dataflow block that declares a communication stream
+    to and from PEs at relative positions, with an optional routing declaration.
+    """
+    dtype: MultiStreamType
+    stream_name: Identifier
+    dx: Expression
+    dy: Expression
+    routing: Optional[Union[RoutingDeclaration, ReduceRoutingDeclaration]] = None
+
+    def validate(self) -> None:
+        assert isinstance(self.dtype, MultiStreamType)
+        assert isinstance(self.stream_name, Identifier)
+        assert isinstance(self.dx, Expression)
+        assert isinstance(self.dy, Expression)
+        if self.routing:
+            assert isinstance(self.routing, Union[RoutingDeclaration, ReduceRoutingDeclaration])
+
+    def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
+        routing_str = ""
+        if self.routing:
+            routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{' ' * indent}}}"
+        if isinstance(self.routing, ReduceRoutingDeclaration):
+            return f'{indent_str}multistream<{self.dtype.dtype.as_ir()}> {self.stream_name.as_ir()} = reduce({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
+        elif isinstance(self.routing, RoutingDeclaration):
+            return f'{indent_str}multistream<{self.dtype.dtype.as_ir()}> {self.stream_name.as_ir()} = broadcast({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
+        else:
+            raise ValueError("Invalid routing declaration")
+
 ###
 # Dataflow Block
 ###
@@ -431,11 +519,11 @@ class DataflowBlock(SpatialNode):
     """
     variables: list[TypedIdentifier]
     subgrid: SubgridExpression
-    statements: list[RelativeStreamDeclaration]
+    statements: Union[list[RelativeStreamDeclaration], list[MulStreamDeclaration]]
 
     def validate(self) -> None:
         assert all(isinstance(var, TypedIdentifier) for var in self.variables)
-        assert all(isinstance(stmt, RelativeStreamDeclaration) for stmt in self.statements)
+        assert all(isinstance(stmt, RelativeStreamDeclaration) for stmt in self.statements) or all(isinstance(stmt, MulStreamDeclaration) for stmt in self.statements)
         assert len(self.variables) == 2
 
     def as_ir(self, indent: int = 0) -> str:
@@ -500,6 +588,29 @@ class SendStatement(Statement):
 
 @dataclass
 class ReceiveStatement(Statement):
+    """
+    Receive statement for receiving data asynchronously through a stream.
+    """
+    local_array: Union[Identifier, ArraySlice]
+    stream_name: Union[Identifier, ArraySlice]
+    completion_name: Optional[Completion] = None
+
+    def validate(self) -> None:
+        assert isinstance(self.local_array, (Identifier, ArraySlice))
+        assert isinstance(self.stream_name, (Identifier, ArraySlice))
+        if self.completion_name:
+            assert isinstance(self.completion_name, Completion)
+
+
+    def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
+        if self.completion_name:
+            return f'{indent_str}{self.completion_name.as_ir()} = receive({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
+        return f'{indent_str}await receive({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
+    
+
+@dataclass
+class ReduceStatement(Statement):
     """
     Receive statement for receiving data asynchronously through a stream.
     """
@@ -758,14 +869,14 @@ class KernelArgument(SpatialNode):
     """
     A kernel argument of a given type.
     """
-    dtype: Union[ScalarType, ArrayType, StreamType]
+    dtype: Union[ScalarType, ArrayType, StreamType, MultiStreamType]
     identifier: Identifier
     readonly: bool = False
     writeonly: bool = False
     compiletime: bool = False
 
     def validate(self) -> None:
-        assert isinstance(self.dtype, (ScalarType, ArrayType, StreamType))
+        assert isinstance(self.dtype, (ScalarType, ArrayType, StreamType, MultiStreamType))
         assert isinstance(self.identifier, Identifier)
         assert not self.readonly or not self.writeonly
         assert not self.compiletime or not self.writeonly
@@ -811,6 +922,7 @@ class Kernel(SpatialNode):
         assert all(isinstance(stmt, (Phase, ComputeBlock, DataflowBlock, PlaceBlock)) for stmt in self.body)
 
     def as_ir(self, indent: int = 0) -> str:
+        self.reduce_subroutine()
         param_str = ", ".join(p.as_ir() for p in self.parameters)
         arg_str = ", ".join(arg.as_ir() for arg in self.arguments)
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
@@ -844,6 +956,43 @@ class Kernel(SpatialNode):
                                             (0, elem)))
 
         return rectangles
+    
+
+    def reduce_subroutine(self):
+        self.separate_computeblocks()
+
+        return None
+    
+
+    def separate_computeblocks(self):
+        newbody = []
+        for elem in self.body:
+            includesReduceStatement = False
+            if isinstance(elem, ComputeBlock):
+                for stmt in elem.statements:
+                    if isinstance(stmt, ReduceStatement):
+                        includesReduceStatement = True
+                        break
+            if includesReduceStatement:
+                x_start = elem.subgrid.x_range.start.value.value
+                x_end = elem.subgrid.x_range.stop.value.value
+                x_step = 1 if elem.subgrid.x_range.step == None else elem.subgrid.x_range.step.value.value
+                y_start = elem.subgrid.y_range.start.value.value
+                y_end = elem.subgrid.y_range.stop.value.value
+                y_step = 1 if elem.subgrid.y_range.step == None else elem.subgrid.y_range.step.value.value
+
+                print(x_start, x_end, x_step)
+                print(y_start, y_end, y_step)
+
+                for x in range(x_start, x_end, x_step):
+                    for y in range(y_start, y_end, y_step):
+                        newbody.append(ComputeBlock(elem.variables, SubgridExpression(RangeExpression(start=Expression(ConstantLiteral(x, ScalarType.i32))), RangeExpression(start=Expression(ConstantLiteral(y, ScalarType.i32)))), elem.statements))
+
+            else:
+                newbody.append(elem)
+
+        self.body = newbody
+        return None
 
 # Specialized visitors
 

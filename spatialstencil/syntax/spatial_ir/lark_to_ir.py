@@ -2,7 +2,7 @@ import lark
 
 from spatialstencil.syntax.common.types import ScalarType
 from spatialstencil.syntax.spatial_ir import irnodes
-from spatialstencil.syntax.spatial_ir.irnodes import StreamType, Identifier
+from spatialstencil.syntax.spatial_ir.irnodes import StreamType, MultiStreamType, Identifier
 
 
 class TreeToSpatialIR(lark.Transformer):
@@ -122,6 +122,8 @@ class TreeToSpatialIR(lark.Transformer):
             return irnodes.SendStatement(*arguments, completion_name=completion)
         elif func == 'receive':
             return irnodes.ReceiveStatement(*arguments, completion_name=completion)
+        elif func == 'reduce':
+            return irnodes.ReduceStatement(*arguments, completion_name=completion)
         raise SyntaxError(f'Unrecognized free function call to "{func}"')
 
     subscript = irnodes.ArraySlice.from_lark
@@ -133,6 +135,7 @@ class TreeToSpatialIR(lark.Transformer):
     # Declarations and routing
     hop = irnodes.RoutingHop.from_lark
     routing = irnodes.RoutingDeclaration.from_lark
+    reduce_routing = irnodes.ReduceRoutingDeclaration.from_lark
     field_declaration = irnodes.FieldDeclaration.from_lark
     subgrid_expression_2d = irnodes.SubgridExpression.from_lark
 
@@ -142,8 +145,21 @@ class TreeToSpatialIR(lark.Transformer):
         return irnodes.RoutingHop(o)
 
     def stream_declaration(self, args):
-        args[0] = StreamType(args[0])
-        return irnodes.RelativeStreamDeclaration(*args)
+        # args[0] = StreamType(args[0])
+        # print(args)
+        # exit()
+        if args[0].data == 'classic_stream':
+            args[0].children[0] = StreamType(args[0].children[0])
+            return irnodes.RelativeStreamDeclaration(*args[0].children)
+        elif args[0].data == 'mul_stream':
+            args[0].children[0].children[0] = MultiStreamType(args[0].children[0].children[0])
+            return irnodes.MulStreamDeclaration(*args[0].children[0].children)
+        else:
+            raise NotImplementedError('Only classic and mul stream declarations are supported at the moment')
+        
+            # original code
+            # args[0] = StreamType(args[0])
+            # return irnodes.RelativeStreamDeclaration(*args)
 
     # Scopes
     def _scope_wrapper(self, cls, args):

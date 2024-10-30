@@ -32,7 +32,7 @@ identifier : suffix_id ("#" digits)?
 !uint_type : "u8" | "u16" | "u32"
 !bool_type : "bool"
 ?scalar_type : float_type | int_type | uint_type | bool_type
-stream_type : "stream" "<" scalar_type ">"
+stream_type : "stream" "<" scalar_type ">" | "multistream" "<" scalar_type ">"
 ?standard_type : scalar_type | stream_type
 
 // Array types
@@ -115,9 +115,14 @@ subgrid_expression_2d : "[" range_expression "," range_expression "]"
 hop : "(" posneg_integer_literal "," posneg_integer_literal ")"  // 2D at the moment, might expand
 hops : "[" hop ("," hop)* "]"
 routing : "hops" "=" (auto | hops) "," "channel" "=" (auto | integer_literal)
+reduce_routing :  "hops" "=" (auto | hops) "," "channel" "=" (auto) "," "graph" "=" (auto | integer_literal) "," "op" "=" integer_literal
 
 field_declaration : builtin_type identifier  (";")? //(";" | NEWLINE)
-stream_declaration : "stream" "<" scalar_type ">" identifier "=" "relative_stream" "(" value_expr "," value_expr ")" ("{" routing "}")?  (";")?
+stream_declaration : classic_stream | mul_stream
+classic_stream : "stream" "<" scalar_type ">" identifier "=" "relative_stream" "(" value_expr "," value_expr ")" ("{" routing "}")?  (";")?
+mul_stream : bcast | red
+bcast : "multistream" "<" scalar_type ">" identifier "=" "broadcast" "(" value_expr "," value_expr ")" ("{" routing "}")?  (";")?
+red : "multistream" "<" scalar_type ">" identifier "=" "reduce" "(" value_expr "," value_expr ")" ("{" reduce_routing "}")?  (";")?
 vars : identifier ("," identifier)*
 typed_var : scalar_type identifier
 typed_vars : typed_var ("," typed_var)*
