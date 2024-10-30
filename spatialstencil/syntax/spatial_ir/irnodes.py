@@ -413,26 +413,36 @@ class RoutingDeclaration(SpatialNode):
     
 
 @dataclass
+class BroadcastRoutingDeclaration(SpatialNode):
+    """
+    A routing declaration for a stream, optionally specifying hops and channel.
+    """
+    channels: Union[int, Literal["auto"]] = "auto"  # Channel ID or 'auto'
+
+    def validate(self) -> None:
+        # this doesn't work for self.channel != "auto" - check this
+        if isinstance(self.channels, Tree):
+            self.channels = self.channels.data
+
+    def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
+        channels_str = "auto" if self.channels == "auto" else str(self.channels)
+        return f"{indent_str}channels = {channels_str}"
+    
+
+@dataclass
 class ReduceRoutingDeclaration(SpatialNode):
     """
     A routing declaration for a reduce, optionally specifying hops and channel.
     """
-    hops: Literal["auto"] = "auto"  # list of hops or 'auto'
-    channel: Union[int, Literal["auto"]] = "auto"  # Channel ID or 'auto'
+    channels: Union[int, Literal["auto"]] = "auto"  # Channel ID or 'auto'
     graph: int = 0
     op: int = 0
 
     def validate(self) -> None:
-        if isinstance(self.hops, list):
-            for r in self.hops:
-                dx, dy = r.offset
-                assert abs(dx) + abs(dy) == 1, "Each hop must have an absolute sum of 1."
-        if isinstance(self.hops, Tree):
-            self.hops = self.hops.data
-
         # test this for self.channel != "auto"
-        if isinstance(self.channel, Tree):
-            self.channel = self.channel.data
+        if isinstance(self.channels, Tree):
+            self.channels = self.channels.data
 
         assert isinstance(self.graph, int)
         assert isinstance(self.op, int)
@@ -440,11 +450,10 @@ class ReduceRoutingDeclaration(SpatialNode):
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
-        hops_str = "auto"
-        channel_str = "auto" if self.channel == "auto" else str(self.channel)
+        channels_str = "auto" if self.channels == "auto" else str(self.channels)
         graph_str = str(self.graph)
         op_str = str(self.op)
-        return f"{indent_str}hops = {hops_str},\n{indent_str}channel = {channel_str},\n{indent_str}graph = {graph_str},\n{indent_str}op = {op_str}"
+        return f"{indent_str}channels = {channels_str},\n{indent_str}graph = {graph_str},\n{indent_str}op = {op_str}"
 
 
 @dataclass
@@ -485,7 +494,7 @@ class MulStreamDeclaration(SpatialNode):
     stream_name: Identifier
     dx: Expression
     dy: Expression
-    routing: Optional[Union[RoutingDeclaration, ReduceRoutingDeclaration]] = None
+    routing: Optional[Union[BroadcastRoutingDeclaration, ReduceRoutingDeclaration]] = None
 
     def validate(self) -> None:
         assert isinstance(self.dtype, MultiStreamType)
@@ -493,7 +502,7 @@ class MulStreamDeclaration(SpatialNode):
         assert isinstance(self.dx, Expression)
         assert isinstance(self.dy, Expression)
         if self.routing:
-            assert isinstance(self.routing, Union[RoutingDeclaration, ReduceRoutingDeclaration])
+            assert isinstance(self.routing, Union[BroadcastRoutingDeclaration, ReduceRoutingDeclaration])
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -502,7 +511,7 @@ class MulStreamDeclaration(SpatialNode):
             routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{' ' * indent}}}"
         if isinstance(self.routing, ReduceRoutingDeclaration):
             return f'{indent_str}multistream<{self.dtype.dtype.as_ir()}> {self.stream_name.as_ir()} = reduce({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
-        elif isinstance(self.routing, RoutingDeclaration):
+        elif isinstance(self.routing, BroadcastRoutingDeclaration):
             return f'{indent_str}multistream<{self.dtype.dtype.as_ir()}> {self.stream_name.as_ir()} = broadcast({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
         else:
             raise ValueError("Invalid routing declaration")
@@ -980,9 +989,6 @@ class Kernel(SpatialNode):
                 y_start = elem.subgrid.y_range.start.value.value
                 y_end = elem.subgrid.y_range.stop.value.value
                 y_step = 1 if elem.subgrid.y_range.step == None else elem.subgrid.y_range.step.value.value
-
-                print(x_start, x_end, x_step)
-                print(y_start, y_end, y_step)
 
                 for x in range(x_start, x_end, x_step):
                     for y in range(y_start, y_end, y_step):

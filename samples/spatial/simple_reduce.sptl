@@ -3,8 +3,7 @@ kernel @add<N,K>() {
 
     dataflow i16 i, i16 j in [0:1, 0:2] {
         multistream<f32> red = reduce(0, 0) {
-            hops = auto,
-            channel = auto,
+            channels = auto,
             graph = 1,
             op = 2
         }

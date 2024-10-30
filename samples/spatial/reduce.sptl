@@ -7,8 +7,8 @@ kernel @add<N,K>(stream<f32>[N, N] readonly a_in, stream<f32> writeonly out) {
 
     dataflow i16 i, i16 j in [0:N, 0:N] {
         multistream<f32> red = reduce(0, 0) {
-            hops = auto,
-            channel = auto
+            channels = auto
+            graph = snake
             op = sum
         }
     }
