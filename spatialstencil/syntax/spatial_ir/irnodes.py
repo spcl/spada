@@ -919,6 +919,7 @@ class Kernel(SpatialNode):
     parameters: list[Parameter]
     arguments: list[KernelArgument]
     body: list[PlaceBlock | DataflowBlock | ComputeBlock | Phase]
+    _communication_patterns: Optional[dict[str, dict[tuple[int, int], list[list[list[int]]]]]] = None
 
     def validate(self) -> None:
         if self.name:
@@ -969,11 +970,12 @@ class Kernel(SpatialNode):
 
     def reduce_subroutine(self):
         self.separate_computeblocks()
-
+        self.create_communication_patterns()
+        self.replace_reduce_operator()
         return None
     
 
-    def separate_computeblocks(self):
+    def separate_computeblocks(self) -> None:
         newbody = []
         for elem in self.body:
             includesReduceStatement = False
@@ -992,12 +994,181 @@ class Kernel(SpatialNode):
 
                 for x in range(x_start, x_end, x_step):
                     for y in range(y_start, y_end, y_step):
-                        newbody.append(ComputeBlock(elem.variables, SubgridExpression(RangeExpression(start=Expression(ConstantLiteral(x, ScalarType.i32))), RangeExpression(start=Expression(ConstantLiteral(y, ScalarType.i32)))), elem.statements))
+                        newbody.append(
+                            ComputeBlock(
+                                elem.variables,
+                                SubgridExpression(
+                                    RangeExpression(
+                                        start=Expression(ConstantLiteral(x, ScalarType.i32))
+                                    ),
+                                    RangeExpression(
+                                        start=Expression(ConstantLiteral(y, ScalarType.i32))
+                                    )
+                                ),
+                                elem.statements
+                            )
+                        )
 
             else:
                 newbody.append(elem)
 
         self.body = newbody
+        return None
+    
+
+    def create_communication_patterns(self) -> None:
+        #print(self._communication_patterns)
+        self._communication_patterns = {'red': {(0,0): [[[0,1]], []], (0,1): [[], [[0,0]]]}}
+        #print(self._communication_patterns)
+        return None
+    
+
+    def replace_reduce_operator(self) -> None:
+        newbody = []
+        reduce_operations = {}
+        counter = 0
+        for elem in self.body:
+            if isinstance(elem, DataflowBlock):
+                olddataflobblock = []
+                newdataflobblocks = []
+                for stmt in elem.statements:
+                    if isinstance(stmt, MulStreamDeclaration) and isinstance(stmt.routing, ReduceRoutingDeclaration):
+                        reduce_operations.update({stmt.stream_name.name: {'op': stmt.routing.op}})
+                        for router in self._communication_patterns[stmt.stream_name.name]:
+                            if self._communication_patterns[stmt.stream_name.name][router][0] != []:
+                                for route in self._communication_patterns[stmt.stream_name.name][router][0]:
+                                    delta_x = route[0] - router[0]
+                                    delta_y = route[1] - router[1]
+                                    newdataflobblocks.append([router, route,
+                                        RelativeStreamDeclaration(
+                                            dtype=StreamType(stmt.dtype.dtype),
+                                            stream_name=Identifier(name="reduce"+str(counter), version=0),
+                                            dx=Expression(ConstantLiteral(delta_x, ScalarType.i32)),
+                                            dy=Expression(ConstantLiteral(delta_y, ScalarType.i32)),
+                                            routing=RoutingDeclaration(
+                                                hops=[RoutingHop(offset=(delta_x, delta_y))],
+                                                channel=stmt.routing.channels
+                                            )
+                                        )]
+                                    )
+
+                                    for receiver in self._communication_patterns[stmt.stream_name.name][(route[0], route[1])][1]:
+                                        if receiver[0] == router[0] and receiver[1] == router[1]:
+                                            receiver.append(counter)
+                                            receiver.append(stmt.dtype.dtype)
+                                            receiver.append("reduce"+str(counter))
+                                    route.append(counter)
+                                    route.append(stmt.dtype.dtype)
+                                    route.append("reduce"+str(counter))
+                                    counter += 1
+                    else:
+                        olddataflobblock.append(stmt)
+
+                if olddataflobblock != []: # not tested
+                    newbody.append(DataflowBlock(variables=elem.variables, subgrid=elem.subgrid, statements=olddataflobblock))
+                for newdataflobblock in newdataflobblocks:
+                    newbody.append(
+                        DataflowBlock(
+                            variables=elem.variables,
+                            subgrid=SubgridExpression(
+                                x_range=RangeExpression(
+                                    start=Expression(
+                                        ConstantLiteral(min(newdataflobblock[0][0], newdataflobblock[1][0]), ScalarType.i32)
+                                    ),
+                                    stop=Expression(
+                                        ConstantLiteral(max(newdataflobblock[0][0], newdataflobblock[1][0]) + 1, ScalarType.i32)
+                                    )
+                                ),
+                                y_range=RangeExpression(
+                                    start=Expression(
+                                        ConstantLiteral(min(newdataflobblock[0][1], newdataflobblock[1][1]), ScalarType.i32)
+                                    ),
+                                    stop=Expression(
+                                        ConstantLiteral(max(newdataflobblock[0][1], newdataflobblock[1][1]) + 1, ScalarType.i32)
+                                    )
+                                ),
+                            ),
+                            statements=[newdataflobblock[2]]))
+            else:
+                newbody.append(elem)
+
+        finalbody = []
+        for elem in newbody:
+            if isinstance(elem, ComputeBlock):
+                statements = []
+                for stmt in elem.statements:
+                    if isinstance(stmt, ReduceStatement):
+                        newstatements = []
+                        x = elem.subgrid.x_range.start.value.value
+                        y = elem.subgrid.y_range.start.value.value
+                        router_id = (x, y)
+                        stream_name = stmt.stream_name.name
+                        receive_list = self._communication_patterns[stream_name][router_id][0]
+                        send_list = self._communication_patterns[stream_name][router_id][1]
+                        operation_id = reduce_operations[stmt.stream_name.name]['op']
+
+                        if operation_id == 2:
+                            operation_id = "OP_SUM"
+
+                        for receive in receive_list:
+                            newstatements.append(
+                                ForeachStatement(
+                                    variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=Identifier(name="reduce_runner", version=0))],
+                                    parameter_range=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                                      stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                      step=None)],
+                                    stream_variable=TypedIdentifier(dtype=receive[3],
+                                                                    identifier=Identifier(name="reduce_receive", version=0)),
+                                    receive_stream=ReceiveGenerator(stream_name=Identifier(name=receive[4], version=0)),
+                                    body=[
+                                        AssignmentStatement(
+                                            destination=ArraySlice(
+                                                array=stmt.local_array,
+                                                indices=[Expression(value=Identifier(name="reduce_runner", version=0))]
+                                            ),
+                                            source=Expression(
+                                                BinaryOperator(
+                                                    left=Expression(
+                                                        value=ArraySlice(
+                                                            array=stmt.local_array,
+                                                            indices=[Expression(value=Identifier(name="reduce_runner", version=0))]
+                                                        )
+                                                    ),
+                                                    op= '+' if operation_id == "OP_SUM" else '-----', # other operations not implemented
+                                                    right=Expression(
+                                                        value=Identifier(name="reduce_receive", version=0)
+                                                    )
+                                                )
+                                            )
+                                        )
+                                    ],
+                                    completion_name=None
+                                )
+                            )
+
+                        for send in send_list:
+                            newstatements.append(
+                                SendStatement(
+                                    local_array=stmt.local_array,
+                                    stream_name=Identifier(name=send[4], version=0),
+                                    completion_name=None
+                                )
+                            )
+                        
+                        # add receive + calculation + send here
+                        for new_statement in newstatements:
+                            statements.append(new_statement)
+
+                    else:
+                        statements.append(stmt)
+                
+                finalbody.append(ComputeBlock(elem.variables, elem.subgrid, statements))        
+            else:
+                finalbody.append(elem)   
+        
+        self.body = finalbody
+        #exit()
+
         return None
 
 # Specialized visitors

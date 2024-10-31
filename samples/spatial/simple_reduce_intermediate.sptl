@@ -1,0 +1,22 @@
+
+kernel @add<N,K>(stream<f32>[1, 2]) {
+
+    dataflow i16 i, i16 j in [0:1, 0:2] {
+        multistream<f32> red = reduce(0, 0) {
+            channels = auto,
+            graph = 1,
+            op = 2
+        }
+    }
+
+    compute i16 i, i16 j in [0, 0] {
+        i16 a = 1
+        await reduce(a, red)
+    }
+
+    compute i16 i, i16 j in [0, 1] {
+        i16 a = 1
+        await reduce(a, red)
+    }
+
+}

@@ -1,22 +1,26 @@
 
-kernel @add<N,K>(stream<f32>[1, 2]) {
+kernel @add<N,K>() {
+
+    place i16 i, i16 j in [0:1, 0:2] {
+        i16[1] a;
+    }
 
     dataflow i16 i, i16 j in [0:1, 0:2] {
-        multistream<f32> red = reduce(0, 0) {
-            channels = auto,
-            graph = 1,
-            op = 2
+        stream<i16> reduce0 = relative_stream(0, 1) {
+            hops = [(0, 1)],
+            channel = auto
         }
     }
 
     compute i16 i, i16 j in [0, 0] {
-        i16 a = 1
-        await reduce(a, red)
+        a[0] = 1;
+        await foreach i32 reduce_runner, i16 reduce_receive in [0:1], receive(reduce0) {
+          a[reduce_runner] = a[reduce_runner] + reduce_receive;
+        }
     }
 
     compute i16 i, i16 j in [0, 1] {
-        i16 a = 1
-        await reduce(a, red)
+        a[0] = 1;
+        await send(a, reduce0);
     }
-
 }
