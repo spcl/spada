@@ -22,7 +22,7 @@ class DataStructureDescriptor:
 
 
 @dataclass
-class MemoryAccessDSD(DataStructureDescriptor):
+class MemoryDSD(DataStructureDescriptor):
     """
     A DSD that defines a 1D-4D memory access on PE-local memory.
     """

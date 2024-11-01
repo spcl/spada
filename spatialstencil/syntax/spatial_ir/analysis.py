@@ -1,5 +1,5 @@
 """
-Contains analysis functions for Spatial IR, such as task dependency analysis.
+Contains analysis functions for Spatial IR, such as statement dependency analysis.
 """
 from spatialstencil.syntax.spatial_ir import irnodes as spir
 from dataclasses import dataclass
@@ -8,21 +8,21 @@ import networkx as nx  # TODO: Switch to igraph
 
 
 @dataclass(frozen=True)
-class TaskDAGNode:
+class CompletionDAGNode:
     """
-    Object representing a task DAG node.
+    Object representing a completion DAG node.
     """
     optype: Literal['post', 'wait']
     statement_id: int
 
 
-def to_task_dag(compute: spir.ComputeBlock) -> nx.DiGraph:
+def to_completion_dag(compute: spir.ComputeBlock) -> nx.DiGraph:
     """
-    Converts a compute block to a directed graph of task dependencies,
+    Converts a compute block to a directed graph of statement dependencies,
     as defined in the specifications (local order) and based on completions
     and code order.
 
-    The resulting graph contains ``TaskDAGNode`` objects, which refer to
+    The resulting graph contains ``CompletionDAGNode`` objects, which refer to
     whether the node is posting an asynchronous task or waiting for one
     (based on the node's ``optype`` field), and which statement index in
     the compute block's statements it refers to.
@@ -30,13 +30,13 @@ def to_task_dag(compute: spir.ComputeBlock) -> nx.DiGraph:
     result = nx.DiGraph()
 
     # Keep track of last node for sequential dependencies in local order
-    last_node: TaskDAGNode | None = None
+    last_node: CompletionDAGNode | None = None
     # Keep track of unawaited completions
-    incomplete_completions: dict[str, TaskDAGNode] = {}
+    incomplete_completions: dict[str, CompletionDAGNode] = {}
 
     for stmt_id, stmt in enumerate(compute.statements):
-        node: TaskDAGNode
-        completion_node: TaskDAGNode | None = None
+        node: CompletionDAGNode
+        completion_node: CompletionDAGNode | None = None
 
         # awaitall
         if isinstance(stmt, spir.AwaitAllStatement):
@@ -45,7 +45,7 @@ def to_task_dag(compute: spir.ComputeBlock) -> nx.DiGraph:
                 continue
 
             # Connect all previous incomplete nodes to this node
-            node = TaskDAGNode('wait', stmt_id)
+            node = CompletionDAGNode('wait', stmt_id)
             result.add_node(node)
             for compnode in incomplete_completions.values():
                 result.add_edge(compnode, node)
@@ -58,7 +58,7 @@ def to_task_dag(compute: spir.ComputeBlock) -> nx.DiGraph:
             if compname not in incomplete_completions:
                 raise SyntaxError(f'Trying to await completion "{stmt.completion_name.as_ir()}", which does not exist '
                                   'or was already awaited for.')
-            node = TaskDAGNode('wait', stmt_id)
+            node = CompletionDAGNode('wait', stmt_id)
             result.add_node(node)
             result.add_edge(incomplete_completions[compname], node)
             del incomplete_completions[compname]
@@ -66,12 +66,12 @@ def to_task_dag(compute: spir.ComputeBlock) -> nx.DiGraph:
         # Asynchronous nodes (completion comp = ...)
         else:
             # Create poster node
-            node = TaskDAGNode('post', stmt_id)
+            node = CompletionDAGNode('post', stmt_id)
             result.add_node(node)
             completion: spir.Completion | None = stmt.completion_name
             if completion is None:
                 # Create another completion node immediately after this one and connect it
-                completion_node = TaskDAGNode('wait', stmt_id)
+                completion_node = CompletionDAGNode('wait', stmt_id)
                 result.add_node(completion_node)
                 result.add_edge(node, completion_node)
             else:

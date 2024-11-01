@@ -6,7 +6,7 @@ from io import StringIO
 import networkx as nx
 from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, analysis
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
-from spatialstencil.syntax.csl import constants as csl
+from spatialstencil.syntax.csl import constants as csl, tasks as tdag
 from spatialstencil.syntax.csl.structures import DataStructureDescriptor
 from spatialstencil.syntax.csl.codefile import CodeFile
 
@@ -119,10 +119,7 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     footer = StringIO()
 
     # Initialize footer
-    footer.write(f'''comptime {{
-    @bind_data_task(main_task, {csl.DATA_TASK_IDS[0]});
-
-''')
+    footer.write('comptime {\n')
 
     # Collect metadata:
     #     * Find colors from dataflow blocks
@@ -137,42 +134,32 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     # Convert compute block subgraphs into tasks:
     #    * Make task DAG out of computations
     #    * Any node that has two or more incoming edges (i.e., requires wait) initiates a new task
-    #    * Communication inter-task dependency uses ``activate``
+    #    * Communication inter-task dependency uses ``activate`` and then ``unblock``
     #    * Compute task dependency uses ``unblock``
     #    * Phase end is a task that modifies the current system state and activates next phase's tasks (see below)
     #    * First phase begin is done as part of the kernel function call
-    #    * (re)cycle task IDs based on ``csl.{DATA,LOCAL,CONTROL}_TASK_IDS``
-    dag = analysis.to_task_dag(rect.metadata.compute)
-    task_map = _bind_statements_to_tasks(rect.metadata.compute, dag)
+    #    * (re)cycle task IDs based on ``csl.{DATA,LOCAL,CONTROL}_TASK_IDS``: becomes switch-case on the variable that
+    #      maintains the current state
+    completion_dag = analysis.to_completion_dag(rect.metadata.compute)
 
     # TODO: Collect all scalar types for foreach receivers. Every sequential foreach can recycle index var
 
-    # Convert compute blocks' contents:
-    # Preprocessing pass: FMA fusion
-    # Convert receives/sends from/to arguments to memcpy
-    # Communication calls:
-    #    * Become async calls
-    # ``map``:
-    #    * becomes DSD operations as much as possible
-    #    * @map as a fallback
-    # ``foreach``:
-    #   * Try to make DSD operations as much as possible
-    #   * If index is requested: before unblocking task, set k; inc at end of task
-    #   * Wavelet-triggered task as fallback
-    # Rebinding tasks (i.e., recycling IDs) between phases becomes switch-case on the variable that maintains
-    # the current phase
-    def _get_stmt(node: analysis.TaskDAGNode):
-        return rect.metadata.compute.statements[node.statement_id]
+    # Generate each task
+    for task in tasks:
+        current_code.write(f'const task_{task.task_id}_id = @get_{task.task_type}_task_id({task.task_id});\n')
+        current_code.write(f'task task_{task.task_id}() void {{\n')
+        _generate_task_code(task, current_code, header, footer)
+        current_code.write(f'}}\n')
 
-    source_tasks = [
-        _get_stmt(n) for n in dag if dag.in_degree(n) == 0 and not isinstance(_get_stmt(n), spir.ForeachStatement)
-    ]
+        # Make sure to block tasks
+        if task.blocked:
+            footer.write(f'    @block(task_{task.task_id}_id);\n')
 
     # Write entry point code
-    current_code.write(f'''fn {kernel.name}({", ".join(scalar_arguments)}) void {{
+    current_code.write(f'''\nfn {kernel.name}({", ".join(scalar_arguments)}) void {{
 ''')
-    for task in source_tasks:
-        current_code.write(f'    @activate({task});\n')
+    # for task in source_tasks:
+    #     current_code.write(f'    @activate({task});\n')
     current_code.write('}\n')
 
     current_code.write(f'''
@@ -345,14 +332,20 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]]) -> dict[tuple[int, int
     return result
 
 
-def _bind_statements_to_tasks(compute: spir.ComputeBlock, task_dag: nx.DiGraph) -> dict[analysis.TaskDAGNode, int]:
-    """
-    Creates a mapping between tasks and physical task IDs.
-    Acts by coarsening the task DAG to CSL tasks (data or local, based on statement type), and adds ``@activate`` or
-    ``@unblock`` statements based on edge types.
-    """
-    # TODO: Consider explicitly defining data/local tasks in return value.
-    return {}
+def _generate_task_code(task: tdag.CSLTask, current_code: StringIO, header: StringIO, footer: StringIO):
+    # Convert task contents:
+    # Preprocessing pass: FMA fusion
+    # Convert receives/sends from/to arguments to memcpy
+    # Communication calls:
+    #    * Become async calls
+    # ``map``:
+    #    * becomes DSD operations as much as possible
+    #    * @map as a fallback
+    # ``foreach``:
+    #   * Try to make DSD operations as much as possible
+    #   * If index is requested: before unblocking task, set k; inc at end of task
+    #   * Wavelet-triggered task as fallback
+    pass
 
 
 def dtype_as_csl(dtype: spir.ScalarType | spir.StreamType | spir.ArrayType) -> str:
