@@ -141,6 +141,7 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     #    * (re)cycle task IDs based on ``csl.{DATA,LOCAL,CONTROL}_TASK_IDS``: becomes switch-case on the variable that
     #      maintains the current state
     completion_dag = analysis.to_completion_dag(rect.metadata.compute)
+    tasks = tdag.create_csl_tasks(completion_dag, rect.metadata.compute)
 
     # TODO: Collect all scalar types for foreach receivers. Every sequential foreach can recycle index var
 

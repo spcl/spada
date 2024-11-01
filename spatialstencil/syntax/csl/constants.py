@@ -27,7 +27,7 @@ _CSL_CONTROL_TASK_IDS = {
 CONTROL_TASK_IDS = _CSL_CONTROL_TASK_IDS[ARCH]
 
 _CSL_COLORS = {
-    'wse2': list(range(0, 20)),  # 21-23(,27-31) reserved by memcpy
-    'wse3': list(range(0, 20)),
+    'wse2': list(range(0, 21)),  # 21-23(,27-31) reserved by memcpy
+    'wse3': list(range(0, 21)),
 }
 COLORS = _CSL_COLORS[ARCH]
