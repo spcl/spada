@@ -1,8 +1,10 @@
+## look at this idea
 
 kernel @add<N,K>() {
 
     place i16 i, i16 j in [0:1, 0:2] {
         i16[1] a;
+        i16[1] tmp;
     }
 
     dataflow i16 i, i16 j in [0:1, 0:2] {
@@ -12,10 +14,13 @@ kernel @add<N,K>() {
         }
     }
 
+    # -> stream<f32> westwards = relative_stream(-1, 0);
+
     compute i16 i, i16 j in [0, 0] {
         a[0] = 1;
         await foreach i32 reduce_runner, i16 reduce_receive in [0:1], receive(reduce0) {
-          a[reduce_runner] = a[reduce_runner] + reduce_receive;
+          tmp[0] = a[reduce_runner] + reduce_receive;
+          await send(tmp)
         }
     }
 

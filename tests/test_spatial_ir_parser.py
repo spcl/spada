@@ -1,4 +1,5 @@
 from spatialstencil.syntax.spatial_ir import irnodes as spast, parser
+from spatialstencil.optimizations.optimization_pass import optimization_pass
 import os
 
 
@@ -93,7 +94,8 @@ def _rountrip_test(file):
     :return:
     """
     program = parser.parse_file(file)
-    ir_1 = program.as_ir()
+    program_optimized = optimization_pass(program)
+    ir_1 = program_optimized.as_ir()
     print(ir_1)
     exit()
     program2 = parser.parse_string(ir_1)
@@ -125,6 +127,16 @@ def test_simple_reduce_reference():
     _rountrip_test(file)
 
 
+def test_simple_reduce_three():
+    file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spatial', 'simple_reduce_three.sptl')
+    _rountrip_test(file)
+
+
+def test_simple_reduce_four():
+    file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spatial', 'simple_reduce_four.sptl')
+    _rountrip_test(file)
+
+
 if __name__ == '__main__':
     # test_spatial_roundtrip_laplacian()
     # test_spatial_visitor()
@@ -136,3 +148,5 @@ if __name__ == '__main__':
     # test_spatial_bcast()
     test_simple_reduce()
     # test_simple_reduce_reference()
+    # test_simple_reduce_three()
+    # test_simple_reduce_four()
