@@ -345,7 +345,7 @@ class ReduceOptimizer():
                                             parameter_range=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
                                                                             stop=Expression(ConstantLiteral(1, ScalarType.i32)),
                                                                             step=None)],
-                                            stream_variable=TypedIdentifier(dtype=con[2],
+                                            stream_variable=TypedIdentifier(dtype=con[2].dtype,
                                                                             identifier=self.versioning.next_version("reduce_receive")),
                                             receive_stream=ReceiveGenerator(stream_name=con[0]),
                                             body=[
