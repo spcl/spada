@@ -96,8 +96,8 @@ def _rountrip_test(file):
     program = parser.parse_file(file)
     program_optimized = optimization_pass(program)
     ir_1 = program_optimized.as_ir()
-    # print(ir_1)
-    # exit()
+    print(ir_1)
+    exit()
     program2 = parser.parse_string(ir_1)
     ir_2 = program2.as_ir()
     assert ir_1 == ir_2

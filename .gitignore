@@ -155,3 +155,7 @@ cython_debug/
 #.idea/
 /.vscode/
 *.png
+
+
+# custom run scripts
+*.sh
