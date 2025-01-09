@@ -36,7 +36,13 @@ class TreeToSpatialIR(lark.Transformer):
 
     @lark.v_args(inline=True)
     def string_literal(self, s):
-        return irnodes.StringLiteral(s[1:-1].replace('\\"', '"'))
+        if type(s).__name__ == 'Tree':
+            combined_string = ''
+            for i in range(len(s.children)):
+                combined_string += s.children[i]
+            return combined_string
+        else:
+            return irnodes.StringLiteral(s[1:-1].replace('\\"', '"'))
 
     @lark.v_args(inline=True)
     def bare_id(self, *elements):

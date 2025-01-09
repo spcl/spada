@@ -435,25 +435,19 @@ class ReduceRoutingDeclaration(SpatialNode):
     """
     A routing declaration for a reduce, optionally specifying hops and channel.
     """
-    channels: Union[int, Literal["auto"]] = "auto"  # Channel ID or 'auto'
-    graph: int = 0
-    op: int = 0
+    graph: str = ''
+    op: str = ''
+    pipelined: bool = False
 
     def validate(self) -> None:
-        # test this for self.channel != "auto"
-        if isinstance(self.channels, Tree):
-            self.channels = self.channels.data
-
-        assert isinstance(self.graph, int)
-        assert isinstance(self.op, int)
+        assert isinstance(self.graph, str)
+        assert isinstance(self.op, str)
+        assert isinstance(self.pipelined, bool)
 
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
-        channels_str = "auto" if self.channels == "auto" else str(self.channels)
-        graph_str = str(self.graph)
-        op_str = str(self.op)
-        return f"{indent_str}channels = {channels_str},\n{indent_str}graph = {graph_str},\n{indent_str}op = {op_str}"
+        return f"{indent_str}graph = {self.graph},\n{indent_str}op = {self.op},\n{indent_str}pipelined = {self.pipelined}"
 
 
 @dataclass

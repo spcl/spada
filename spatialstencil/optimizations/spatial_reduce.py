@@ -1,4 +1,4 @@
-from spatialstencil.syntax.spatial_ir.irnodes import Kernel, ComputeBlock, ReduceStatement, Expression, SubgridExpression, RangeExpression, ConstantLiteral, ScalarType, DataflowBlock, MulStreamDeclaration, ReduceRoutingDeclaration, RoutingDeclaration, RoutingHop, StreamType, Identifier, TypedIdentifier, ForeachStatement, ArraySlice, BinaryOperator, SendStatement, ReceiveGenerator, AssignmentStatement, RelativeStreamDeclaration, PlaceBlock, Phase, Parameter, KernelArgument
+from spatialstencil.syntax.spatial_ir.irnodes import Kernel, ComputeBlock, ReduceStatement, Expression, SubgridExpression, RangeExpression, ConstantLiteral, ScalarType, DataflowBlock, MulStreamDeclaration, ReduceRoutingDeclaration, RoutingDeclaration, RoutingHop, StreamType, Identifier, TypedIdentifier, ForeachStatement, ArraySlice, BinaryOperator, SendStatement, ReceiveGenerator, AssignmentStatement, RelativeStreamDeclaration, PlaceBlock, Phase, Parameter, KernelArgument, ReceiveStatement, ForStatement
 from typing import Union, Tuple, Optional, Literal
 import spatialstencil.syntax.spatial_ir.irnodes as spa
 from spatialstencil.lowering.versioning import Versioning
@@ -35,7 +35,7 @@ class ReduceOptimizer():
     
     
 
-    def create_communication_patterns(self, x_start, x_stop, y_start, y_stop, x, y, name) -> None:
+    def create_communication_patterns(self, x_start, x_stop, y_start, y_stop, x, y, name, graph, pipelined) -> None:
         if x < x_start or x >= x_stop or y < y_start or y >= y_stop:
             if x == x_stop or y == y_stop:
                 raise ValueError(f"The communication point (x, y) = ({x}, {y}) is not within the subgrid" +
@@ -45,83 +45,172 @@ class ReduceOptimizer():
                              f"[x_start, x_stop, y_start, y_stop] = [{x_start}, {x_stop}, {y_start}, {y_stop}] for the operation {name}.")
         communication = []
         self.pipelined.update({name : False}) # not implemented yet
-        mode = 'snake'   # not implemented yet
+        mode = graph
+        if pipelined:
+            print('pipelined communication is not implemented yet')
         if mode == 'snake':
             if y == y_start:
                 if (y_stop - 1 - y_start) % 2 == 0:
+
                     # horizontal movement
-                    communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                    communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                    if pipelined:
+                        if x_stop - x_start > 1: ## this should be handled differently
+                            if (x_stop - x_start) % 2 != 0:
+                                communication.append([x_start, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                                communication.append([x_start + 1, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                                communication.append([x_start, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                                communication.append([x_start + 1, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                            else:
+                                communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                                communication.append([x_start + 1, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                                communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                                communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                        else:
+                            # effectively not pipelined in x direction as we have a column
+                            # still pipelined in y direction
+                            # communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 1])
+                            # communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 1])
+                            pass
+                    else:
+                        if x_stop - x_start > 1:
+                            communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 1])
+                            communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 1])
 
                     # vertical movement
+                    # not dependent on pipelined as if we have a column it's already pipelined
                     if x == x_start:
                         # print('upper left corner odd')
                         if y_stop - y_start > 2:
-                            communication.append([x_start, x_start + 1, y_start + 1, y_stop , 0, -1, 1, 2])
+                            communication.append([x_start, x_start + 1, y_start + 1, y_stop , 0, -1, 1, 1])
                         if y_stop - y_start > 1:
-                            communication.append([x_stop - 1, x_stop, y_start, y_stop - 1, 0, -1, 1, 2])
+                            communication.append([x_stop - 1, x_stop, y_start, y_stop - 1, 0, -1, 1, 1])
                     if x == x_stop - 1:
                         # print('upper right corner odd')
                         if y_stop - y_start > 2:
-                            communication.append([x_stop - 1, x_stop, y_start + 1, y_stop, 0, -1, 1, 2])
+                            communication.append([x_stop - 1, x_stop, y_start + 1, y_stop, 0, -1, 1, 1])
                         if y_stop - y_start > 1:
-                            communication.append([x_start, x_start + 1, y_start, y_stop - 1, 0, -1, 1, 2])
+                            communication.append([x_start, x_start + 1, y_start, y_stop - 1, 0, -1, 1, 1])
                 else:
+
                     # horizontal movement
-                    communication.append([x_start, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
-                    communication.append([x_start, x_stop, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
+                    if pipelined:
+                        if x_stop - x_start > 1:
+                            if (x_stop - x_start) % 2 != 0:
+                                communication.append([x_start, x_stop - 1, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
+                                communication.append([x_start + 1, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
+                                communication.append([x_start, x_stop - 1, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
+                                communication.append([x_start + 1, x_stop, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
+                            else:
+                                communication.append([x_start, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
+                                communication.append([x_start + 1, x_stop - 1, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
+                                communication.append([x_start, x_stop, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
+                                communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
+                        else:
+                            # effectively not pipelined in x direction as we have a column
+                            # still pipelined in y direction
+                            # communication.append([x_start, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 2, 2])
+                            # communication.append([x_start, x_stop, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 2, 2])
+                            pass
+                    else:
+                        if x_stop - x_start > 1:
+                            communication.append([x_start, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start, x_stop, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
 
                     # vertical movement
+                    # not dependent on pipelined as if we have a column it's already pipelined
                     if x == x_start:
                         # print('upper left corner even')
                         if y_stop - y_start > 2:
-                            communication.append([x_start, x_start + 1, y_start + 1, y_stop - 1, 0, -1, 1, 2])
+                            communication.append([x_start, x_start + 1, y_start + 1, y_stop - 1, 0, -1, 1, 1])
                         if y_stop - y_start > 1:
-                            communication.append([x_stop - 1, x_stop, y_start, y_stop, 0, -1, 1, 2])
+                            communication.append([x_stop - 1, x_stop, y_start, y_stop, 0, -1, 1, 1])
                     if x == x_stop - 1:
                         # print('upper right corner even')
                         if y_stop - y_start > 2:
-                            communication.append([x_stop - 1, x_stop, y_start + 1, y_stop - 1, 0, -1, 1, 2])
+                            communication.append([x_stop - 1, x_stop, y_start + 1, y_stop - 1, 0, -1, 1, 1])
                         if y_stop - y_start > 1:
-                            communication.append([x_start, x_start + 1, y_start, y_stop, 0, -1, 1, 2])
+                            communication.append([x_start, x_start + 1, y_start, y_stop, 0, -1, 1, 1])
 
             elif y == y_stop - 1:
                 if (y_stop - 1 - y_start) % 2 == 0:
+
                     # horizontal movement
-                    communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                    communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                    if pipelined:
+                        if x_stop - x_start > 1:
+                            if (x_stop - x_start) % 2 != 0:
+                                communication.append([x_start, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                                communication.append([x_start + 1, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                                communication.append([x_start, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                                communication.append([x_start + 1, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                            else:
+                                communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                                communication.append([x_start + 1, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                                communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                                communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                        else:
+                            # effectively not pipelined in x direction as we have a column
+                            # still pipelined in y direction
+                            # communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                            # communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                            pass
+                    else:
+                        if x_stop - x_start > 1:
+                            communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
 
                     # vertical movement
+                    # not dependent on pipelined as if we have a column it's already pipelined
                     if x == x_start:
                         # print('lower left corner odd')
                         if y_stop - y_start > 2:
-                            communication.append([x_start, x_start + 1, y_start, y_stop - 1, 0, 1, 1, 2])
+                            communication.append([x_start, x_start + 1, y_start, y_stop - 1, 0, 1, 1, 1])
                         if y_stop - y_start > 1:
-                            communication.append([x_stop - 1, x_stop, y_start + 1, y_stop, 0, 1, 1, 2])
+                            communication.append([x_stop - 1, x_stop, y_start + 1, y_stop, 0, 1, 1, 1])
                     if x == x_stop - 1:
                         # print('lower right corner odd')
                         if y_stop - y_start > 2:
-                            communication.append([x_stop - 1, x_stop, y_start, y_stop - 1, 0, 1, 1, 2])
+                            communication.append([x_stop - 1, x_stop, y_start, y_stop - 1, 0, 1, 1, 1])
                         if y_stop - y_start > 1:
-                            communication.append([x_start, x_start + 1, y_start + 1, y_stop, 0, 1, 1, 2])
+                            communication.append([x_start, x_start + 1, y_start + 1, y_stop, 0, 1, 1, 1])
                 else:
+
                     # horizontal movement
-                    communication.append([x_start, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                    communication.append([x_start, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                    if pipelined:
+                        if x_stop - x_start > 1:
+                            if (x_stop - x_start) % 2 != 0:
+                                communication.append([x_start, x_stop - 1, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                                communication.append([x_start + 1, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                                communication.append([x_start, x_stop - 1, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                                communication.append([x_start + 1, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                            else:
+                                communication.append([x_start, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                                communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                                communication.append([x_start, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                                communication.append([x_start + 1, x_stop - 1, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                        else:
+                            # effectively not pipelined in x direction as we have a column
+                            # still pipelined in y direction
+                            # communication.append([x_start, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 2, 2])
+                            # communication.append([x_start, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 2, 2])
+                            pass
+                    else: 
+                        communication.append([x_start, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
 
                     # vertical movement
+                    # not dependent on pipelined as if we have a column it's already pipelined
                     if x == x_start:
                         # print('lower left corner even')
                         if y_stop - y_start > 2:
-                            communication.append([x_start, x_start + 1, y_start + 1, y_stop - 1, 0, 1, 1, 2])
+                            communication.append([x_start, x_start + 1, y_start + 1, y_stop - 1, 0, 1, 1, 1])
                         if y_stop - y_start > 1:
-                            communication.append([x_stop - 1, x_stop, y_start, y_stop, 0, 1, 1, 2])
+                            communication.append([x_stop - 1, x_stop, y_start, y_stop, 0, 1, 1, 1])
                     if x == x_stop - 1:
                         # print('lower right corner even')
                         if y_stop - y_start > 2:
-                            communication.append([x_stop - 1, x_stop, y_start + 1, y_stop - 1, 0, 1, 1, 2])
+                            communication.append([x_stop - 1, x_stop, y_start + 1, y_stop - 1, 0, 1, 1, 1])
                         if y_stop - y_start > 1:
-                            communication.append([x_start, x_start + 1, y_start, y_stop, 0, 1, 1, 2])
+                            communication.append([x_start, x_start + 1, y_start, y_stop, 0, 1, 1, 1])
             else:
                 raise NotImplementedError("Only the corners are implemented for 'snake'")
             
@@ -134,9 +223,19 @@ class ReduceOptimizer():
                 if x_start == x_stop - 1:
                     # print('no horizontal movement needed')
                     pass
-                else:
+                elif x_stop - x_start == 2:
                     # print('right to left')
                     communication.append([x_start, x_stop, y_start, y_stop, -1, 0, 1, 1])
+                else:
+                    if pipelined:
+                        if (x_stop - x_start) % 2 == 0:
+                            communication.append([x_start, x_stop - 1, y_start, y_stop, -1, 0, 2, 1])
+                            communication.append([x_start + 1, x_stop, y_start, y_stop, -1, 0, 2, 1])
+                        else:
+                            communication.append([x_start, x_stop, y_start, y_stop, -1, 0, 2, 1])
+                            communication.append([x_start + 1, x_stop - 1, y_start, y_stop, -1, 0, 2, 1])
+                    else:
+                        communication.append([x_start, x_stop, y_start, y_stop, -1, 0, 1, 1])
 
                 # vertical movement
                 if y_start == y_stop - 1:
@@ -221,11 +320,15 @@ class ReduceOptimizer():
                                                            elem.subgrid.y_range.stop.value.value, 
                                                            stmt.dx.value.value, 
                                                            stmt.dy.value.value,
-                                                           stmt.stream_name.name)
+                                                           stmt.stream_name.name,
+                                                           stmt.routing.graph,
+                                                           stmt.routing.pipelined)
 
                         self.reduce_operations.update({stmt.stream_name.name: [{'op': stmt.routing.op}, [stmt.dx.value.value, stmt.dy.value.value], 
                                                                                [elem.subgrid.x_range.start.value.value, elem.subgrid.x_range.stop.value.value],
-                                                                               [elem.subgrid.y_range.start.value.value, elem.subgrid.y_range.stop.value.value]]})
+                                                                               [elem.subgrid.y_range.start.value.value, elem.subgrid.y_range.stop.value.value],
+                                                                               [stmt.dx.value.value if (elem.subgrid.y_range.stop.value.value - elem.subgrid.y_range.start.value.value) % 2 == 0 else (elem.subgrid.x_range.stop.value.value - stmt.dx.value.value - 1),
+                                                                                elem.subgrid.y_range.stop.value.value - 1 if elem.subgrid.y_range.start.value.value == stmt.dy.value.value else elem.subgrid.y_range.start.value.value]]})
                         new_grid_streams = []
                         new_snake_streams = []
                         
@@ -258,30 +361,44 @@ class ReduceOptimizer():
                                     unrolled_com = []
                                     for i in range(com[2], com[3]):
                                         if (i - com[2]) % com[7] == 0:
-                                            unrolled_com.append([com[0], com[1], i, i+1, com[4], com[5], com[6], com[7]])
-                                    new_snake_streams.append([self.versioning.current_version("reduce"), com, StreamType(stmt.dtype.dtype), 'left', 'horizontal', unrolled_com])
+                                            if not stmt.routing.pipelined:
+                                                unrolled_com.append([com[0], com[1], i, i+1, com[4], com[5], com[6], com[7]])
+                                            else:
+                                                for j in range(com[1], com[0], -1):
+                                                    if j % 2 == com[1] % 2:
+                                                        unrolled_com.append([j-1, j, i, i+1, com[4], com[5], com[6], com[7], 'sender'])
+                                                    else:
+                                                        unrolled_com.append([j-1, j, i, i+1, com[4], com[5], com[6], com[7], 'receiver'])
+                                    new_snake_streams.append([self.versioning.current_version("reduce"), com, StreamType(stmt.dtype.dtype), 'left', 'horizontal', unrolled_com, stmt.routing.pipelined])
                                 elif com[4] == 1:
                                     unrolled_com = []
                                     for i in range(com[2], com[3]):
                                         if (i - com[2]) % com[7] == 0:
-                                            unrolled_com.append([com[0], com[1], i, i+1, com[4], com[5], com[6], com[7]])
-                                    new_snake_streams.append([self.versioning.current_version("reduce"), com, StreamType(stmt.dtype.dtype), 'right', 'horizontal', unrolled_com])
+                                            if not stmt.routing.pipelined:
+                                                unrolled_com.append([com[0], com[1], i, i+1, com[4], com[5], com[6], com[7]])
+                                            else:
+                                                for j in range(com[0], com[1]):
+                                                    if j % 2 == com[0] % 2:
+                                                        unrolled_com.append([j, j+1, i, i+1, com[4], com[5], com[6], com[7], 'sender'])
+                                                    else:
+                                                        unrolled_com.append([j, j+1, i, i+1, com[4], com[5], com[6], com[7], 'receiver'])
+                                    new_snake_streams.append([self.versioning.current_version("reduce"), com, StreamType(stmt.dtype.dtype), 'right', 'horizontal', unrolled_com, stmt.routing.pipelined])
                                 elif com[5] == -1:
                                     unrolled_com = []
-                                    for i in range(com[2], com[3]):
-                                        if (i - com[2]) % (com[7]) == 0:
-                                            unrolled_com.append([com[0], com[1], i, i+1, com[4], com[5], com[6], com[7], 'receiver'])
-                                        if (i - com[2]) % (com[7]) == 1:
-                                            unrolled_com.append([com[0], com[1], i, i+1, com[4], com[5], com[6], com[7], 'sender'])
-                                    new_snake_streams.append([self.versioning.current_version("reduce"), com, StreamType(stmt.dtype.dtype), 'top', 'vertical', unrolled_com])
+                                    for i in range(com[3], com[2], -1):
+                                        if i % 2 == com[3] % 2:
+                                            unrolled_com.append([com[0], com[1], i-1, i, com[4], com[5], com[6], com[7], 'sender'])
+                                        else:
+                                            unrolled_com.append([com[0], com[1], i-1, i, com[4], com[5], com[6], com[7], 'receiver'])
+                                    new_snake_streams.append([self.versioning.current_version("reduce"), com, StreamType(stmt.dtype.dtype), 'top', 'vertical', unrolled_com, stmt.routing.pipelined])
                                 elif com[5] == 1:
                                     unrolled_com = []
                                     for i in range(com[2], com[3]):
-                                        if (i - com[2]) % (com[7]) == 0:
+                                        if i % 2 == com[2] % 2:
                                             unrolled_com.append([com[0], com[1], i, i+1, com[4], com[5], com[6], com[7], 'sender'])
-                                        if (i - com[2]) % (com[7]) == 1:
+                                        else:
                                             unrolled_com.append([com[0], com[1], i, i+1, com[4], com[5], com[6], com[7], 'receiver'])
-                                    new_snake_streams.append([self.versioning.current_version("reduce"), com, StreamType(stmt.dtype.dtype), 'bottom'])
+                                    new_snake_streams.append([self.versioning.current_version("reduce"), com, StreamType(stmt.dtype.dtype), 'bottom', 'vertical', unrolled_com, stmt.routing.pipelined])
                         
                         if stmt.stream_name.name in self.grid_streams:
                             self.grid_streams.update({stmt.stream_name.name: new_grid_streams})
@@ -416,37 +533,46 @@ class ReduceOptimizer():
                 if self.snake_streams != {}:
                     new_grid = []
                     complete_grid = []
+                    pipelined = False
 
                     for name in self.snake_streams:
                         complete_grid = [self.reduce_operations[name][2], self.reduce_operations[name][3]]
+                        pipelined = self.snake_streams[name][0][6]
                         break
 
-                    list_grid = result = [[x] for x in grid]
+                    if not pipelined:
 
-                    for com_grid in list_grid:
-                        to_remove = []
-                        for com in com_grid:
-                            if com[0][0] == complete_grid[0][0] and com[0][1] != complete_grid[0][0] + 1:
-                                # print("left")
-                                com_grid.append([[complete_grid[0][0], complete_grid[0][0] + 1], [com[1][0], com[1][1]]])
-                                com_grid.append([[complete_grid[0][0] + 1, com[0][1]], [com[1][0], com[1][1]]])
-                                to_remove.append(com)
-                            elif com[0][1] == complete_grid[0][1] and com[0][0] != complete_grid[0][1] - 1:
-                                # print("right")
-                                com_grid.append([[complete_grid[0][1] - 1, complete_grid[0][1]], [com[1][0], com[1][1]]])
-                                com_grid.append([[com[0][0], complete_grid[0][1] - 1], [com[1][0], com[1][1]]])
-                                to_remove.append(com)
-                            elif com[1][1] - com[1][0] != 1:
-                                # print('multiple rows')
-                                for i in range(com[1][0], com[1][1]):
-                                    com_grid.append([[com[0][0], com[0][1]], [i, i + 1]])
-                                to_remove.append(com)
+                        list_grid = [[x] for x in grid]
 
-                        for rmv in to_remove:
-                            com_grid.remove(rmv)
+                        for com_grid in list_grid:
+                            to_remove = []
+                            for com in com_grid:
+                                if com[0][0] == complete_grid[0][0] and com[0][1] != complete_grid[0][0] + 1:
+                                    # print("left")
+                                    com_grid.append([[complete_grid[0][0], complete_grid[0][0] + 1], [com[1][0], com[1][1]]])
+                                    com_grid.append([[complete_grid[0][0] + 1, com[0][1]], [com[1][0], com[1][1]]])
+                                    to_remove.append(com)
+                                elif com[0][1] == complete_grid[0][1] and com[0][0] != complete_grid[0][1] - 1:
+                                    # print("right")
+                                    com_grid.append([[complete_grid[0][1] - 1, complete_grid[0][1]], [com[1][0], com[1][1]]])
+                                    com_grid.append([[com[0][0], complete_grid[0][1] - 1], [com[1][0], com[1][1]]])
+                                    to_remove.append(com)
+                                elif com[1][1] - com[1][0] != 1:
+                                    # print('multiple rows')
+                                    for i in range(com[1][0], com[1][1]):
+                                        com_grid.append([[com[0][0], com[0][1]], [i, i + 1]])
+                                    to_remove.append(com)
 
-                        for com in com_grid:
-                            new_grid.append(com)
+                            for rmv in to_remove:
+                                com_grid.remove(rmv)
+
+                            for com in com_grid:
+                                new_grid.append(com)
+                    
+                    else:
+                        for i in range(grid[0][0][0], grid[0][0][1]):
+                            for j in range(grid[0][1][0], grid[0][1][1]):
+                                new_grid.append([[i, i + 1], [j, j + 1]])
 
                     grid = new_grid
 
@@ -498,6 +624,7 @@ class ReduceOptimizer():
                         stream_name = stmt.stream_name.name
                         operation_id = self.reduce_operations[stmt.stream_name.name][0]['op']
                         root = self.reduce_operations[stmt.stream_name.name][1]
+                        origin = self.reduce_operations[stmt.stream_name.name][4]
                         complete_grid = [self.reduce_operations[stmt.stream_name.name][2], self.reduce_operations[stmt.stream_name.name][3]]
 
                         if stream_name in self.grid_streams:
@@ -506,9 +633,6 @@ class ReduceOptimizer():
                             connections = self.snake_streams[stream_name]
                         else:
                             raise ValueError(f"Stream name {stream_name} not found in grid_streams or snake_streams.")
-
-                        if operation_id == 2:
-                            operation_id = "OP_SUM"
 
                         if stream_name in self.grid_streams:
                             for con in connections:
@@ -522,6 +646,13 @@ class ReduceOptimizer():
                                         or con[3] == 'top' and current_position[3] != con[1][3]
                                         or con[3] == 'bottom' and current_position[2] != con[1][2]):
         
+                                        if operation_id == "S_SUM":
+                                            current_op = '+'
+                                        elif operation_id == "S_PROD":
+                                            current_op = '*'
+                                        else:
+                                            raise NotImplementedError("Currently only S_SUM and S_PROD are supported.")
+
                                         newstatements.append(
                                             ForeachStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
@@ -545,7 +676,7 @@ class ReduceOptimizer():
                                                                         indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
                                                                     )
                                                                 ),
-                                                                op= '+' if operation_id == "OP_SUM" else '-----', # other operations not implemented
+                                                                op= current_op,
                                                                 right=Expression(
                                                                     value=self.versioning.current_version("reduce_receive")
                                                                 )
@@ -571,11 +702,7 @@ class ReduceOptimizer():
                                         )
 
                         elif stream_name in self.snake_streams:
-                            if not (((current_position[2] == complete_grid[1][0]) or (current_position[3] == complete_grid[1][1])) # top or bottom
-                                    and ((current_position[0] == complete_grid[0][0]) or (current_position[1] == complete_grid[0][1])) # left or right
-                                    and (root[1] != current_position[2]) # not the same vertical position as root
-                                    and ((((complete_grid[1][1] - complete_grid[1][0]) % 2 == 0) and (root[1] == current_position[0]))
-                                    or (((complete_grid[1][1] - complete_grid[1][0]) % 2 == 1) and not (root[1] == current_position[0])))):
+                            if not (current_position[0] == origin[0] and current_position[2] == origin[1]):
                                 # everything but the starting point receives first
 
                                 # get receive stream
@@ -586,48 +713,105 @@ class ReduceOptimizer():
                                             and current_position[2] >= detailed_con[2] and current_position[3] <= detailed_con[3]
                                             and ((detailed_con[4] == -1 and not current_position[1] == detailed_con[1])
                                                  or (detailed_con[4] == 1 and not current_position[0] == detailed_con[0])
-                                                 or (detailed_con[4] == 0 and detailed_con[8] == 'receiver'))):
+                                                 or (detailed_con[4] == 0 and detailed_con[8] == 'receiver')
+                                                 or (con[6] == True and detailed_con[8] == 'receiver'))):
                                             receive_stream = con
                                             break
                                         
                                     if not receive_stream == None:
                                         break
 
+                                if operation_id == "S_SUM":
+                                    current_op = '+'
+                                elif operation_id == "S_PROD":
+                                    current_op = '*'
+                                else:
+                                    raise NotImplementedError("Currently only S_SUM and S_PROD are supported.")
+
                                 # change receive statement
-                                newstatements.append(
-                                    ForeachStatement(
-                                        variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
-                                        parameter_range=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                        stop=Expression(ConstantLiteral(1, ScalarType.i32)),
-                                                                        step=None)],
-                                        stream_variable=TypedIdentifier(dtype=receive_stream[2].dtype,
-                                                                        identifier=self.versioning.next_version("reduce_receive")),
-                                        receive_stream=ReceiveGenerator(stream_name=receive_stream[0]),
-                                        body=[
-                                            AssignmentStatement(
-                                                destination=ArraySlice(
-                                                    array=stmt.local_array,
-                                                    indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                ),
-                                                source=Expression(
-                                                    BinaryOperator(
-                                                        left=Expression(
-                                                            value=ArraySlice(
-                                                                array=stmt.local_array,
-                                                                indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
+
+                                # not pipelined
+                                if not con[6]:
+                                    newstatements.append(
+                                        ForeachStatement(
+                                            variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                                            parameter_range=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                                            stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                            step=None)],
+                                            stream_variable=TypedIdentifier(dtype=receive_stream[2].dtype,
+                                                                            identifier=self.versioning.next_version("reduce_receive")),
+                                            receive_stream=ReceiveGenerator(stream_name=receive_stream[0]),
+                                            body=[
+                                                AssignmentStatement(
+                                                    destination=ArraySlice(
+                                                        array=stmt.local_array,
+                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
+                                                    ),
+                                                    source=Expression(
+                                                        BinaryOperator(
+                                                            left=Expression(
+                                                                value=ArraySlice(
+                                                                    array=stmt.local_array,
+                                                                    indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
+                                                                )
+                                                            ),
+                                                            op= current_op,
+                                                            right=Expression(
+                                                                value=self.versioning.current_version("reduce_receive")
                                                             )
-                                                        ),
-                                                        op= '+' if operation_id == "OP_SUM" else '-----', # other operations not implemented
-                                                        right=Expression(
-                                                            value=self.versioning.current_version("reduce_receive")
                                                         )
                                                     )
                                                 )
-                                            )
-                                        ],
-                                        completion_name=None
+                                            ],
+                                            completion_name=None
+                                        )
                                     )
-                                )
+
+                                # pipelined root
+                                elif (current_position[0] == root[0] and current_position[2] == root[1]):
+                                    newstatements.append(
+                                        AssignmentStatement(
+                                            destination=self.versioning.next_version("pipeline_helper"),
+                                            source=Expression(
+                                                ConstantLiteral(0, ScalarType.i32)
+                                            )
+                                        )
+                                    )
+                                    newstatements.append(
+                                        ForStatement(
+                                            variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                                            range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                                            stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                            step=None)],
+                                            body=[
+                                                ReceiveStatement(
+                                                    local_array=self.versioning.current_version("pipeline_helper"),
+                                                    stream_name=receive_stream[0],
+                                                    completion_name=None
+                                                ),
+                                                AssignmentStatement(
+                                                    destination=ArraySlice(
+                                                        array=stmt.local_array,
+                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
+                                                    ),
+                                                    source=Expression(
+                                                        BinaryOperator(
+                                                            left=Expression(
+                                                                value=ArraySlice(
+                                                                    array=stmt.local_array,
+                                                                    indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
+                                                                )
+                                                            ),
+                                                            op= current_op,
+                                                            right=Expression(
+                                                                value=self.versioning.current_version("pipeline_helper")
+                                                            )
+                                                        )
+                                                    )
+                                                )
+                                            ],
+                                        )
+                                    )
 
                             if not (current_position[0] == root[0] and current_position[2] == root[1]):
                                 # only root does not send
@@ -640,20 +824,99 @@ class ReduceOptimizer():
                                             and current_position[2] >= detailed_con[2] and current_position[3] <= detailed_con[3]
                                             and ((detailed_con[4] == 1 and not current_position[1] == detailed_con[1])
                                                  or (detailed_con[4] == -1 and not current_position[0] == detailed_con[0])
-                                                 or (detailed_con[4] == 0 and detailed_con[8] == 'sender'))):
+                                                 or (detailed_con[4] == 0 and detailed_con[8] == 'sender')
+                                                 or (con[6] == True and detailed_con[8] == 'sender'))):
                                             send_stream = con
                                             break
                                         
                                     if not send_stream == None:
                                         break
 
-                                newstatements.append(
-                                    SendStatement(
-                                        local_array=stmt.local_array,
-                                        stream_name=send_stream[0],
-                                        completion_name=None
+                                # not pipelined
+                                if not con[6]:
+                                    newstatements.append(
+                                        SendStatement(
+                                            local_array=stmt.local_array,
+                                            stream_name=send_stream[0],
+                                            completion_name=None
+                                        )
                                     )
-                                )
+
+                                # pipelined origin
+                                elif (current_position[0] == origin[0] and current_position[2] == origin[1]):
+                                    newstatements.append(
+                                        ForStatement(
+                                            variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                                            range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                                            stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                            step=None)],
+                                            body=[
+                                                SendStatement(
+                                                    local_array=ArraySlice(
+                                                            array=stmt.local_array,
+                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
+                                                        ),
+                                                    stream_name=send_stream[0],
+                                                    completion_name=None
+                                                )
+                                            ],
+                                        )
+                                    )
+
+
+                                # pipelined
+                                else:
+                                    newstatements.append(
+                                        AssignmentStatement(
+                                            destination=self.versioning.next_version("pipeline_helper"),
+                                            source=Expression(
+                                                ConstantLiteral(0, ScalarType.i32)
+                                            )
+                                        )
+                                    )
+                                    newstatements.append(
+                                        ForStatement(
+                                            variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                                            range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                                            stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                            step=None)],
+                                            body=[
+                                                ReceiveStatement(
+                                                    local_array=self.versioning.current_version("pipeline_helper"),
+                                                    stream_name=receive_stream[0],
+                                                    completion_name=None
+                                                ),
+                                                AssignmentStatement(
+                                                    destination=ArraySlice(
+                                                        array=stmt.local_array,
+                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
+                                                    ),
+                                                    source=Expression(
+                                                        BinaryOperator(
+                                                            left=Expression(
+                                                                value=ArraySlice(
+                                                                    array=stmt.local_array,
+                                                                    indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
+                                                                )
+                                                            ),
+                                                            op= current_op,
+                                                            right=Expression(
+                                                                value=self.versioning.current_version("pipeline_helper")
+                                                            )
+                                                        )
+                                                    )
+                                                ),
+                                                SendStatement(
+                                                    local_array=ArraySlice(
+                                                            array=stmt.local_array,
+                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
+                                                        ),
+                                                    stream_name=send_stream[0],
+                                                    completion_name=None
+                                                )
+                                            ],
+                                        )
+                                    )
                         
                         # add receive + calculation + send here
                         for new_statement in newstatements:
