@@ -6,8 +6,8 @@ kernel @add<N,K>() {
     }
 
     dataflow i16 i, i16 j in [0:5, 0:5] {
-        multistream<i16> red = reduce(0, 0) {
-            graph = snake,
+        multistream<i16> red = reduce(1, 1) {
+            graph = grid,
             op = S_SUM,
             pipelined = true
         }
