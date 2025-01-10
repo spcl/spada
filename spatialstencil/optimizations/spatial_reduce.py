@@ -51,25 +51,17 @@ class ReduceOptimizer():
                 if (y_stop - 1 - y_start) % 2 == 0:
 
                     # horizontal movement
-                    if pipelined:
-                        # not completely correct for small subgrids
-                        if x_stop - x_start > 1: ## this should be handled differently
-                            if (x_stop - x_start) % 2 != 0:
-                                communication.append([x_start, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                                communication.append([x_start + 1, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                                communication.append([x_start, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                                communication.append([x_start + 1, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                            else:
-                                communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                                communication.append([x_start + 1, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                                communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                                communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                    if pipelined and x_stop - x_start > 2:
+                        if (x_stop - x_start) % 2 != 0:
+                            communication.append([x_start, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start + 1, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                            communication.append([x_start + 1, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
                         else:
-                            # effectively not pipelined in x direction as we have a column
-                            # still pipelined in y direction
-                            # communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 1])
-                            # communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 1])
-                            pass
+                            communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start + 1, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                            communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
                     else:
                         if x_stop - x_start > 1:
                             communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 1])
@@ -92,24 +84,17 @@ class ReduceOptimizer():
                 else:
 
                     # horizontal movement
-                    if pipelined:
-                        if x_stop - x_start > 1:
-                            if (x_stop - x_start) % 2 != 0:
-                                communication.append([x_start, x_stop - 1, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
-                                communication.append([x_start + 1, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
-                                communication.append([x_start, x_stop - 1, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
-                                communication.append([x_start + 1, x_stop, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
-                            else:
-                                communication.append([x_start, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
-                                communication.append([x_start + 1, x_stop - 1, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
-                                communication.append([x_start, x_stop, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
-                                communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
+                    if pipelined and x_stop - x_start > 2:
+                        if (x_stop - x_start) % 2 != 0:
+                            communication.append([x_start, x_stop - 1, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start + 1, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start, x_stop - 1, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
+                            communication.append([x_start + 1, x_stop, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
                         else:
-                            # effectively not pipelined in x direction as we have a column
-                            # still pipelined in y direction
-                            # communication.append([x_start, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 2, 2])
-                            # communication.append([x_start, x_stop, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 2, 2])
-                            pass
+                            communication.append([x_start, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start + 1, x_stop - 1, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start, x_stop, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
+                            communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
                     else:
                         if x_stop - x_start > 1:
                             communication.append([x_start, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
@@ -134,24 +119,17 @@ class ReduceOptimizer():
                 if (y_stop - 1 - y_start) % 2 == 0:
 
                     # horizontal movement
-                    if pipelined:
-                        if x_stop - x_start > 1:
-                            if (x_stop - x_start) % 2 != 0:
-                                communication.append([x_start, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                                communication.append([x_start + 1, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                                communication.append([x_start, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                                communication.append([x_start + 1, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                            else:
-                                communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                                communication.append([x_start + 1, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                                communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                                communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                    if pipelined and x_stop - x_start > 2:
+                        if (x_stop - x_start) % 2 != 0:
+                            communication.append([x_start, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start + 1, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                            communication.append([x_start + 1, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
                         else:
-                            # effectively not pipelined in x direction as we have a column
-                            # still pipelined in y direction
-                            # communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                            # communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                            pass
+                            communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start + 1, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                            communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
                     else:
                         if x_stop - x_start > 1:
                             communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
@@ -174,24 +152,18 @@ class ReduceOptimizer():
                 else:
 
                     # horizontal movement
-                    if pipelined:
-                        if x_stop - x_start > 1:
-                            if (x_stop - x_start) % 2 != 0:
-                                communication.append([x_start, x_stop - 1, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                                communication.append([x_start + 1, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                                communication.append([x_start, x_stop - 1, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                                communication.append([x_start + 1, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                            else:
-                                communication.append([x_start, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                                communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                                communication.append([x_start, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                                communication.append([x_start + 1, x_stop - 1, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                    if pipelined and x_stop - x_start > 1:
+                        if (x_stop - x_start) % 2 != 0:
+                            communication.append([x_start, x_stop - 1, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start + 1, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start, x_stop - 1, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                            communication.append([x_start + 1, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
                         else:
-                            # effectively not pipelined in x direction as we have a column
-                            # still pipelined in y direction
-                            # communication.append([x_start, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 2, 2])
-                            # communication.append([x_start, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 2, 2])
-                            pass
+                            communication.append([x_start, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                            communication.append([x_start, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                            communication.append([x_start + 1, x_stop - 1, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+
                     else: 
                         communication.append([x_start, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
                         communication.append([x_start, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
