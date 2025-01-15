@@ -33,6 +33,51 @@ class ReduceOptimizer():
         self.change_compute_blocks()
         return Kernel(name=self.name, parameters=self.parameters, arguments=self.arguments, body=self.body)
     
+
+
+    def create_send_statement(self, stmt, pipelined_send, index) -> SendStatement:
+        send = SendStatement(
+            local_array=ArraySlice(
+                    array=stmt.local_array,
+                    indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
+                ),
+            stream_name=pipelined_send[index],
+            completion_name=None
+        )
+        return send
+    
+    def create_receive_statement(self, stmt, pipelined_receive, index) -> ReceiveStatement:
+        receive = ReceiveStatement(
+            local_array=self.versioning.current_version("pipeline_helper"),
+            stream_name=pipelined_receive[index],
+            completion_name=None
+        )
+        return receive
+    
+
+    def create_binary_operation(self, stmt, current_op, rhs) -> AssignmentStatement:
+        bin_op = AssignmentStatement(
+            destination=ArraySlice(
+                array=stmt.local_array,
+                indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
+            ),
+            source=Expression(
+                BinaryOperator(
+                    left=Expression(
+                        value=ArraySlice(
+                            array=stmt.local_array,
+                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
+                        )
+                    ),
+                    op= current_op,
+                    right=Expression(
+                        value=rhs
+                    )
+                )
+            )
+        )
+        return bin_op
+    
     
 
     def create_communication_patterns(self, x_start, x_stop, y_start, y_stop, x, y, name, graph, pipelined) -> None:
@@ -832,6 +877,7 @@ class ReduceOptimizer():
                                             or con[3] == 'top' and current_position[3] != con[1][3]
                                             or con[3] == 'bottom' and current_position[2] != con[1][2]):
 
+                                            bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("reduce_receive"))
                                             newstatements.append(
                                                 ForeachStatement(
                                                     variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
@@ -842,26 +888,7 @@ class ReduceOptimizer():
                                                                                     identifier=self.versioning.next_version("reduce_receive")),
                                                     receive_stream=ReceiveGenerator(stream_name=con[0]),
                                                     body=[
-                                                        AssignmentStatement(
-                                                            destination=ArraySlice(
-                                                                array=stmt.local_array,
-                                                                indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                            ),
-                                                            source=Expression(
-                                                                BinaryOperator(
-                                                                    left=Expression(
-                                                                        value=ArraySlice(
-                                                                            array=stmt.local_array,
-                                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                        )
-                                                                    ),
-                                                                    op= current_op,
-                                                                    right=Expression(
-                                                                        value=self.versioning.current_version("reduce_receive")
-                                                                    )
-                                                                )
-                                                            )
-                                                        )
+                                                        bin_op
                                                     ],
                                                     completion_name=None
                                                 )
@@ -905,6 +932,9 @@ class ReduceOptimizer():
                                         )
                                     )
                                     if len(pipelined_receive) == 1:
+                                        send = self.create_send_statement(stmt, pipelined_send, 0)
+                                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
+                                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
                                         newstatements.append(
                                             ForStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
@@ -912,43 +942,17 @@ class ReduceOptimizer():
                                                                                 stop=Expression(ConstantLiteral(1, ScalarType.i32)),
                                                                                 step=None)],
                                                 body=[
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[0],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    ),
-                                                    SendStatement(
-                                                        local_array=ArraySlice(
-                                                                array=stmt.local_array,
-                                                                indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                            ),
-                                                        stream_name=pipelined_send[0],
-                                                        completion_name=None
-                                                    )
+                                                    receive0,
+                                                    bin_op,
+                                                    send
                                                 ],
                                             )
                                         )
                                     elif len(pipelined_receive) == 2:
+                                        send = self.create_send_statement(stmt, pipelined_send, 0)
+                                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
+                                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
+                                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
                                         newstatements.append(
                                             ForStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
@@ -956,68 +960,20 @@ class ReduceOptimizer():
                                                                                 stop=Expression(ConstantLiteral(1, ScalarType.i32)),
                                                                                 step=None)],
                                                 body=[
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[0],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    ),
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[1],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    ),
-                                                    SendStatement(
-                                                        local_array=ArraySlice(
-                                                                array=stmt.local_array,
-                                                                indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                            ),
-                                                        stream_name=pipelined_send[0],
-                                                        completion_name=None
-                                                    )
+                                                    receive0,
+                                                    bin_op,
+                                                    receive1,
+                                                    bin_op,
+                                                    send
                                                 ],
                                             )
                                         )
                                     elif len(pipelined_receive) == 3:
+                                        send = self.create_send_statement(stmt, pipelined_send, 0)
+                                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
+                                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
+                                        receive2 = self.create_receive_statement(stmt, pipelined_receive, 2)
+                                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
                                         newstatements.append(
                                             ForStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
@@ -1025,93 +981,23 @@ class ReduceOptimizer():
                                                                                 stop=Expression(ConstantLiteral(1, ScalarType.i32)),
                                                                                 step=None)],
                                                 body=[
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[0],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    ),
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[1],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    ),
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[2],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    ),
-                                                    SendStatement(
-                                                        local_array=ArraySlice(
-                                                                array=stmt.local_array,
-                                                                indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                            ),
-                                                        stream_name=pipelined_send[0],
-                                                        completion_name=None
-                                                    )
+                                                    receive0,
+                                                    bin_op,
+                                                    receive1,
+                                                    bin_op,
+                                                    receive2,
+                                                    bin_op,
+                                                    send
                                                 ],
                                             )
                                         )
                                     else:
+                                        send = self.create_send_statement(stmt, pipelined_send, 0)
+                                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
+                                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
+                                        receive2 = self.create_receive_statement(stmt, pipelined_receive, 2)
+                                        receive3 = self.create_receive_statement(stmt, pipelined_receive, 3)
+                                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
                                         newstatements.append(
                                             ForStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
@@ -1119,114 +1005,15 @@ class ReduceOptimizer():
                                                                                 stop=Expression(ConstantLiteral(1, ScalarType.i32)),
                                                                                 step=None)],
                                                 body=[
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[0],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    ),
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[1],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    ),
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[2],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    ),
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[3],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    ),
-                                                    SendStatement(
-                                                        local_array=ArraySlice(
-                                                                array=stmt.local_array,
-                                                                indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                            ),
-                                                        stream_name=pipelined_send[0],
-                                                        completion_name=None
-                                                    )
+                                                    receive0,
+                                                    bin_op,
+                                                    receive1,
+                                                    bin_op,
+                                                    receive2,
+                                                    bin_op,
+                                                    receive3,
+                                                    bin_op,
+                                                    send
                                                 ],
                                             )
                                         )
@@ -1240,6 +1027,8 @@ class ReduceOptimizer():
                                         )
                                     )
                                     if len(pipelined_receive) == 1:
+                                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
+                                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
                                         newstatements.append(
                                             ForStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
@@ -1247,35 +1036,15 @@ class ReduceOptimizer():
                                                                                 stop=Expression(ConstantLiteral(1, ScalarType.i32)),
                                                                                 step=None)],
                                                 body=[
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[0],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    )
+                                                    receive0,
+                                                    bin_op
                                                 ],
                                             )
                                         )
                                     elif len(pipelined_receive) == 2:
+                                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
+                                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
+                                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
                                         newstatements.append(
                                             ForStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
@@ -1283,60 +1052,18 @@ class ReduceOptimizer():
                                                                                 stop=Expression(ConstantLiteral(1, ScalarType.i32)),
                                                                                 step=None)],
                                                 body=[
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[0],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    ),
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[1],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    )
+                                                    receive0,
+                                                    bin_op,
+                                                    receive1,
+                                                    bin_op
                                                 ],
                                             )
                                         )
                                     elif len(pipelined_receive) == 3:
+                                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
+                                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
+                                        receive2 = self.create_receive_statement(stmt, pipelined_receive, 2)
+                                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
                                         newstatements.append(
                                             ForStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
@@ -1344,85 +1071,21 @@ class ReduceOptimizer():
                                                                                 stop=Expression(ConstantLiteral(1, ScalarType.i32)),
                                                                                 step=None)],
                                                 body=[
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[0],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    ),
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[1],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    ),
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[2],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    )
+                                                    receive0,
+                                                    bin_op,
+                                                    receive1,
+                                                    bin_op,
+                                                    receive2,
+                                                    bin_op
                                                 ],
                                             )
                                         )
                                     else:
+                                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
+                                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
+                                        receive2 = self.create_receive_statement(stmt, pipelined_receive, 2)
+                                        receive3 = self.create_receive_statement(stmt, pipelined_receive, 3)
+                                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
                                         newstatements.append(
                                             ForStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
@@ -1430,110 +1093,19 @@ class ReduceOptimizer():
                                                                                 stop=Expression(ConstantLiteral(1, ScalarType.i32)),
                                                                                 step=None)],
                                                 body=[
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[0],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    ),
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[1],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    ),
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[2],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    ),
-                                                    ReceiveStatement(
-                                                        local_array=self.versioning.current_version("pipeline_helper"),
-                                                        stream_name=pipelined_receive[3],
-                                                        completion_name=None
-                                                    ),
-                                                    AssignmentStatement(
-                                                        destination=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                        source=Expression(
-                                                            BinaryOperator(
-                                                                left=Expression(
-                                                                    value=ArraySlice(
-                                                                        array=stmt.local_array,
-                                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                    )
-                                                                ),
-                                                                op= current_op,
-                                                                right=Expression(
-                                                                    value=self.versioning.current_version("pipeline_helper")
-                                                                )
-                                                            )
-                                                        )
-                                                    )
+                                                    receive0,
+                                                    bin_op,
+                                                    receive1,
+                                                    bin_op,
+                                                    receive2,
+                                                    bin_op,
+                                                    receive3,
+                                                    bin_op
                                                 ],
                                             )
                                         )
                                 elif pipelined_send != [] and pipelined_receive == []:
+                                    send = self.create_send_statement(stmt, pipelined_send, 0)
                                     newstatements.append(
                                         ForStatement(
                                             variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
@@ -1541,14 +1113,7 @@ class ReduceOptimizer():
                                                                             stop=Expression(ConstantLiteral(1, ScalarType.i32)),
                                                                             step=None)],
                                             body=[
-                                                SendStatement(
-                                                    local_array=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                    stream_name=pipelined_send[0],
-                                                    completion_name=None
-                                                )
+                                                send
                                             ],
                                         )
                                     )
@@ -1588,6 +1153,7 @@ class ReduceOptimizer():
 
                                 # not pipelined
                                 if not con[6]:
+                                    bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("reduce_receive"))
                                     newstatements.append(
                                         ForeachStatement(
                                             variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
@@ -1598,26 +1164,7 @@ class ReduceOptimizer():
                                                                             identifier=self.versioning.next_version("reduce_receive")),
                                             receive_stream=ReceiveGenerator(stream_name=receive_stream[0]),
                                             body=[
-                                                AssignmentStatement(
-                                                    destination=ArraySlice(
-                                                        array=stmt.local_array,
-                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                    ),
-                                                    source=Expression(
-                                                        BinaryOperator(
-                                                            left=Expression(
-                                                                value=ArraySlice(
-                                                                    array=stmt.local_array,
-                                                                    indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                )
-                                                            ),
-                                                            op= current_op,
-                                                            right=Expression(
-                                                                value=self.versioning.current_version("reduce_receive")
-                                                            )
-                                                        )
-                                                    )
-                                                )
+                                                bin_op
                                             ],
                                             completion_name=None
                                         )
@@ -1633,6 +1180,9 @@ class ReduceOptimizer():
                                             )
                                         )
                                     )
+
+                                    receive0 = self.create_receive_statement(stmt, receive_stream, 0)
+                                    bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
                                     newstatements.append(
                                         ForStatement(
                                             variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
@@ -1640,31 +1190,8 @@ class ReduceOptimizer():
                                                                             stop=Expression(ConstantLiteral(1, ScalarType.i32)),
                                                                             step=None)],
                                             body=[
-                                                ReceiveStatement(
-                                                    local_array=self.versioning.current_version("pipeline_helper"),
-                                                    stream_name=receive_stream[0],
-                                                    completion_name=None
-                                                ),
-                                                AssignmentStatement(
-                                                    destination=ArraySlice(
-                                                        array=stmt.local_array,
-                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                    ),
-                                                    source=Expression(
-                                                        BinaryOperator(
-                                                            left=Expression(
-                                                                value=ArraySlice(
-                                                                    array=stmt.local_array,
-                                                                    indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                )
-                                                            ),
-                                                            op= current_op,
-                                                            right=Expression(
-                                                                value=self.versioning.current_version("pipeline_helper")
-                                                            )
-                                                        )
-                                                    )
-                                                )
+                                                receive0,
+                                                bin_op
                                             ],
                                         )
                                     )
@@ -1700,6 +1227,7 @@ class ReduceOptimizer():
 
                                 # pipelined origin
                                 elif (current_position[0] == origin[0] and current_position[2] == origin[1]):
+                                    send0 = self.create_send_statement(stmt, send_stream, 0)
                                     newstatements.append(
                                         ForStatement(
                                             variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
@@ -1707,14 +1235,7 @@ class ReduceOptimizer():
                                                                             stop=Expression(ConstantLiteral(1, ScalarType.i32)),
                                                                             step=None)],
                                             body=[
-                                                SendStatement(
-                                                    local_array=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                    stream_name=send_stream[0],
-                                                    completion_name=None
-                                                )
+                                                send0
                                             ],
                                         )
                                     )
@@ -1730,6 +1251,10 @@ class ReduceOptimizer():
                                             )
                                         )
                                     )
+
+                                    send0 = self.create_send_statement(stmt, send_stream, 0)
+                                    receive0 = self.create_receive_statement(stmt, receive_stream, 0)
+                                    bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
                                     newstatements.append(
                                         ForStatement(
                                             variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
@@ -1737,39 +1262,9 @@ class ReduceOptimizer():
                                                                             stop=Expression(ConstantLiteral(1, ScalarType.i32)),
                                                                             step=None)],
                                             body=[
-                                                ReceiveStatement(
-                                                    local_array=self.versioning.current_version("pipeline_helper"),
-                                                    stream_name=receive_stream[0],
-                                                    completion_name=None
-                                                ),
-                                                AssignmentStatement(
-                                                    destination=ArraySlice(
-                                                        array=stmt.local_array,
-                                                        indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                    ),
-                                                    source=Expression(
-                                                        BinaryOperator(
-                                                            left=Expression(
-                                                                value=ArraySlice(
-                                                                    array=stmt.local_array,
-                                                                    indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                                )
-                                                            ),
-                                                            op= current_op,
-                                                            right=Expression(
-                                                                value=self.versioning.current_version("pipeline_helper")
-                                                            )
-                                                        )
-                                                    )
-                                                ),
-                                                SendStatement(
-                                                    local_array=ArraySlice(
-                                                            array=stmt.local_array,
-                                                            indices=[Expression(value=self.versioning.current_version("reduce_runner"))]
-                                                        ),
-                                                    stream_name=send_stream[0],
-                                                    completion_name=None
-                                                )
+                                                receive0,
+                                                bin_op,
+                                                send0
                                             ],
                                         )
                                     )
