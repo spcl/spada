@@ -1,4 +1,4 @@
-from spatialstencil.syntax.spatial_ir.irnodes import Kernel, ComputeBlock, ReduceStatement, Expression, SubgridExpression, RangeExpression, ConstantLiteral, ScalarType, DataflowBlock, MulStreamDeclaration, ReduceRoutingDeclaration, RoutingDeclaration, RoutingHop, StreamType, Identifier, TypedIdentifier, ForeachStatement, ArraySlice, BinaryOperator, SendStatement, ReceiveGenerator, AssignmentStatement, RelativeStreamDeclaration, PlaceBlock, Phase, Parameter, KernelArgument, ReceiveStatement, ForStatement
+from spatialstencil.syntax.spatial_ir.irnodes import Kernel, ComputeBlock, ReduceStatement, Expression, SubgridExpression, RangeExpression, ConstantLiteral, ScalarType, DataflowBlock, MulStreamDeclaration, ReduceRoutingDeclaration, RoutingDeclaration, RoutingHop, StreamType, Identifier, TypedIdentifier, ForeachStatement, ArraySlice, BinaryOperator, SendStatement, ReceiveGenerator, AssignmentStatement, RelativeStreamDeclaration, PlaceBlock, Phase, Parameter, KernelArgument, ReceiveStatement, ForStatement,FieldDeclaration,ArrayType
 from typing import Union, Tuple, Optional, Literal
 import spatialstencil.syntax.spatial_ir.irnodes as spa
 from spatialstencil.lowering.versioning import Versioning
@@ -498,7 +498,9 @@ class ReduceOptimizer():
                                                                                [elem.subgrid.x_range.start.value.value, elem.subgrid.x_range.stop.value.value],
                                                                                [elem.subgrid.y_range.start.value.value, elem.subgrid.y_range.stop.value.value],
                                                                                [stmt.dx.value.value if (elem.subgrid.y_range.stop.value.value - elem.subgrid.y_range.start.value.value) % 2 == 0 else (elem.subgrid.x_range.stop.value.value - stmt.dx.value.value - 1),
-                                                                                elem.subgrid.y_range.stop.value.value - 1 if elem.subgrid.y_range.start.value.value == stmt.dy.value.value else elem.subgrid.y_range.start.value.value]]})
+                                                                                elem.subgrid.y_range.stop.value.value - 1 if elem.subgrid.y_range.start.value.value == stmt.dy.value.value else elem.subgrid.y_range.start.value.value],
+                                                                                None,
+                                                                                None]})
                         new_grid_streams = []
                         new_snake_streams = []
                         
@@ -671,6 +673,11 @@ class ReduceOptimizer():
                     if isinstance(stmt, ReduceStatement):
                         stream_name = stmt.stream_name.name
 
+                        if self.reduce_operations[stream_name][5] == None:
+                            for tst in stmt.iter_child_nodes():
+                                self.reduce_operations[stream_name][5] = tst
+                                break
+
                         # test if stream_name is in grid_streams
                         if stmt.stream_name.name in self.grid_streams:
                             connections = self.grid_streams[stream_name]
@@ -824,12 +831,15 @@ class ReduceOptimizer():
     def change_compute_blocks(self) -> None:
         finalbody = []
         for elem in self.body:
-            #print(elem)
-            #print('-'*50)
-            #for tst in elem.iter_child_nodes(): ### use this to go over nested nodes
+            # print(elem)
+            # print('-'*50)
+            # for tst in elem.iter_child_nodes(): ### use this to go over nested nodes
             #        print(tst)
             #        print('@'*50)
-            #exit()
+
+            if isinstance(elem, PlaceBlock):
+                for srch in elem.iter_child_nodes():
+                    print(srch)
 
             if isinstance(elem, ComputeBlock):
                 statements = []
@@ -846,6 +856,18 @@ class ReduceOptimizer():
                         root = self.reduce_operations[stmt.stream_name.name][1]
                         origin = self.reduce_operations[stmt.stream_name.name][4]
                         complete_grid = [self.reduce_operations[stmt.stream_name.name][2], self.reduce_operations[stmt.stream_name.name][3]]
+                        send_identifier = self.reduce_operations[stmt.stream_name.name][5]
+                        send_amount = self.reduce_operations[stmt.stream_name.name][6]
+                        if send_amount == None:
+                            for elem in self.body:
+                                for srch in elem.iter_child_nodes():
+                                    if isinstance(srch, FieldDeclaration):
+                                        if srch.field_name == send_identifier:
+                                            if isinstance(srch.dtype, ArrayType):
+                                                send_amount = srch.dtype.shape[0].value.value
+                                                self.reduce_operations[stmt.stream_name.name][6] = send_amount
+                                            else:
+                                                raise ValueError(f"Field {send_identifier} is not an array. Only arrays are currently supported.")
 
                         if stream_name in self.grid_streams:
                             connections = self.grid_streams[stream_name]
@@ -939,7 +961,7 @@ class ReduceOptimizer():
                                             ForStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
                                                 range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
                                                                                 step=None)],
                                                 body=[
                                                     receive0,
@@ -957,7 +979,7 @@ class ReduceOptimizer():
                                             ForStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
                                                 range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
                                                                                 step=None)],
                                                 body=[
                                                     receive0,
@@ -978,7 +1000,7 @@ class ReduceOptimizer():
                                             ForStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
                                                 range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
                                                                                 step=None)],
                                                 body=[
                                                     receive0,
@@ -1002,7 +1024,7 @@ class ReduceOptimizer():
                                             ForStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
                                                 range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
                                                                                 step=None)],
                                                 body=[
                                                     receive0,
@@ -1033,7 +1055,7 @@ class ReduceOptimizer():
                                             ForStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
                                                 range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
                                                                                 step=None)],
                                                 body=[
                                                     receive0,
@@ -1049,7 +1071,7 @@ class ReduceOptimizer():
                                             ForStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
                                                 range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
                                                                                 step=None)],
                                                 body=[
                                                     receive0,
@@ -1068,7 +1090,7 @@ class ReduceOptimizer():
                                             ForStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
                                                 range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
                                                                                 step=None)],
                                                 body=[
                                                     receive0,
@@ -1090,7 +1112,7 @@ class ReduceOptimizer():
                                             ForStatement(
                                                 variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
                                                 range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
                                                                                 step=None)],
                                                 body=[
                                                     receive0,
@@ -1110,7 +1132,7 @@ class ReduceOptimizer():
                                         ForStatement(
                                             variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
                                             range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                            stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                            stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
                                                                             step=None)],
                                             body=[
                                                 send
@@ -1187,7 +1209,7 @@ class ReduceOptimizer():
                                         ForStatement(
                                             variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
                                             range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                            stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                            stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
                                                                             step=None)],
                                             body=[
                                                 receive0,
@@ -1232,7 +1254,7 @@ class ReduceOptimizer():
                                         ForStatement(
                                             variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
                                             range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                            stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                            stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
                                                                             step=None)],
                                             body=[
                                                 send0
@@ -1259,7 +1281,7 @@ class ReduceOptimizer():
                                         ForStatement(
                                             variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
                                             range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                            stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                            stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
                                                                             step=None)],
                                             body=[
                                                 receive0,
@@ -1281,6 +1303,5 @@ class ReduceOptimizer():
                 finalbody.append(elem)   
         
         self.body = finalbody
-        #exit()
 
         return None
