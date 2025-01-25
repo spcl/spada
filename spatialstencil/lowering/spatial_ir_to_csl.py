@@ -130,6 +130,7 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     color_map = _collect_and_allocate_colors(rect.metadata, header)
     _collect_and_generate_fields(rect.metadata.place, header, footer)
     dsds = _collect_unique_dsds(rect.metadata, header)
+    dtypes = _collect_identifier_types(rect.metadata)
 
     # Convert compute block subgraphs into tasks:
     #    * Make task DAG out of computations
@@ -141,7 +142,7 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     #    * (re)cycle task IDs based on ``csl.{DATA,LOCAL,CONTROL}_TASK_IDS``: becomes switch-case on the variable that
     #      maintains the current state
     completion_dag = analysis.to_completion_dag(rect.metadata.compute)
-    tasks = tdag.create_csl_tasks(completion_dag, rect.metadata.compute)
+    tasks = tdag.create_csl_tasks(completion_dag, rect.metadata.compute, dtypes)
 
     # TODO: Collect all scalar types for foreach receivers. Every sequential foreach can recycle index var
 
@@ -347,6 +348,29 @@ def _generate_task_code(task: tdag.CSLTask, current_code: StringIO, header: Stri
     #   * If index is requested: before unblocking task, set k; inc at end of task
     #   * Wavelet-triggered task as fallback
     pass
+
+
+def _collect_identifier_types(rect: PEBlock) -> dict[spir.Identifier, spir.IRType]:
+    """
+    Returns a dictionary mapping all place, dataflow, and compute variables (streams, arrays, scalars) to datatypes.
+    """
+    result = {}
+
+    # Collect from place blocks
+    for fielddec in rect.place.statements:
+        result[fielddec.field_name] = fielddec.dtype
+
+    # Collect from dataflow blocks
+    for streamdec in rect.dataflow.statements:
+        result[streamdec.stream_name] = streamdec.dtype
+
+    # Collect from compute blocks
+    for stmt in rect.compute.statements:
+        for value in stmt.walk():
+            if isinstance(value, spir.TypedIdentifier):
+                result[value.identifier] = value.dtype
+
+    return result
 
 
 def dtype_as_csl(dtype: spir.ScalarType | spir.StreamType | spir.ArrayType) -> str:
