@@ -178,7 +178,7 @@ class BinaryOperator(SpatialNode):
         return f'({self.left.as_ir()} {self.op} {self.right.as_ir()})'
 
 
-# Ternary Operator
+# Ternary Operators
 @dataclass
 class TernaryOperator(SpatialNode):
     """
@@ -195,6 +195,24 @@ class TernaryOperator(SpatialNode):
 
     def as_ir(self, indent: int = 0) -> str:
         return f'({self.if_true.as_ir()} if {self.cond.as_ir()} else {self.if_false.as_ir()})'
+
+
+@dataclass
+class MultiplyAccumulateOperator(SpatialNode):
+    """
+    A fused multiply-accumulation operator (e.g., fmac). Implemented as ``a + b * c``
+    """
+    a: 'Expression'
+    b: 'Expression'
+    c: 'Expression'
+
+    def validate(self) -> None:
+        assert isinstance(self.a, Expression)
+        assert isinstance(self.b, Expression)
+        assert isinstance(self.c, Expression)
+
+    def as_ir(self, indent: int = 0) -> str:
+        return f'fmac({self.a.as_ir()}, {self.b.as_ir()}, {self.c.as_ir()})'
 
 
 # ArraySlice to handle both subscripts (single index access) and array slices (start:end)
@@ -319,11 +337,11 @@ class SubgridExpression(SpatialNode):
         start_x, start_y = self.x_range.start.value, self.y_range.start.value
         if self.x_range.stop is None:
             stop_x = ConstantLiteral(start_x.value + 1, start_x.dtype)
-        else: 
+        else:
             stop_x = self.x_range.stop.value
         if self.y_range.stop is None:
             stop_y = ConstantLiteral(start_y.value + 1, start_y.dtype)
-        else: 
+        else:
             stop_y = self.y_range.stop.value
         if not isinstance(start_x, ConstantLiteral):
             raise TypeError(f'Cannot obtain concrete grid size. x range value "{start_x.as_ir()}" is not constant')
