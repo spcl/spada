@@ -1,0 +1,201 @@
+import pytest
+from spatialstencil.lowering import spatial_ir_to_csl as s2c
+from spatialstencil.syntax.spatial_ir import analysis, parser, irnodes
+from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock
+from spatialstencil.syntax.csl import tasks as tdag
+
+
+def _create_tasks(peblock: PEBlock):
+    dtypes = s2c._collect_identifier_types(peblock)
+    completion_dag = analysis.to_completion_dag(peblock.compute)
+    return tdag.create_csl_tasks(completion_dag, peblock.compute, dtypes)
+
+
+def test_dsd_op_detection():
+    kernel = parser.parse_string(code=f"""
+kernel @two_phase<K> (stream<f32>[4] readonly in,
+                          stream<f32> readonly out ) {{
+
+    place i16 i, i16 j in [0, 0] {{
+        f32[K] a32
+        f16[K] a16
+        f32 localval32
+        f16 localval16
+    }}
+    dataflow i32 i, i32 j in [0, 0] {{
+        stream<f32> stream = relative_stream(-1, 0) {{
+            hops = [(-1, 0)],
+            channel = 0
+        }}
+    }}
+    compute i32 i, i32 j in [0, 0] {{
+        // Test foreach
+        await foreach i32 k, f32 x in [0:K], receive(stream) {{
+            a32[k] = a32[k] + x
+        }}
+        await foreach i32 k#1, f16 x#1 in [0:K], receive(stream) {{
+            a32[k#1] = a32[k#1] + x#1
+        }}
+        await foreach i32 k#2, i32 x#2 in [0:K], receive(stream) {{
+            a16[k#2] = x#2
+        }}
+        await foreach i32 k#3, f32 x#3 in [0:K], receive(stream) {{
+            a32[k#3] = x#3
+        }}
+        await foreach i32 k#4, f32 x#4 in [0:K], receive(stream) {{
+            a32[k#4] = fmac(a32[k#4], x#4, localval32)
+        }}
+        await foreach i32 k#5, f16 x#5 in [0:K], receive(stream) {{
+            a32[k#5] = fmac(a32[k#5], x#5, localval32)
+        }}
+        await foreach i32 k#6, f32 x#6 in [0:K], receive(stream) {{
+            a32[k#6] = fmac(a32[k#6], x#6, localval16)
+        }}
+        // Test map
+        await map i32 m in [0:K] {{
+            a32[m] = a32[m] + a16[m]
+        }}
+    }}
+}}""")
+    place, dataflow, compute = kernel.body
+    dtypes = s2c._collect_identifier_types(PEBlock(place, dataflow, compute))
+    assert len(compute.statements) == 8
+    assert tdag.get_dsd_op(dtypes, compute.statements[0]) == "@fadds"
+    assert tdag.get_dsd_op(dtypes, compute.statements[1]) == "@faddhs"
+    assert tdag.get_dsd_op(dtypes, compute.statements[2]) is None
+    assert tdag.get_dsd_op(dtypes, compute.statements[3]) == "@fmovs"
+    assert tdag.get_dsd_op(dtypes, compute.statements[4]) == "@fmacs"
+    assert tdag.get_dsd_op(dtypes, compute.statements[5]) is None
+    assert tdag.get_dsd_op(dtypes, compute.statements[6]) == "@fmachs"
+    assert tdag.get_dsd_op(dtypes, compute.statements[7]) == "@faddhs"
+
+
+@pytest.mark.parametrize('dsd_op', (False, True))
+def test_tasks_with_dsd_ops(dsd_op: bool):
+    # An f32+i16 operation cannot be generated as a DSD operation
+    dtype = 'f32' if dsd_op else 'i16'
+    kernel = parser.parse_string(code=f"""
+kernel @two_phase<K> (stream<f32>[4] readonly in,
+                          stream<f32> readonly out ) {{
+
+    place i16 i, i16 j in [0, 0] {{
+        f32[K] a
+    }}
+    dataflow i32 i, i32 j in [0, 0] {{
+        stream<{dtype}> hop1 = relative_stream(-1, 0) {{
+            hops = [(-1, 0)],
+            channel = 0
+        }}
+        stream<{dtype}> hop2 = relative_stream(-2, 0) {{
+            hops = [(-1, 0), (-1, 0)],
+            channel = 0
+        }}
+    }}
+    compute i32 i, i32 j in [0, 0] {{
+        await receive(a, in[i])
+        await foreach i32 k, {dtype} x in [0:K], receive(hop1) {{
+            a[k] = a[k] + x
+        }}
+        await foreach i32 k#1, {dtype} x#1 in [0:K], receive(hop2) {{
+            a[k#1] = a[k#1] + x#1
+        }}
+        await send(a, out)
+    }}
+}}""")
+    place, dataflow, compute = kernel.body
+    block = PEBlock(place, dataflow, compute)
+    tasks = _create_tasks(block)
+    assert len(tasks) == 4
+    if dsd_op:
+        assert tasks[1].task_type == 'local'
+        assert tasks[2].task_type == 'local'
+    else:
+        assert tasks[1].task_type == 'data'
+        assert tasks[2].task_type == 'data'
+
+
+def test_wait_tree():
+    # A subset of the full code for testing
+    kernel = parser.parse_string(code="""
+kernel @reduce<N>(stream<f32>[N] readonly inp, stream<f32> writeonly out) {
+    place u16 i, u16 j in [1:N-1, 0:1] {
+        f32 local
+        f32 rcv_val1
+        f32 rcv_val2
+        f32 rcv_val3
+        f32 rcv_val4
+        f32 rcv_val5
+    }
+    dataflow u16 i, u16 j in [1:N-1, 0:1] {
+        stream<f32> westwards = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 0
+        }
+    }
+    compute u16 i, u16 j in [1:N-1, 0:1] {
+        completion c1 = receive(local, inp[i])
+        completion c2 = receive(rcv_val1, westwards)
+        completion c3 = receive(rcv_val2, westwards)
+        completion c4 = receive(rcv_val3, westwards)
+        completion c5 = receive(rcv_val4, westwards)
+        awaitall
+        await send(rcv_val1, westwards)
+    }
+}""")
+    place, dataflow, compute = kernel.body
+    block = PEBlock(place, dataflow, compute)
+    tasks = _create_tasks(block)
+    # The receives should exist in the first task, followed by a tree of waits, followed by the last send
+    assert len(tasks) == 5
+    assert len(tasks[0].statements) == 5
+
+
+@pytest.mark.parametrize('async_first_task', (False, True))
+def test_activate_unblock(async_first_task: bool):
+    if async_first_task:
+        first_task_code = """
+        completion c1 = receive(local, inp[i])
+        completion c2 = receive(rcv_val, westwards)
+        await c1
+        await c2"""
+    else:
+        first_task_code = """
+        await receive(local, inp[i])
+        await receive(rcv_val, westwards)"""
+
+    # A subset of the full code for testing
+    kernel = parser.parse_string(code=f"""
+kernel @reduce<N>(stream<f32>[N] readonly inp, stream<f32> writeonly out) {{
+    place u16 i, u16 j in [1:N-1, 0:1] {{
+        f32 local
+        f32 rcv_val
+    }}
+    dataflow u16 i, u16 j in [1:N-1, 0:1] {{
+        stream<f32> westwards = relative_stream(-1, 0) {{
+            hops = [(-1, 0)],
+            channel = 0
+        }}
+    }}
+    compute u16 i, u16 j in [1:N-1, 0:1] {{
+        {first_task_code}
+        rcv_val = rcv_val + local
+        await send(rcv_val, westwards)
+    }}
+}}""")
+    place, dataflow, compute = kernel.body
+    block = PEBlock(place, dataflow, compute)
+    tasks = _create_tasks(block)
+    # Tasks should have the first two receives and the two following operations blocked by both an
+    # @activate operation and an @unblock operation
+    assert len(tasks) == 2
+    assert tasks[0].outgoing[0][1] == tdag.InterTaskEdge.ACTIVATE
+    assert tasks[0].outgoing[1][1] == tdag.InterTaskEdge.UNBLOCK
+
+
+if __name__ == '__main__':
+    test_dsd_op_detection()
+    test_tasks_with_dsd_ops(False)
+    test_tasks_with_dsd_ops(True)
+    test_wait_tree()
+    test_activate_unblock(False)
+    test_activate_unblock(True)
