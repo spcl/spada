@@ -1,10 +1,9 @@
-from spatialstencil.syntax.spatial_ir.irnodes import Kernel, ComputeBlock, ReduceStatement, Expression, SubgridExpression, RangeExpression, ConstantLiteral, ScalarType, DataflowBlock, MulStreamDeclaration, ReduceRoutingDeclaration, RoutingDeclaration, RoutingHop, StreamType, Identifier, TypedIdentifier, ForeachStatement, ArraySlice, BinaryOperator, SendStatement, ReceiveGenerator, AssignmentStatement, RelativeStreamDeclaration, PlaceBlock, Phase, Parameter, KernelArgument, ReceiveStatement, ForStatement,FieldDeclaration,ArrayType
+from spatialstencil.syntax.spatial_ir.irnodes import Kernel, ComputeBlock, ReduceStatement, Expression, SubgridExpression, RangeExpression, ConstantLiteral, ScalarType, DataflowBlock, MulStreamDeclaration, ReduceRoutingDeclaration, RoutingDeclaration, RoutingHop, StreamType, Identifier, TypedIdentifier, ForeachStatement, ArraySlice, BinaryOperator, SendStatement, ReceiveGenerator, AssignmentStatement, RelativeStreamDeclaration, PlaceBlock, Phase, Parameter, KernelArgument, ReceiveStatement, ForStatement,FieldDeclaration,ArrayType, MapStatement, AsyncBlock, TernaryOperator
 from typing import Union, Tuple, Optional, Literal
 import spatialstencil.syntax.spatial_ir.irnodes as spa
 from spatialstencil.lowering.versioning import Versioning
-from spatialstencil.syntax.common.visitor import ScopedIRNodeVisitor, IRNodeVisitor
+import types
 # TODO from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle
-# try ScopedIRNodeVisitor / IRNodeVisitor from spatialstencil.syntax.common.visitor to match nodes that have reduce in them
 
 
 class ReduceOptimizer():
@@ -78,6 +77,490 @@ class ReduceOptimizer():
         )
         return bin_op
     
+
+
+    #######recursively replace body
+##### replace_bodypart(to_replace, replace_with) return bodyß
+## get body
+## for all nodes that have a body replace them with the same function call
+## if searched object in body return the new object
+## return object
+
+    def replace_reduce(self, stmt, elem) -> list[Expression]:
+
+        current_position = [elem.subgrid.x_range.start.value.value, 
+                            elem.subgrid.x_range.stop.value.value, 
+                            elem.subgrid.y_range.start.value.value, 
+                            elem.subgrid.y_range.stop.value.value]
+        newstatements = []
+        stream_name = stmt.stream_name.name
+        operation_id = self.reduce_operations[stmt.stream_name.name][0]['op']
+        root = self.reduce_operations[stmt.stream_name.name][1]
+        origin = self.reduce_operations[stmt.stream_name.name][4]
+        complete_grid = [self.reduce_operations[stmt.stream_name.name][2], self.reduce_operations[stmt.stream_name.name][3]]
+        send_identifier = self.reduce_operations[stmt.stream_name.name][5]
+        send_amount = self.reduce_operations[stmt.stream_name.name][6]
+        if send_amount == None:
+            for elem in self.body:
+                for srch in elem.iter_child_nodes():
+                    if isinstance(srch, FieldDeclaration):
+                        if srch.field_name == send_identifier:
+                            if isinstance(srch.dtype, ArrayType):
+                                send_amount = srch.dtype.shape[0].value.value
+                                self.reduce_operations[stmt.stream_name.name][6] = send_amount
+                            else:
+                                raise ValueError(f"Field {send_identifier} is not an array. Only arrays are currently supported.")
+
+        if stream_name in self.grid_streams:
+            connections = self.grid_streams[stream_name]
+        elif stream_name in self.snake_streams:
+            connections = self.snake_streams[stream_name]
+        else:
+            raise ValueError(f"Stream name {stream_name} not found in grid_streams or snake_streams.")
+        
+        if operation_id == "S_SUM":
+            current_op = '+'
+        elif operation_id == "S_PROD":
+            current_op = '*'
+        else:
+            raise NotImplementedError("Currently only S_SUM and S_PROD are supported.")
+
+        if stream_name in self.grid_streams:
+            pipelined_send = []
+            pipelined_receive = []
+            if not connections[0][4]:
+                # not pipelined
+                for con in connections:
+                    if (current_position[0] >= con[1][0]
+                        and current_position[1] <= con[1][1]
+                        and current_position[2] >= con[1][2]
+                        and current_position[3] <= con[1][3]):
+
+                        if (con[3] == 'left' and current_position[1] != con[1][1]
+                            or con[3] == 'right' and current_position[0] != con[1][0]
+                            or con[3] == 'top' and current_position[3] != con[1][3]
+                            or con[3] == 'bottom' and current_position[2] != con[1][2]):
+
+                            bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("reduce_receive"))
+                            newstatements.append(
+                                ForeachStatement(
+                                    variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                                    parameter_range=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                                    stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                    step=None)],
+                                    stream_variable=TypedIdentifier(dtype=con[2].dtype,
+                                                                    identifier=self.versioning.next_version("reduce_receive")),
+                                    receive_stream=ReceiveGenerator(stream_name=con[0]),
+                                    body=[
+                                        bin_op
+                                    ],
+                                    completion_name=None
+                                )
+                            )
+
+                        if (con[3] == 'left' and current_position[0] != con[1][0]
+                            or con[3] == 'right' and current_position[1] != con[1][1]
+                            or con[3] == 'top' and current_position[2] != con[1][2]
+                            or con[3] == 'bottom' and current_position[3] != con[1][3]):
+
+                            newstatements.append(
+                                SendStatement(
+                                    local_array=stmt.local_array,
+                                    stream_name=con[0],
+                                    completion_name=None
+                                )
+                            )
+
+
+            else:
+                print(current_position)
+                print(root)
+                for con_list in connections:
+                    #print(con_list)
+                    for con in con_list[1]:
+                        if (current_position[0] >= con[0] and current_position[1] <= con[1]
+                            and current_position[2] >= con[2] and current_position[3] <= con[3]):
+                            print(con)
+                            if con[8] == 'sender':
+                                pipelined_send.append(con_list[0])
+                            elif con[8] == 'receiver':
+                                pipelined_receive.append(con_list[0])
+
+                if pipelined_send != [] and pipelined_receive != []:
+                    newstatements.append(
+                        AssignmentStatement(
+                            destination=self.versioning.next_version("pipeline_helper"),
+                            source=Expression(
+                                ConstantLiteral(0, ScalarType.i32)
+                            )
+                        )
+                    )
+                    if len(pipelined_receive) == 1:
+                        send = self.create_send_statement(stmt, pipelined_send, 0)
+                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
+                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
+                        newstatements.append(
+                            ForStatement(
+                                variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                                range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
+                                                                step=None)],
+                                body=[
+                                    receive0,
+                                    bin_op,
+                                    send
+                                ],
+                            )
+                        )
+                    elif len(pipelined_receive) == 2:
+                        send = self.create_send_statement(stmt, pipelined_send, 0)
+                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
+                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
+                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
+                        newstatements.append(
+                            ForStatement(
+                                variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                                range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
+                                                                step=None)],
+                                body=[
+                                    receive0,
+                                    bin_op,
+                                    receive1,
+                                    bin_op,
+                                    send
+                                ],
+                            )
+                        )
+                    elif len(pipelined_receive) == 3:
+                        send = self.create_send_statement(stmt, pipelined_send, 0)
+                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
+                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
+                        receive2 = self.create_receive_statement(stmt, pipelined_receive, 2)
+                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
+                        newstatements.append(
+                            ForStatement(
+                                variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                                range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
+                                                                step=None)],
+                                body=[
+                                    receive0,
+                                    bin_op,
+                                    receive1,
+                                    bin_op,
+                                    receive2,
+                                    bin_op,
+                                    send
+                                ],
+                            )
+                        )
+                    else:
+                        send = self.create_send_statement(stmt, pipelined_send, 0)
+                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
+                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
+                        receive2 = self.create_receive_statement(stmt, pipelined_receive, 2)
+                        receive3 = self.create_receive_statement(stmt, pipelined_receive, 3)
+                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
+                        newstatements.append(
+                            ForStatement(
+                                variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                                range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
+                                                                step=None)],
+                                body=[
+                                    receive0,
+                                    bin_op,
+                                    receive1,
+                                    bin_op,
+                                    receive2,
+                                    bin_op,
+                                    receive3,
+                                    bin_op,
+                                    send
+                                ],
+                            )
+                        )
+                elif pipelined_send == [] and pipelined_receive != []:
+                    newstatements.append(
+                        AssignmentStatement(
+                            destination=self.versioning.next_version("pipeline_helper"),
+                            source=Expression(
+                                ConstantLiteral(0, ScalarType.i32)
+                            )
+                        )
+                    )
+                    if len(pipelined_receive) == 1:
+                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
+                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
+                        newstatements.append(
+                            ForStatement(
+                                variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                                range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
+                                                                step=None)],
+                                body=[
+                                    receive0,
+                                    bin_op
+                                ],
+                            )
+                        )
+                    elif len(pipelined_receive) == 2:
+                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
+                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
+                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
+                        newstatements.append(
+                            ForStatement(
+                                variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                                range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
+                                                                step=None)],
+                                body=[
+                                    receive0,
+                                    bin_op,
+                                    receive1,
+                                    bin_op
+                                ],
+                            )
+                        )
+                    elif len(pipelined_receive) == 3:
+                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
+                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
+                        receive2 = self.create_receive_statement(stmt, pipelined_receive, 2)
+                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
+                        newstatements.append(
+                            ForStatement(
+                                variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                                range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
+                                                                step=None)],
+                                body=[
+                                    receive0,
+                                    bin_op,
+                                    receive1,
+                                    bin_op,
+                                    receive2,
+                                    bin_op
+                                ],
+                            )
+                        )
+                    else:
+                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
+                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
+                        receive2 = self.create_receive_statement(stmt, pipelined_receive, 2)
+                        receive3 = self.create_receive_statement(stmt, pipelined_receive, 3)
+                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
+                        newstatements.append(
+                            ForStatement(
+                                variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                                range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
+                                                                step=None)],
+                                body=[
+                                    receive0,
+                                    bin_op,
+                                    receive1,
+                                    bin_op,
+                                    receive2,
+                                    bin_op,
+                                    receive3,
+                                    bin_op
+                                ],
+                            )
+                        )
+                elif pipelined_send != [] and pipelined_receive == []:
+                    send = self.create_send_statement(stmt, pipelined_send, 0)
+                    newstatements.append(
+                        ForStatement(
+                            variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                            range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                            stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
+                                                            step=None)],
+                            body=[
+                                send
+                            ],
+                        )
+                    )
+                else:
+                    raise ValueError(f"No pipelined send or receive found for position {current_position}.")
+                    
+                
+
+        elif stream_name in self.snake_streams:
+            if not (current_position[0] == origin[0] and current_position[2] == origin[1]):
+                # everything but the starting point receives first
+
+                # get receive stream
+                receive_stream = None
+                for con in connections:
+                    for detailed_con in con[5]:
+                        if (current_position[0] >= detailed_con[0] and current_position[1] <= detailed_con[1]
+                            and current_position[2] >= detailed_con[2] and current_position[3] <= detailed_con[3]
+                            and ((detailed_con[4] == -1 and not current_position[1] == detailed_con[1])
+                                    or (detailed_con[4] == 1 and not current_position[0] == detailed_con[0])
+                                    or (detailed_con[4] == 0 and detailed_con[8] == 'receiver')
+                                    or (con[6] == True and detailed_con[8] == 'receiver'))):
+                            receive_stream = con
+                            break
+                        
+                    if not receive_stream == None:
+                        break
+
+                if operation_id == "S_SUM":
+                    current_op = '+'
+                elif operation_id == "S_PROD":
+                    current_op = '*'
+                else:
+                    raise NotImplementedError("Currently only S_SUM and S_PROD are supported.")
+
+                # change receive statement
+
+                # not pipelined
+                if not con[6]:
+                    bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("reduce_receive"))
+                    newstatements.append(
+                        ForeachStatement(
+                            variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                            parameter_range=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                            stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                            step=None)],
+                            stream_variable=TypedIdentifier(dtype=receive_stream[2].dtype,
+                                                            identifier=self.versioning.next_version("reduce_receive")),
+                            receive_stream=ReceiveGenerator(stream_name=receive_stream[0]),
+                            body=[
+                                bin_op
+                            ],
+                            completion_name=None
+                        )
+                    )
+
+                # pipelined root
+                elif (current_position[0] == root[0] and current_position[2] == root[1]):
+                    newstatements.append(
+                        AssignmentStatement(
+                            destination=self.versioning.next_version("pipeline_helper"),
+                            source=Expression(
+                                ConstantLiteral(0, ScalarType.i32)
+                            )
+                        )
+                    )
+
+                    receive0 = self.create_receive_statement(stmt, receive_stream, 0)
+                    bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
+                    newstatements.append(
+                        ForStatement(
+                            variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                            range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                            stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
+                                                            step=None)],
+                            body=[
+                                receive0,
+                                bin_op
+                            ],
+                        )
+                    )
+
+            if not (current_position[0] == root[0] and current_position[2] == root[1]):
+                # only root does not send
+
+                # get send stream
+                send_stream = None
+                for con in connections:
+                    for detailed_con in con[5]:
+                        if (current_position[0] >= detailed_con[0] and current_position[1] <= detailed_con[1]
+                            and current_position[2] >= detailed_con[2] and current_position[3] <= detailed_con[3]
+                            and ((detailed_con[4] == 1 and not current_position[1] == detailed_con[1])
+                                    or (detailed_con[4] == -1 and not current_position[0] == detailed_con[0])
+                                    or (detailed_con[4] == 0 and detailed_con[8] == 'sender')
+                                    or (con[6] == True and detailed_con[8] == 'sender'))):
+                            send_stream = con
+                            break
+                        
+                    if not send_stream == None:
+                        break
+
+                # not pipelined
+                if not con[6]:
+                    newstatements.append(
+                        SendStatement(
+                            local_array=stmt.local_array,
+                            stream_name=send_stream[0],
+                            completion_name=None
+                        )
+                    )
+
+                # pipelined origin
+                elif (current_position[0] == origin[0] and current_position[2] == origin[1]):
+                    send0 = self.create_send_statement(stmt, send_stream, 0)
+                    newstatements.append(
+                        ForStatement(
+                            variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                            range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                            stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
+                                                            step=None)],
+                            body=[
+                                send0
+                            ],
+                        )
+                    )
+
+
+                # pipelined
+                else:
+                    newstatements.append(
+                        AssignmentStatement(
+                            destination=self.versioning.next_version("pipeline_helper"),
+                            source=Expression(
+                                ConstantLiteral(0, ScalarType.i32)
+                            )
+                        )
+                    )
+
+                    send0 = self.create_send_statement(stmt, send_stream, 0)
+                    receive0 = self.create_receive_statement(stmt, receive_stream, 0)
+                    bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
+                    newstatements.append(
+                        ForStatement(
+                            variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
+                            range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
+                                                            stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
+                                                            step=None)],
+                            body=[
+                                receive0,
+                                bin_op,
+                                send0
+                            ],
+                        )
+                    )
+                    
+        return newstatements
+
+
+
+    def replace_stmt(self, stmt, elem, to_replace) -> list[Expression]:
+        input_stmt = stmt
+        if isinstance(stmt, to_replace):
+            print("directly found")
+            if to_replace == ReduceStatement:
+                return self.replace_reduce(stmt, elem)
+        
+        # all of these use body
+        elif isinstance(stmt, ForeachStatement) or isinstance(stmt, ForStatement) or isinstance(stmt, MapStatement) or isinstance(stmt, AsyncBlock):
+            new_body = []
+            for body_stmt in stmt.body:
+                replaced_stmts = self.replace_stmt(body_stmt, elem, to_replace)
+                for replaced_stmt in replaced_stmts:
+                    new_body.append(replaced_stmt)
+            input_stmt.body = new_body
+
+        # uses if_true and if_false
+        elif isinstance(stmt, TernaryOperator):
+            print("TernaryOperator")
+            print(stmt)
+
+        return [input_stmt]
+
+        #exit()
     
 
     def create_communication_patterns(self, x_start, x_stop, y_start, y_stop, x, y, name, graph, pipelined) -> None:
@@ -669,8 +1152,22 @@ class ReduceOptimizer():
                 y_step = elem.subgrid.y_range.step.value.value if elem.subgrid.y_range.step is not None else None
                 grid = [[[x_start, x_stop], [y_start, y_stop]]]
 
-                for stmt in elem.statements: # walk operators in baseclass
-                    if isinstance(stmt, ReduceStatement):
+                for stmt in elem.statements:
+                    red_stmt = None
+                    nodes = [stmt]
+                    found = False
+                    while len(nodes) > 0 and not found:
+                        for intermediate_stmt in nodes[0].iter_child_nodes():
+                            if not isinstance(intermediate_stmt, types.GeneratorType):
+                                nodes.append(intermediate_stmt)
+                            if isinstance(intermediate_stmt, ReduceStatement): # only finds one reduce statement
+                                found = True
+                                red_stmt = intermediate_stmt
+                        nodes.pop(0)
+
+                    if red_stmt is not None or isinstance(stmt, ReduceStatement):
+                        if red_stmt is not None:
+                            stmt = red_stmt
                         stream_name = stmt.stream_name.name
 
                         if self.reduce_operations[stream_name][5] == None:
@@ -831,476 +1328,20 @@ class ReduceOptimizer():
     def change_compute_blocks(self) -> None:
         finalbody = []
         for elem in self.body:
-            # print(elem)
-            # print('-'*50)
-            # for tst in elem.iter_child_nodes(): ### use this to go over nested nodes
-            #        print(tst)
-            #        print('@'*50)
-
-            if isinstance(elem, PlaceBlock):
-                for srch in elem.iter_child_nodes():
-                    print(srch)
-
             if isinstance(elem, ComputeBlock):
                 statements = []
                 for stmt in elem.statements: # walk operators in baseclass
-                    if isinstance(stmt, ReduceStatement):
-
-                        current_position = [elem.subgrid.x_range.start.value.value, 
-                                            elem.subgrid.x_range.stop.value.value, 
-                                            elem.subgrid.y_range.start.value.value, 
-                                            elem.subgrid.y_range.stop.value.value]
-                        newstatements = []
-                        stream_name = stmt.stream_name.name
-                        operation_id = self.reduce_operations[stmt.stream_name.name][0]['op']
-                        root = self.reduce_operations[stmt.stream_name.name][1]
-                        origin = self.reduce_operations[stmt.stream_name.name][4]
-                        complete_grid = [self.reduce_operations[stmt.stream_name.name][2], self.reduce_operations[stmt.stream_name.name][3]]
-                        send_identifier = self.reduce_operations[stmt.stream_name.name][5]
-                        send_amount = self.reduce_operations[stmt.stream_name.name][6]
-                        if send_amount == None:
-                            for elem in self.body:
-                                for srch in elem.iter_child_nodes():
-                                    if isinstance(srch, FieldDeclaration):
-                                        if srch.field_name == send_identifier:
-                                            if isinstance(srch.dtype, ArrayType):
-                                                send_amount = srch.dtype.shape[0].value.value
-                                                self.reduce_operations[stmt.stream_name.name][6] = send_amount
-                                            else:
-                                                raise ValueError(f"Field {send_identifier} is not an array. Only arrays are currently supported.")
-
-                        if stream_name in self.grid_streams:
-                            connections = self.grid_streams[stream_name]
-                        elif stream_name in self.snake_streams:
-                            connections = self.snake_streams[stream_name]
-                        else:
-                            raise ValueError(f"Stream name {stream_name} not found in grid_streams or snake_streams.")
-                        
-                        if operation_id == "S_SUM":
-                            current_op = '+'
-                        elif operation_id == "S_PROD":
-                            current_op = '*'
-                        else:
-                            raise NotImplementedError("Currently only S_SUM and S_PROD are supported.")
-
-                        if stream_name in self.grid_streams:
-                            pipelined_send = []
-                            pipelined_receive = []
-                            if not connections[0][4]:
-                                # not pipelined
-                                for con in connections:
-                                    if (current_position[0] >= con[1][0]
-                                        and current_position[1] <= con[1][1]
-                                        and current_position[2] >= con[1][2]
-                                        and current_position[3] <= con[1][3]):
-
-                                        if (con[3] == 'left' and current_position[1] != con[1][1]
-                                            or con[3] == 'right' and current_position[0] != con[1][0]
-                                            or con[3] == 'top' and current_position[3] != con[1][3]
-                                            or con[3] == 'bottom' and current_position[2] != con[1][2]):
-
-                                            bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("reduce_receive"))
-                                            newstatements.append(
-                                                ForeachStatement(
-                                                    variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
-                                                    parameter_range=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                    stop=Expression(ConstantLiteral(1, ScalarType.i32)),
-                                                                                    step=None)],
-                                                    stream_variable=TypedIdentifier(dtype=con[2].dtype,
-                                                                                    identifier=self.versioning.next_version("reduce_receive")),
-                                                    receive_stream=ReceiveGenerator(stream_name=con[0]),
-                                                    body=[
-                                                        bin_op
-                                                    ],
-                                                    completion_name=None
-                                                )
-                                            )
-
-                                        if (con[3] == 'left' and current_position[0] != con[1][0]
-                                            or con[3] == 'right' and current_position[1] != con[1][1]
-                                            or con[3] == 'top' and current_position[2] != con[1][2]
-                                            or con[3] == 'bottom' and current_position[3] != con[1][3]):
-                    
-                                            newstatements.append(
-                                                SendStatement(
-                                                    local_array=stmt.local_array,
-                                                    stream_name=con[0],
-                                                    completion_name=None
-                                                )
-                                            )
-
-
-                            else:
-                                print(current_position)
-                                print(root)
-                                for con_list in connections:
-                                    #print(con_list)
-                                    for con in con_list[1]:
-                                        if (current_position[0] >= con[0] and current_position[1] <= con[1]
-                                            and current_position[2] >= con[2] and current_position[3] <= con[3]):
-                                            print(con)
-                                            if con[8] == 'sender':
-                                                pipelined_send.append(con_list[0])
-                                            elif con[8] == 'receiver':
-                                                pipelined_receive.append(con_list[0])
-
-                                if pipelined_send != [] and pipelined_receive != []:
-                                    newstatements.append(
-                                        AssignmentStatement(
-                                            destination=self.versioning.next_version("pipeline_helper"),
-                                            source=Expression(
-                                                ConstantLiteral(0, ScalarType.i32)
-                                            )
-                                        )
-                                    )
-                                    if len(pipelined_receive) == 1:
-                                        send = self.create_send_statement(stmt, pipelined_send, 0)
-                                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
-                                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
-                                        newstatements.append(
-                                            ForStatement(
-                                                variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
-                                                range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
-                                                                                step=None)],
-                                                body=[
-                                                    receive0,
-                                                    bin_op,
-                                                    send
-                                                ],
-                                            )
-                                        )
-                                    elif len(pipelined_receive) == 2:
-                                        send = self.create_send_statement(stmt, pipelined_send, 0)
-                                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
-                                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
-                                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
-                                        newstatements.append(
-                                            ForStatement(
-                                                variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
-                                                range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
-                                                                                step=None)],
-                                                body=[
-                                                    receive0,
-                                                    bin_op,
-                                                    receive1,
-                                                    bin_op,
-                                                    send
-                                                ],
-                                            )
-                                        )
-                                    elif len(pipelined_receive) == 3:
-                                        send = self.create_send_statement(stmt, pipelined_send, 0)
-                                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
-                                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
-                                        receive2 = self.create_receive_statement(stmt, pipelined_receive, 2)
-                                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
-                                        newstatements.append(
-                                            ForStatement(
-                                                variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
-                                                range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
-                                                                                step=None)],
-                                                body=[
-                                                    receive0,
-                                                    bin_op,
-                                                    receive1,
-                                                    bin_op,
-                                                    receive2,
-                                                    bin_op,
-                                                    send
-                                                ],
-                                            )
-                                        )
-                                    else:
-                                        send = self.create_send_statement(stmt, pipelined_send, 0)
-                                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
-                                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
-                                        receive2 = self.create_receive_statement(stmt, pipelined_receive, 2)
-                                        receive3 = self.create_receive_statement(stmt, pipelined_receive, 3)
-                                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
-                                        newstatements.append(
-                                            ForStatement(
-                                                variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
-                                                range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
-                                                                                step=None)],
-                                                body=[
-                                                    receive0,
-                                                    bin_op,
-                                                    receive1,
-                                                    bin_op,
-                                                    receive2,
-                                                    bin_op,
-                                                    receive3,
-                                                    bin_op,
-                                                    send
-                                                ],
-                                            )
-                                        )
-                                elif pipelined_send == [] and pipelined_receive != []:
-                                    newstatements.append(
-                                        AssignmentStatement(
-                                            destination=self.versioning.next_version("pipeline_helper"),
-                                            source=Expression(
-                                                ConstantLiteral(0, ScalarType.i32)
-                                            )
-                                        )
-                                    )
-                                    if len(pipelined_receive) == 1:
-                                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
-                                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
-                                        newstatements.append(
-                                            ForStatement(
-                                                variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
-                                                range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
-                                                                                step=None)],
-                                                body=[
-                                                    receive0,
-                                                    bin_op
-                                                ],
-                                            )
-                                        )
-                                    elif len(pipelined_receive) == 2:
-                                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
-                                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
-                                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
-                                        newstatements.append(
-                                            ForStatement(
-                                                variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
-                                                range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
-                                                                                step=None)],
-                                                body=[
-                                                    receive0,
-                                                    bin_op,
-                                                    receive1,
-                                                    bin_op
-                                                ],
-                                            )
-                                        )
-                                    elif len(pipelined_receive) == 3:
-                                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
-                                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
-                                        receive2 = self.create_receive_statement(stmt, pipelined_receive, 2)
-                                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
-                                        newstatements.append(
-                                            ForStatement(
-                                                variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
-                                                range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
-                                                                                step=None)],
-                                                body=[
-                                                    receive0,
-                                                    bin_op,
-                                                    receive1,
-                                                    bin_op,
-                                                    receive2,
-                                                    bin_op
-                                                ],
-                                            )
-                                        )
-                                    else:
-                                        receive0 = self.create_receive_statement(stmt, pipelined_receive, 0)
-                                        receive1 = self.create_receive_statement(stmt, pipelined_receive, 1)
-                                        receive2 = self.create_receive_statement(stmt, pipelined_receive, 2)
-                                        receive3 = self.create_receive_statement(stmt, pipelined_receive, 3)
-                                        bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
-                                        newstatements.append(
-                                            ForStatement(
-                                                variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
-                                                range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                                stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
-                                                                                step=None)],
-                                                body=[
-                                                    receive0,
-                                                    bin_op,
-                                                    receive1,
-                                                    bin_op,
-                                                    receive2,
-                                                    bin_op,
-                                                    receive3,
-                                                    bin_op
-                                                ],
-                                            )
-                                        )
-                                elif pipelined_send != [] and pipelined_receive == []:
-                                    send = self.create_send_statement(stmt, pipelined_send, 0)
-                                    newstatements.append(
-                                        ForStatement(
-                                            variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
-                                            range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                            stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
-                                                                            step=None)],
-                                            body=[
-                                                send
-                                            ],
-                                        )
-                                    )
-                                else:
-                                    raise ValueError(f"No pipelined send or receive found for position {current_position}.")
-                                    
-                                
-
-                        elif stream_name in self.snake_streams:
-                            if not (current_position[0] == origin[0] and current_position[2] == origin[1]):
-                                # everything but the starting point receives first
-
-                                # get receive stream
-                                receive_stream = None
-                                for con in connections:
-                                    for detailed_con in con[5]:
-                                        if (current_position[0] >= detailed_con[0] and current_position[1] <= detailed_con[1]
-                                            and current_position[2] >= detailed_con[2] and current_position[3] <= detailed_con[3]
-                                            and ((detailed_con[4] == -1 and not current_position[1] == detailed_con[1])
-                                                 or (detailed_con[4] == 1 and not current_position[0] == detailed_con[0])
-                                                 or (detailed_con[4] == 0 and detailed_con[8] == 'receiver')
-                                                 or (con[6] == True and detailed_con[8] == 'receiver'))):
-                                            receive_stream = con
-                                            break
-                                        
-                                    if not receive_stream == None:
-                                        break
-
-                                if operation_id == "S_SUM":
-                                    current_op = '+'
-                                elif operation_id == "S_PROD":
-                                    current_op = '*'
-                                else:
-                                    raise NotImplementedError("Currently only S_SUM and S_PROD are supported.")
-
-                                # change receive statement
-
-                                # not pipelined
-                                if not con[6]:
-                                    bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("reduce_receive"))
-                                    newstatements.append(
-                                        ForeachStatement(
-                                            variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
-                                            parameter_range=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                            stop=Expression(ConstantLiteral(1, ScalarType.i32)),
-                                                                            step=None)],
-                                            stream_variable=TypedIdentifier(dtype=receive_stream[2].dtype,
-                                                                            identifier=self.versioning.next_version("reduce_receive")),
-                                            receive_stream=ReceiveGenerator(stream_name=receive_stream[0]),
-                                            body=[
-                                                bin_op
-                                            ],
-                                            completion_name=None
-                                        )
-                                    )
-
-                                # pipelined root
-                                elif (current_position[0] == root[0] and current_position[2] == root[1]):
-                                    newstatements.append(
-                                        AssignmentStatement(
-                                            destination=self.versioning.next_version("pipeline_helper"),
-                                            source=Expression(
-                                                ConstantLiteral(0, ScalarType.i32)
-                                            )
-                                        )
-                                    )
-
-                                    receive0 = self.create_receive_statement(stmt, receive_stream, 0)
-                                    bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
-                                    newstatements.append(
-                                        ForStatement(
-                                            variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
-                                            range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                            stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
-                                                                            step=None)],
-                                            body=[
-                                                receive0,
-                                                bin_op
-                                            ],
-                                        )
-                                    )
-
-                            if not (current_position[0] == root[0] and current_position[2] == root[1]):
-                                # only root does not send
-
-                                # get send stream
-                                send_stream = None
-                                for con in connections:
-                                    for detailed_con in con[5]:
-                                        if (current_position[0] >= detailed_con[0] and current_position[1] <= detailed_con[1]
-                                            and current_position[2] >= detailed_con[2] and current_position[3] <= detailed_con[3]
-                                            and ((detailed_con[4] == 1 and not current_position[1] == detailed_con[1])
-                                                 or (detailed_con[4] == -1 and not current_position[0] == detailed_con[0])
-                                                 or (detailed_con[4] == 0 and detailed_con[8] == 'sender')
-                                                 or (con[6] == True and detailed_con[8] == 'sender'))):
-                                            send_stream = con
-                                            break
-                                        
-                                    if not send_stream == None:
-                                        break
-
-                                # not pipelined
-                                if not con[6]:
-                                    newstatements.append(
-                                        SendStatement(
-                                            local_array=stmt.local_array,
-                                            stream_name=send_stream[0],
-                                            completion_name=None
-                                        )
-                                    )
-
-                                # pipelined origin
-                                elif (current_position[0] == origin[0] and current_position[2] == origin[1]):
-                                    send0 = self.create_send_statement(stmt, send_stream, 0)
-                                    newstatements.append(
-                                        ForStatement(
-                                            variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
-                                            range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                            stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
-                                                                            step=None)],
-                                            body=[
-                                                send0
-                                            ],
-                                        )
-                                    )
-
-
-                                # pipelined
-                                else:
-                                    newstatements.append(
-                                        AssignmentStatement(
-                                            destination=self.versioning.next_version("pipeline_helper"),
-                                            source=Expression(
-                                                ConstantLiteral(0, ScalarType.i32)
-                                            )
-                                        )
-                                    )
-
-                                    send0 = self.create_send_statement(stmt, send_stream, 0)
-                                    receive0 = self.create_receive_statement(stmt, receive_stream, 0)
-                                    bin_op = self.create_binary_operation(stmt, current_op, self.versioning.current_version("pipeline_helper"))
-                                    newstatements.append(
-                                        ForStatement(
-                                            variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
-                                            range_expression=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                            stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
-                                                                            step=None)],
-                                            body=[
-                                                receive0,
-                                                bin_op,
-                                                send0
-                                            ],
-                                        )
-                                    )
-
-                        # add receive + calculation + send here
-                        for new_statement in newstatements:
-                            statements.append(new_statement)
-
-                    else:
-                        statements.append(stmt)
-                
-                finalbody.append(ComputeBlock(elem.variables, elem.subgrid, statements))        
+                    new_stmts = self.replace_stmt(stmt, elem, ReduceStatement)
+                    print(new_stmts)
+                    print('*'*50)
+                    print('*'*50)
+                    for nstmt in new_stmts:
+                        statements.append(nstmt)
+                print(statements)
+                print('*'*50)
+                finalbody.append(ComputeBlock(elem.variables, elem.subgrid, statements))
             else:
-                finalbody.append(elem)   
+                finalbody.append(elem) 
         
         self.body = finalbody
 

@@ -15,6 +15,15 @@ kernel @add<N,K>() {
 
     compute i16 i, i16 j in [0:5, 0:5] {
         a[0] = 1
-        await reduce(a, red)
+        for i32 test1 in [0:999] {
+            for i32 test2 in [0:999] {
+                for i32 test3 in [0:999] {
+                    a[0] = 100
+                    for i32 test4 in [0:999] {
+                        await reduce(a, red)
+                    }
+                }
+            }
+        }
     }
 }
