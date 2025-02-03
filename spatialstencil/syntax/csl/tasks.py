@@ -45,12 +45,16 @@ def _get_dtype(dtypes: dict[spir.Identifier, spir.IRType],
         return _get_dtype(dtypes, value.value)
     if isinstance(value, spir.ConstantLiteral):
         return value.dtype
+    if isinstance(value, (spir.UnaryOperator, spir.BinaryOperator, spir.TernaryOperator)):
+        return None
     return dtypes[_get_id(value)]
 
 
 def _get_base_dtype(dtypes: dict[str, spir.IRType],
                     value: spir.Identifier | spir.ArraySlice | spir.ConstantLiteral) -> spir.ScalarType:
     dtype = _get_dtype(dtypes, value)
+    if dtype is None:
+        return dtype
     return dtype.element_type
 
 
@@ -127,17 +131,17 @@ def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
 
     elif isinstance(inner_stmt, spir.MultiplyAccumulateOperator):  # @fmac*
         # @fmac* only works with scalar/constant values of ``c``
-        c_type = _get_dtype(inner_stmt.c.value)
+        c_type = _get_dtype(dtypes, inner_stmt.c.value)
         if not isinstance(c_type, spir.ScalarType):
             return None
-        a_dtype, b_dtype, c_dtype = (_get_base_dtype(inner_stmt.a), _get_base_dtype(inner_stmt.b),
-                                     _get_base_dtype(inner_stmt.c))
+        a_dtype, b_dtype, c_dtype = (_get_base_dtype(dtypes, inner_stmt.a), _get_base_dtype(dtypes, inner_stmt.b),
+                                     _get_base_dtype(dtypes, inner_stmt.c))
         if dtype != a_dtype or dtype != b_dtype:
             # NOTE: Destination type semantics are unclear, supporting only same src/dst dtype for now
             return None
         if a_dtype == b_dtype and a_dtype == spir.ScalarType.f16 and c_dtype == spir.ScalarType.f16:
             return '@fmach'
-        if a_dtype == b_dtype and a_dtype == spir.ScalarType.f16 and c_dtype == spir.ScalarType.f32:
+        if a_dtype == b_dtype and a_dtype == spir.ScalarType.f32 and c_dtype == spir.ScalarType.f16:
             return '@fmachs'  # 16-bit multiplication, 32-bit addition
         if a_dtype == b_dtype and a_dtype == spir.ScalarType.f32 and c_dtype == spir.ScalarType.f32:
             return '@fmacs'
@@ -171,6 +175,19 @@ def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
     return None
 
 
+def should_be_asynchronous(dtypes: dict[spir.Identifier, spir.IRType], stmt: spir.Statement) -> bool:
+    """
+    Returns True if a statement can and should be executed asynchronously in CSL.
+    The only statements that apply are DSD operations that have to do with fabric DSDs (e.g., send, receive).
+    """
+    if isinstance(stmt, (spir.SendStatement, spir.ReceiveStatement)):
+        return True
+    if isinstance(stmt, spir.ForeachStatement) and stmt.receive_stream:
+        return get_dsd_op(dtypes, stmt) is not None
+
+    return False
+
+
 def create_csl_tasks(completion_dag: nx.DiGraph, block: spir.ComputeBlock, dtypes: dict[spir.Identifier,
                                                                                         spir.IRType]) -> list[CSLTask]:
     """
@@ -180,7 +197,7 @@ def create_csl_tasks(completion_dag: nx.DiGraph, block: spir.ComputeBlock, dtype
 
     Statements can take on different task types, based on the statement type and its contents:
 
-        * Foreach statements may take the form of a CSL data task, if it cannot trivially be represented by a
+        * Foreach statements may take the form of a CSL data task, if they cannot trivially be represented by a
           single DSD operation (@mov, @fadd*, etc.)
         * Send and receive statements that can be lowered to a ``FabricDSD`` operation, in turn can (and should)
           be nonblocking, or ``async`` in CSL terms. In this lowering pipeline, these live in CSL local tasks.
@@ -195,8 +212,8 @@ def create_csl_tasks(completion_dag: nx.DiGraph, block: spir.ComputeBlock, dtype
     new tasks based on a set of necessary rules in which a new task must be formed:
 
         1. A node with no predecessors creates a new activated and unblocked task
-        2. A node with more than one incoming edge must start a new task (the conditions below thus apply to one
-           predecessor)
+        2. A node with more than one incoming edge must start a new task 
+        (the conditions below thus apply to the case where a node has one predecessor)
         3. If a node's predecessor represents one kind of CSL task (e.g., data) and this node represents another
         4. Node pairs with ``wait->wait`` edges create a new task (this also fulfills the condition for the above
            preprocessing pass)
