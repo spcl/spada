@@ -110,6 +110,11 @@ class TreeToSpatialIR(lark.Transformer):
     def ternary_op(self, args, meta=None):
         return irnodes.TernaryOperator(_expr(args[0]), _expr(args[1]), _expr(args[2]))
 
+    def call(self, args):
+        if args[0] == 'fmac':
+            return irnodes.MultiplyAccumulateOperator(_expr(args[1][0]), _expr(args[1][1]), _expr(args[1][2]))
+        raise SyntaxError(f'Unrecognized function call to "{args[0]}"')
+
     # Free function call to builtins
     def function_call(self, args, meta=None):
         if isinstance(args[0], irnodes.Completion):
@@ -138,7 +143,6 @@ class TreeToSpatialIR(lark.Transformer):
     routing = irnodes.RoutingDeclaration.from_lark
     field_declaration = irnodes.FieldDeclaration.from_lark
     subgrid_expression_2d = irnodes.SubgridExpression.from_lark
-
 
     def hop(self, args):
         o = (args[0], args[1])
@@ -194,7 +198,10 @@ class TreeToSpatialIR(lark.Transformer):
             itervars, other_gens[0], iters[stream_varind], stream_gen, body, completion_name=completion)
 
     # Await for a completion object
-    await_completion = irnodes.AwaitCompletionStatement.from_lark
+    def await_completion(self, args):
+        if args[0].name == 'all':
+            return irnodes.AwaitAllStatement()
+        return irnodes.AwaitCompletionStatement.from_lark(args)
 
     # Definitions and assignments
     completion = irnodes.Completion.from_lark

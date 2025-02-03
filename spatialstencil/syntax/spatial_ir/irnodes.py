@@ -249,12 +249,12 @@ class Expression(SpatialNode):
     """
     A general expression that can take the form of an identifier, literal, array slice, unary/binary operator, etc.
     """
-    value: Union[Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator, TernaryOperator]
+    value: Union[Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator, TernaryOperator,
+                 MultiplyAccumulateOperator]
 
     def validate(self) -> None:
-        assert isinstance(
-            self.value,
-            (Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator, TernaryOperator))
+        assert isinstance(self.value, (Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator,
+                                       BinaryOperator, TernaryOperator, MultiplyAccumulateOperator))
 
     def as_ir(self, indent: int = 0) -> str:
         return self.value.as_ir()
