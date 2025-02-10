@@ -6,7 +6,7 @@ from io import StringIO
 import networkx as nx
 from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, analysis
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
-from spatialstencil.syntax.csl import constants as csl, tasks as tdag
+from spatialstencil.syntax.csl import constants as csl, preprocessing, tasks as tdag
 from spatialstencil.syntax.csl.structures import DataStructureDescriptor
 from spatialstencil.syntax.csl.codefile import CodeFile
 
@@ -121,6 +121,10 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     # Initialize footer
     footer.write('comptime {\n')
 
+    # TODO: Preprocessing passes:
+    #     * FMA fusion
+    preprocessing.preprocess_rectangle(rect.metadata)
+
     # Collect metadata:
     #     * Find colors from dataflow blocks
     #     * Collect PE-local arrays from place blocks
@@ -129,7 +133,6 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     #     * Make unique colors out of streams, reduce number of streams
     color_map = _collect_and_allocate_colors(rect.metadata, header)
     _collect_and_generate_fields(rect.metadata.place, header, footer)
-    dsds = _collect_unique_dsds(rect.metadata, header)
     dtypes = _collect_identifier_types(rect.metadata)
 
     # Convert compute block subgraphs into tasks:
@@ -143,15 +146,19 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     #      maintains the current state
     completion_dag = analysis.to_completion_dag(rect.metadata.compute)
     tasks = tdag.create_csl_tasks(completion_dag, rect.metadata.compute, dtypes)
+    dsds = _collect_unique_dsds(tasks, rect.metadata, header, dtypes)
 
     # TODO: Collect all scalar types for foreach receivers. Every sequential foreach can recycle index var
 
     # Generate each task
     for task in tasks:
         current_code.write(f'const task_{task.task_id}_id = @get_{task.task_type}_task_id({task.task_id});\n')
-        current_code.write(f'task task_{task.task_id}() void {{\n')
-        _generate_task_code(task, current_code, header, footer)
-        current_code.write(f'}}\n')
+        if task.task_type == 'local':
+            current_code.write(f'task task_{task.task_id}() void {{\n')
+            _generate_task_code(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map)
+            current_code.write(f'}}\n')
+        elif task.task_type == 'data':
+            _generate_data_task(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map)
 
         # Make sure to block tasks
         if task.blocked:
@@ -334,19 +341,52 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]]) -> dict[tuple[int, int
     return result
 
 
-def _generate_task_code(task: tdag.CSLTask, current_code: StringIO, header: StringIO, footer: StringIO):
+def _generate_data_task(rect: PEBlock, task: tdag.CSLTask, current_code: StringIO, header: StringIO, footer: StringIO,
+                        dsds: list[tuple[str, DataStructureDescriptor]], dtypes: dict[spir.Identifier, spir.IRType],
+                        color_map: dict[str, int]):
+    """
+    Generates a data task from a foreach loop.
+
+    :param rect: The rectangle PE block to generate.
+    :param task: The data task to generate.
+    :param current_code: The caret to the code generator at the current position (global).
+    :param header: A code generator stream for a file's header (where the declarations are).
+    :param footer: A code generator stream for a file's footer (the comptime block where the array would be exported).
+    :param dsds: A dictionary mapping names to unique data structure descriptor objects.
+    :param dtypes: A dictionary mapping identifiers to their defined types.
+    :param color_map: Dictionary mapping each stream to its respective color id ({name}_color also works).
+    """
+    #   * If index is requested: before unblocking task, set k; inc at end of task
+    #   * Wavelet-triggered task as fallback
+    assert task.task_type == 'data'
+
+    pass
+
+
+def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringIO, header: StringIO, footer: StringIO,
+                        dsds: list[tuple[str, DataStructureDescriptor]], dtypes: dict[spir.Identifier, spir.IRType],
+                        color_map: dict[str, int]):
+    """
+    Generates a local task from a CSL task.
+    This function converts statements to DSD operations or generates appropriate code.
+
+    :param rect: The rectangle PE block to generate.
+    :param task: The CSL task to generate.
+    :param current_code: The caret to the code generator at the current position (global).
+    :param header: A code generator stream for a file's header (where the declarations are).
+    :param footer: A code generator stream for a file's footer (the comptime block where the array would be exported).
+    :param dsds: A dictionary mapping names to unique data structure descriptor objects.
+    :param dtypes: A dictionary mapping identifiers to their defined types.
+    :param color_map: Dictionary mapping each stream to its respective color id ({name}_color also works).
+    """
     # Convert task contents:
-    # Preprocessing pass: FMA fusion
     # Convert receives/sends from/to arguments to memcpy
-    # Communication calls:
-    #    * Become async calls
+    # Communication calls become async calls based on task's outgoing field
     # ``map``:
     #    * becomes DSD operations as much as possible
     #    * @map as a fallback
-    # ``foreach``:
-    #   * Try to make DSD operations as much as possible
-    #   * If index is requested: before unblocking task, set k; inc at end of task
-    #   * Wavelet-triggered task as fallback
+    # if ``foreach``, has to be a DSD operation
+    assert task.task_type == 'local'
     pass
 
 
