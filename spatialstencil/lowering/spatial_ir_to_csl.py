@@ -241,7 +241,8 @@ def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, foote
     header.write('\n')
 
 
-def _collect_unique_dsds(rect: PEBlock, header: StringIO) -> list[tuple[str, DataStructureDescriptor]]:
+def _collect_unique_dsds(tasks: list[tdag.CSLTask], rect: PEBlock, header: StringIO,
+                         dtypes: dict[spir.Identifier, spir.IRType]) -> list[tuple[str, DataStructureDescriptor]]:
     """
     Returns a list of DSDs and generates them in the header.
     """
