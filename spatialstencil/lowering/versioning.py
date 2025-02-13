@@ -27,4 +27,4 @@ class Versioning(Generic[T]):
         """
         Gets the current version of a variable name.
         """
-        return self.cls(name, self._var_counter[name] - 1)
+        return self.cls(name, self._var_counter[name])
