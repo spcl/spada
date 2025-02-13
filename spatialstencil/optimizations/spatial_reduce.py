@@ -24,16 +24,29 @@ class ReduceOptimizer():
         self.arguments = kernel.arguments
         self.body = kernel.body
         self.versioning = Versioning[spa.Identifier](spa.Identifier)
+        self._communication_patterns = None
+        self.reduce_operations = {}
+        self.grid_streams = {}
+        self.snake_streams = {}
+        self.pipelined = {}
         return None
 
+
+    ##
+    # Replace the reduce statements and change the tiling of the compute statemtents accordingly
+    # Entry Function
+    ##
     def reduce_subroutine(self) -> Kernel:
         self.change_data_blocks()
-        self.fix_subgrid()
-        self.change_compute_blocks()
+        if self.reduce_operations != {}:
+            self.fix_subgrid()
+            self.change_compute_blocks()
         return Kernel(name=self.name, parameters=self.parameters, arguments=self.arguments, body=self.body)
     
 
-
+    ##
+    # Template Send Statement
+    ##
     def create_send_statement(self, stmt, pipelined_send, index) -> SendStatement:
         send = SendStatement(
             local_array=ArraySlice(
@@ -45,6 +58,9 @@ class ReduceOptimizer():
         )
         return send
     
+    ##
+    # Template Receive Statement
+    ##
     def create_receive_statement(self, stmt, pipelined_receive, index) -> ReceiveStatement:
         receive = ReceiveStatement(
             local_array=self.versioning.current_version("pipeline_helper"),
@@ -54,6 +70,9 @@ class ReduceOptimizer():
         return receive
     
 
+    ##
+    # Template Binary Operation
+    ##
     def create_binary_operation(self, stmt, current_op, rhs) -> AssignmentStatement:
         bin_op = AssignmentStatement(
             destination=ArraySlice(
@@ -78,14 +97,11 @@ class ReduceOptimizer():
         return bin_op
     
 
-
-    #######recursively replace body
-##### replace_bodypart(to_replace, replace_with) return bodyß
-## get body
-## for all nodes that have a body replace them with the same function call
-## if searched object in body return the new object
-## return object
-
+    ##
+    # Function that replaces the reduce statement in the compute statement
+    # stmt is the reduce statement that is getting replaced
+    # elem is the compute statement that is getting changed to receive context information
+    ##
     def replace_reduce(self, stmt, elem) -> list[Expression]:
 
         current_position = [elem.subgrid.x_range.start.value.value, 
@@ -118,12 +134,12 @@ class ReduceOptimizer():
         else:
             raise ValueError(f"Stream name {stream_name} not found in grid_streams or snake_streams.")
         
-        if operation_id == "S_SUM":
+        if operation_id == "CL_SUM":
             current_op = '+'
-        elif operation_id == "S_PROD":
+        elif operation_id == "CL_PROD":
             current_op = '*'
         else:
-            raise NotImplementedError("Currently only S_SUM and S_PROD are supported.")
+            raise NotImplementedError("Currently only CL_SUM and CL_PROD are supported.")
 
         if stream_name in self.grid_streams:
             pipelined_send = []
@@ -173,14 +189,10 @@ class ReduceOptimizer():
 
 
             else:
-                print(current_position)
-                print(root)
                 for con_list in connections:
-                    #print(con_list)
                     for con in con_list[1]:
                         if (current_position[0] >= con[0] and current_position[1] <= con[1]
                             and current_position[2] >= con[2] and current_position[3] <= con[3]):
-                            print(con)
                             if con[8] == 'sender':
                                 pipelined_send.append(con_list[0])
                             elif con[8] == 'receiver':
@@ -406,12 +418,12 @@ class ReduceOptimizer():
                     if not receive_stream == None:
                         break
 
-                if operation_id == "S_SUM":
+                if operation_id == "CL_SUM":
                     current_op = '+'
-                elif operation_id == "S_PROD":
+                elif operation_id == "CL_PROD":
                     current_op = '*'
                 else:
-                    raise NotImplementedError("Currently only S_SUM and S_PROD are supported.")
+                    raise NotImplementedError("Currently only CL_SUM and CL_PROD are supported.")
 
                 # change receive statement
 
@@ -537,10 +549,12 @@ class ReduceOptimizer():
 
 
 
+    ##
+    # Function to recursively go through the compute blocks and find all the occurernces of the reduce statements
+    ##
     def replace_stmt(self, stmt, elem, to_replace) -> list[Expression]:
         input_stmt = stmt
         if isinstance(stmt, to_replace):
-            print("directly found")
             if to_replace == ReduceStatement:
                 return self.replace_reduce(stmt, elem)
         
@@ -555,14 +569,403 @@ class ReduceOptimizer():
 
         # uses if_true and if_false
         elif isinstance(stmt, TernaryOperator):
-            print("TernaryOperator")
+            print("TODO: TernaryOperator")
             print(stmt)
 
         return [input_stmt]
-
-        #exit()
     
 
+
+    ##
+    # Defines the snake communication pattern
+    ##
+    def snake_communication_pattern(self, x_start, x_stop, y_start, y_stop, x, y, name, pipelined) -> None:
+        communication = []
+        if y == y_start:
+            if (y_stop - 1 - y_start) % 2 == 0:
+
+                # horizontal movement
+                if pipelined and x_stop - x_start > 2:
+                    if (x_stop - x_start) % 2 != 0:
+                        communication.append([x_start, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start + 1, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                        communication.append([x_start + 1, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                    else:
+                        communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start + 1, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                        communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                else:
+                    if x_stop - x_start > 1:
+                        communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 1])
+                        communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 1])
+
+                # vertical movement
+                # not dependent on pipelined as if we have a column it's already pipelined
+                if x == x_start:
+                    # print('upper left corner odd')
+                    if y_stop - y_start > 2:
+                        communication.append([x_start, x_start + 1, y_start + 1, y_stop , 0, -1, 1, 1])
+                    if y_stop - y_start > 1:
+                        communication.append([x_stop - 1, x_stop, y_start, y_stop - 1, 0, -1, 1, 1])
+                if x == x_stop - 1:
+                    # print('upper right corner odd')
+                    if y_stop - y_start > 2:
+                        communication.append([x_stop - 1, x_stop, y_start + 1, y_stop, 0, -1, 1, 1])
+                    if y_stop - y_start > 1:
+                        communication.append([x_start, x_start + 1, y_start, y_stop - 1, 0, -1, 1, 1])
+            else:
+
+                # horizontal movement
+                if pipelined and x_stop - x_start > 2:
+                    if (x_stop - x_start) % 2 != 0:
+                        communication.append([x_start, x_stop - 1, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start + 1, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start, x_stop - 1, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
+                        communication.append([x_start + 1, x_stop, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
+                    else:
+                        communication.append([x_start, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start + 1, x_stop - 1, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start, x_stop, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
+                        communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
+                else:
+                    if x_stop - x_start > 1:
+                        communication.append([x_start, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start, x_stop, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
+
+                # vertical movement
+                # not dependent on pipelined as if we have a column it's already pipelined
+                if x == x_start:
+                    # print('upper left corner even')
+                    if y_stop - y_start > 2:
+                        communication.append([x_start, x_start + 1, y_start + 1, y_stop - 1, 0, -1, 1, 1])
+                    if y_stop - y_start > 1:
+                        communication.append([x_stop - 1, x_stop, y_start, y_stop, 0, -1, 1, 1])
+                if x == x_stop - 1:
+                    # print('upper right corner even')
+                    if y_stop - y_start > 2:
+                        communication.append([x_stop - 1, x_stop, y_start + 1, y_stop - 1, 0, -1, 1, 1])
+                    if y_stop - y_start > 1:
+                        communication.append([x_start, x_start + 1, y_start, y_stop, 0, -1, 1, 1])
+
+        elif y == y_stop - 1:
+            if (y_stop - 1 - y_start) % 2 == 0:
+
+                # horizontal movement
+                if pipelined and x_stop - x_start > 2:
+                    if (x_stop - x_start) % 2 != 0:
+                        communication.append([x_start, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start + 1, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                        communication.append([x_start + 1, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                    else:
+                        communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start + 1, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                        communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                else:
+                    if x_stop - x_start > 1:
+                        communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+
+                # vertical movement
+                # not dependent on pipelined as if we have a column it's already pipelined
+                if x == x_start:
+                    # print('lower left corner odd')
+                    if y_stop - y_start > 2:
+                        communication.append([x_start, x_start + 1, y_start, y_stop - 1, 0, 1, 1, 1])
+                    if y_stop - y_start > 1:
+                        communication.append([x_stop - 1, x_stop, y_start + 1, y_stop, 0, 1, 1, 1])
+                if x == x_stop - 1:
+                    # print('lower right corner odd')
+                    if y_stop - y_start > 2:
+                        communication.append([x_stop - 1, x_stop, y_start, y_stop - 1, 0, 1, 1, 1])
+                    if y_stop - y_start > 1:
+                        communication.append([x_start, x_start + 1, y_start + 1, y_stop, 0, 1, 1, 1])
+            else:
+
+                # horizontal movement
+                if pipelined and x_stop - x_start > 1:
+                    if (x_stop - x_start) % 2 != 0:
+                        communication.append([x_start, x_stop - 1, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start + 1, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start, x_stop - 1, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                        communication.append([x_start + 1, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                    else:
+                        communication.append([x_start, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                        communication.append([x_start, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+                        communication.append([x_start + 1, x_stop - 1, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+
+                else: 
+                    communication.append([x_start, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
+                    communication.append([x_start, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
+
+                # vertical movement
+                # not dependent on pipelined as if we have a column it's already pipelined
+                if x == x_start:
+                    # print('lower left corner even')
+                    if y_stop - y_start > 2:
+                        communication.append([x_start, x_start + 1, y_start + 1, y_stop - 1, 0, 1, 1, 1])
+                    if y_stop - y_start > 1:
+                        communication.append([x_stop - 1, x_stop, y_start, y_stop, 0, 1, 1, 1])
+                if x == x_stop - 1:
+                    # print('lower right corner even')
+                    if y_stop - y_start > 2:
+                        communication.append([x_stop - 1, x_stop, y_start + 1, y_stop - 1, 0, 1, 1, 1])
+                    if y_stop - y_start > 1:
+                        communication.append([x_start, x_start + 1, y_start, y_stop, 0, 1, 1, 1])
+        else:
+            raise NotImplementedError("Only the corners are implemented for 'snake'")
+        
+        self.snake_streams.update({name: communication})
+
+
+    ##
+    # Defines the grid communication pattern
+    ##
+    def grid_communication_pattern(self, x_start, x_stop, y_start, y_stop, x, y, name, pipelined) -> None:
+        communication = []
+        if x == x_start:
+            # horizontal movement
+            if x_start == x_stop - 1:
+                # print('no horizontal movement needed')
+                pass
+            elif x_stop - x_start == 2:
+                # print('right to left')
+                communication.append([x_start, x_stop, y_start, y_stop, -1, 0, 1, 1])
+            else:
+                if pipelined:
+                    if (x_stop - x_start) % 2 == 0:
+                        communication.append([x_start, x_stop, y_start, y_stop, -1, 0, 1, 1])
+                        communication.append([x_start + 1, x_stop - 1, y_start, y_stop, -1, 0, 1, 1])
+                    else:
+                        communication.append([x_start, x_stop - 1, y_start, y_stop, -1, 0, 1, 1])
+                        communication.append([x_start + 1, x_stop, y_start, y_stop, -1, 0, 1, 1])
+                else:
+                    communication.append([x_start, x_stop, y_start, y_stop, -1, 0, 1, 1])
+            # TODO add steps for pipelined communication from here
+
+            # vertical movement
+            if y_start == y_stop - 1:
+                # print('no vertical movement needed')
+                pass
+            elif y == y_start:
+                # print('upper left corner')
+                if not pipelined or y_stop - y_start <= 2:
+                    communication.append([x_start, x_start + 1, y_start, y_stop, 0, -1, 1, 1])
+                else:
+                    if (y_stop - y_start) % 2 == 0:
+                        communication.append([x_start, x_start + 1, y_start, y_stop, 0, -1, 1, 1])
+                        communication.append([x_start, x_start + 1, y_start + 1, y_stop - 1, 0, -1, 1, 1])
+                    else:
+                        communication.append([x_start, x_start + 1, y_start, y_stop - 1, 0, -1, 1, 1])
+                        communication.append([x_start, x_start + 1, y_start + 1, y_stop, 0, -1, 1, 1])
+            elif y == y_stop - 1:
+                # print('lower left corner')
+                if not pipelined or y_stop - y_start <= 2:
+                    communication.append([x_start, x_start + 1, y_start, y_stop, 0, 1, 1, 1])
+                else:
+                    if (y_stop - y_start) % 2 == 0:
+                        communication.append([x_start, x_start + 1, y_start, y_stop, 0, 1, 1, 1])
+                        communication.append([x_start, x_start + 1, y_start + 1, y_stop - 1, 0, 1, 1, 1])
+                    else:
+                        communication.append([x_start, x_start + 1, y_start, y_stop - 1, 0, 1, 1, 1])
+                        communication.append([x_start, x_start + 1, y_start + 1, y_stop, 0, 1, 1, 1])
+            else:
+                # print('left edge')
+                if not pipelined:
+                    communication.append([x_start, x_start + 1, y_start, y + 1, 0, 1, 1, 1])
+                    communication.append([x_start, x_start + 1, y, y_stop, 0, -1, 1, 1])
+                else:
+                    # upper part
+                    if (y - y_start) >= 2: # y is inclusive while y_stop is exclusive
+                        if (y - y_start) % 2 == 0:
+                            communication.append([x_start, x_start + 1, y_start, y, 0, 1, 1, 1])
+                            communication.append([x_start, x_start + 1, y_start + 1, y + 1, 0, 1, 1, 1])
+                        else:
+                            communication.append([x_start, x_start + 1, y_start, y + 1, 0, 1, 1, 1])
+                            communication.append([x_start, x_start + 1, y_start + 1, y, 0, 1, 1, 1])
+                    else:
+                        communication.append([x_start, x_start + 1, y_start, y + 1, 0, 1, 1, 1])
+
+                    # lower part
+                    if (y_stop - y) > 2:
+                        if (y_stop - y) % 2 == 0:
+                            communication.append([x_start, x_start + 1, y, y_stop, 0, -1, 1, 1])
+                            communication.append([x_start, x_start + 1, y + 1, y_stop - 1, 0, -1, 1, 1])
+                        else:
+                            communication.append([x_start, x_start + 1, y, y_stop - 1, 0, -1, 1, 1])
+                            communication.append([x_start, x_start + 1, y + 1, y_stop, 0, -1, 1, 1])
+                    else:
+                        communication.append([x_start, x_start + 1, y, y_stop, 0, -1, 1, 1])
+
+                    
+
+        elif x == x_stop - 1:
+            # horizontal movement
+            if x_start == x_stop - 1:
+                # print('no horizontal movement needed')
+                pass
+            elif x_stop - x_start == 2:
+                # print('left to right')
+                communication.append([x_start, x_stop, y_start, y_stop, 1, 0, 1, 1])
+            else:
+                # print('left to right')
+                if pipelined:
+                    if (x_stop - x_start) % 2 == 0:
+                        communication.append([x_start, x_stop, y_start, y_stop, 1, 0, 1, 1])
+                        communication.append([x_start + 1, x_stop - 1, y_start, y_stop, 1, 0, 1, 1])
+                    else:
+                        communication.append([x_start, x_stop - 1, y_start, y_stop, 1, 0, 1, 1])
+                        communication.append([x_start + 1, x_stop, y_start, y_stop, 1, 0, 1, 1])
+                else:
+                    communication.append([x_start, x_stop, y_start, y_stop, 1, 0, 1, 1])
+
+            # vertical movement
+            if y_start == y_stop - 1:
+                # print('no vertical movement needed')
+                pass
+            elif y == y_start:
+                # print('upper right corner')
+                if not pipelined or y_stop - y_start <= 2:
+                    communication.append([x_stop - 1, x_stop, y_start, y_stop, 0, -1, 1, 1])
+                else:
+                    if (y_stop - y_start) % 2 == 0:
+                        communication.append([x_stop - 1, x_stop, y_start, y_stop, 0, -1, 1, 1])
+                        communication.append([x_stop - 1, x_stop, y_start + 1, y_stop - 1, 0, -1, 1, 1])
+                    else:
+                        communication.append([x_stop - 1, x_stop, y_start, y_stop - 1, 0, -1, 1, 1])
+                        communication.append([x_stop - 1, x_stop, y_start + 1, y_stop, 0, -1, 1, 1])
+            elif y == y_stop - 1:
+                # print('lower right corner')
+                if not pipelined or y_stop - y_start <= 2:
+                    communication.append([x_stop - 1, x_stop, y_start, y_stop, 0, 1, 1, 1])
+                else:
+                    if (y_stop - y_start) % 2 == 0:
+                        communication.append([x_stop - 1, x_stop, y_start, y_stop, 0, 1, 1, 1])
+                        communication.append([x_stop - 1, x_stop, y_start + 1, y_stop - 1, 0, 1, 1, 1])
+                    else:
+                        communication.append([x_stop - 1, x_stop, y_start, y_stop - 1, 0, 1, 1, 1])
+                        communication.append([x_stop - 1, x_stop, y_start + 1, y_stop, 0, 1, 1, 1])
+            else:
+                # print('right edge')
+                if not pipelined:
+                    communication.append([x_stop - 1, x_stop, y_start, y + 1, 0, 1, 1, 1])
+                    communication.append([x_stop - 1, x_stop, y, y_stop, 0, -1, 1, 1])
+                else:
+                    # upper part
+                    if (y - y_start) >= 2: # y is inclusive while y_stop is exclusive
+                        if (y - y_start) % 2 == 0:
+                            communication.append([x_stop - 1, x_stop, y_start, y, 0, 1, 1, 1])
+                            communication.append([x_stop - 1, x_stop, y_start + 1, y + 1, 0, 1, 1, 1])
+                        else:
+                            communication.append([x_stop - 1, x_stop, y_start, y + 1, 0, 1, 1, 1])
+                            communication.append([x_stop - 1, x_stop, y_start + 1, y, 0, 1, 1, 1])
+                    else:
+                        communication.append([x_stop - 1, x_stop, y_start, y + 1, 0, 1, 1, 1])
+
+                    # lower part
+                    if (y_stop - y) > 2:
+                        if (y_stop - y) % 2 == 0:
+                            communication.append([x_stop - 1, x_stop, y, y_stop, 0, -1, 1, 1])
+                            communication.append([x_stop - 1, x_stop, y + 1, y_stop - 1, 0, -1, 1, 1])
+                        else:
+                            communication.append([x_stop - 1, x_stop, y, y_stop - 1, 0, -1, 1, 1])
+                            communication.append([x_stop - 1, x_stop, y + 1, y_stop, 0, -1, 1, 1])
+                    else:
+                        communication.append([x_stop - 1, x_stop, y, y_stop, 0, -1, 1, 1])
+
+        else:
+            # horizontal movement
+            # print('middle')
+            if not pipelined:
+                communication.append([x_start, x + 1, y_start, y_stop, 1, 0, 1, 1]) # left to middle
+                communication.append([x, x_stop, y_start, y_stop, -1, 0, 1, 1]) # right to middle
+            else:
+                # left
+                if (x - x_start) >= 2: # x is inclusive while x_stop is exclusive
+                    if (x - x_start) % 2 == 0:
+                        communication.append([x_start, x, y_start, y_stop, 1, 0, 1, 1])
+                        communication.append([x_start + 1, x + 1, y_start, y_stop, 1, 0, 1, 1])
+                    else:
+                        communication.append([x_start, x + 1, y_start, y_stop, 1, 0, 1, 1])
+                        communication.append([x_start + 1, x, y_start, y_stop, 1, 0, 1, 1])
+                else:
+                    communication.append([x_start, x + 1, y_start, y_stop, 1, 0, 1, 1])
+
+                # right
+                if (x_stop - x) > 2:
+                    if (x_stop - x) % 2 == 0:
+                        communication.append([x, x_stop, y_start, y_stop, -1, 0, 1, 1])
+                        communication.append([x + 1, x_stop - 1, y_start, y_stop, -1, 0, 1, 1])
+                    else:
+                        communication.append([x, x_stop - 1, y_start, y_stop, -1, 0, 1, 1])
+                        communication.append([x + 1, x_stop, y_start, y_stop, -1, 0, 1, 1])
+                else:
+                    communication.append([x, x_stop, y_start, y_stop, -1, 0, 1, 1])
+
+            # vertical movement
+            if y_start == y_stop - 1:
+                # print('no vertical movement needed')
+                pass
+            elif y == y_start:
+                # print('upper edge')
+                if not pipelined or y_stop - y_start <= 2:
+                    communication.append([x, x + 1, y_start, y_stop, 0, -1, 1, 1])
+                else:
+                    if (y_stop - y_start) % 2 == 0:
+                        communication.append([x, x + 1, y_start, y_stop, 0, -1, 1, 1])
+                        communication.append([x, x + 1, y_start + 1, y_stop - 1, 0, -1, 1, 1])
+                    else:
+                        communication.append([x, x + 1, y_start, y_stop - 1, 0, -1, 1, 1])
+                        communication.append([x, x + 1, y_start + 1, y_stop, 0, -1, 1, 1])
+            elif y == y_stop - 1:
+                # print('lower edge')
+                if not pipelined or y_stop - y_start <= 2:
+                    communication.append([x, x + 1, y_start, y_stop, 0, 1, 1, 1])
+                else:
+                    if (y_stop - y_start) % 2 == 0:
+                        communication.append([x, x + 1, y_start, y_stop, 0, 1, 1, 1])
+                        communication.append([x, x + 1, y_start + 1, y_stop - 1, 0, 1, 1, 1])
+                    else:
+                        communication.append([x, x + 1, y_start, y_stop - 1, 0, 1, 1, 1])
+                        communication.append([x, x + 1, y_start + 1, y_stop, 0, 1, 1, 1])
+            else:
+                # print('center')
+                if not pipelined:
+                    communication.append([x, x + 1, y_start, y + 1, 0, 1, 1, 1])
+                    communication.append([x, x + 1, y, y_stop, 0, -1, 1, 1])
+                else:
+                    # upper part
+                    if (y - y_start) >= 2: # y is inclusive while y_stop is exclusive
+                        if (y - y_start) % 2 == 0:
+                            communication.append([x, x + 1, y_start, y, 0, 1, 1, 1])
+                            communication.append([x, x + 1, y_start + 1, y + 1, 0, 1, 1, 1])
+                        else:
+                            communication.append([x, x + 1, y_start, y + 1, 0, 1, 1, 1])
+                            communication.append([x, x + 1, y_start + 1, y, 0, 1, 1, 1])
+                    else:
+                        communication.append([x, x + 1, y_start, y + 1, 0, 1, 1, 1])
+
+                    # lower part
+                    if (y_stop - y) > 2:
+                        if (y_stop - y) % 2 == 0:
+                            communication.append([x, x + 1, y, y_stop, 0, -1, 1, 1])
+                            communication.append([x, x + 1, y + 1, y_stop - 1, 0, -1, 1, 1])
+                        else:
+                            communication.append([x, x + 1, y, y_stop - 1, 0, -1, 1, 1])
+                            communication.append([x, x + 1, y + 1, y_stop, 0, -1, 1, 1])
+                    else:
+                        communication.append([x, x + 1, y, y_stop, 0, -1, 1, 1])
+
+        self.grid_streams.update({name : communication})
+
+
+    ##
+    # Creates the communication patterns for the reduce operation (snake or grid)
+    ##
     def create_communication_patterns(self, x_start, x_stop, y_start, y_stop, x, y, name, graph, pipelined) -> None:
         if x < x_start or x >= x_stop or y < y_start or y >= y_stop:
             if x == x_stop or y == y_stop:
@@ -572,385 +975,13 @@ class ReduceOptimizer():
             raise ValueError(f"The communication point (x, y) = ({x}, {y}) is not within the subgrid" +
                              f"[x_start, x_stop, y_start, y_stop] = [{x_start}, {x_stop}, {y_start}, {y_stop}] for the operation {name}.")
         communication = []
-        self.pipelined.update({name : False}) # not implemented yet
-        mode = graph
+        self.pipelined.update({name : False})
+        mode = graph if graph != 'auto' else 'snake'
         if mode == 'snake':
-            if y == y_start:
-                if (y_stop - 1 - y_start) % 2 == 0:
-
-                    # horizontal movement
-                    if pipelined and x_stop - x_start > 2:
-                        if (x_stop - x_start) % 2 != 0:
-                            communication.append([x_start, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start + 1, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                            communication.append([x_start + 1, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                        else:
-                            communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start + 1, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                            communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                    else:
-                        if x_stop - x_start > 1:
-                            communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 1])
-                            communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 1])
-
-                    # vertical movement
-                    # not dependent on pipelined as if we have a column it's already pipelined
-                    if x == x_start:
-                        # print('upper left corner odd')
-                        if y_stop - y_start > 2:
-                            communication.append([x_start, x_start + 1, y_start + 1, y_stop , 0, -1, 1, 1])
-                        if y_stop - y_start > 1:
-                            communication.append([x_stop - 1, x_stop, y_start, y_stop - 1, 0, -1, 1, 1])
-                    if x == x_stop - 1:
-                        # print('upper right corner odd')
-                        if y_stop - y_start > 2:
-                            communication.append([x_stop - 1, x_stop, y_start + 1, y_stop, 0, -1, 1, 1])
-                        if y_stop - y_start > 1:
-                            communication.append([x_start, x_start + 1, y_start, y_stop - 1, 0, -1, 1, 1])
-                else:
-
-                    # horizontal movement
-                    if pipelined and x_stop - x_start > 2:
-                        if (x_stop - x_start) % 2 != 0:
-                            communication.append([x_start, x_stop - 1, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start + 1, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start, x_stop - 1, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
-                            communication.append([x_start + 1, x_stop, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
-                        else:
-                            communication.append([x_start, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start + 1, x_stop - 1, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start, x_stop, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
-                            communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
-                    else:
-                        if x_stop - x_start > 1:
-                            communication.append([x_start, x_stop, y_start, y_stop - 1, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start, x_stop, y_start + 1, y_stop, 1 if x == x_start else -1, 0, 1, 2])
-
-                    # vertical movement
-                    # not dependent on pipelined as if we have a column it's already pipelined
-                    if x == x_start:
-                        # print('upper left corner even')
-                        if y_stop - y_start > 2:
-                            communication.append([x_start, x_start + 1, y_start + 1, y_stop - 1, 0, -1, 1, 1])
-                        if y_stop - y_start > 1:
-                            communication.append([x_stop - 1, x_stop, y_start, y_stop, 0, -1, 1, 1])
-                    if x == x_stop - 1:
-                        # print('upper right corner even')
-                        if y_stop - y_start > 2:
-                            communication.append([x_stop - 1, x_stop, y_start + 1, y_stop - 1, 0, -1, 1, 1])
-                        if y_stop - y_start > 1:
-                            communication.append([x_start, x_start + 1, y_start, y_stop, 0, -1, 1, 1])
-
-            elif y == y_stop - 1:
-                if (y_stop - 1 - y_start) % 2 == 0:
-
-                    # horizontal movement
-                    if pipelined and x_stop - x_start > 2:
-                        if (x_stop - x_start) % 2 != 0:
-                            communication.append([x_start, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start + 1, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                            communication.append([x_start + 1, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                        else:
-                            communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start + 1, x_stop - 1, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                            communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                    else:
-                        if x_stop - x_start > 1:
-                            communication.append([x_start, x_stop, y_start, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-
-                    # vertical movement
-                    # not dependent on pipelined as if we have a column it's already pipelined
-                    if x == x_start:
-                        # print('lower left corner odd')
-                        if y_stop - y_start > 2:
-                            communication.append([x_start, x_start + 1, y_start, y_stop - 1, 0, 1, 1, 1])
-                        if y_stop - y_start > 1:
-                            communication.append([x_stop - 1, x_stop, y_start + 1, y_stop, 0, 1, 1, 1])
-                    if x == x_stop - 1:
-                        # print('lower right corner odd')
-                        if y_stop - y_start > 2:
-                            communication.append([x_stop - 1, x_stop, y_start, y_stop - 1, 0, 1, 1, 1])
-                        if y_stop - y_start > 1:
-                            communication.append([x_start, x_start + 1, y_start + 1, y_stop, 0, 1, 1, 1])
-                else:
-
-                    # horizontal movement
-                    if pipelined and x_stop - x_start > 1:
-                        if (x_stop - x_start) % 2 != 0:
-                            communication.append([x_start, x_stop - 1, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start + 1, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start, x_stop - 1, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                            communication.append([x_start + 1, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                        else:
-                            communication.append([x_start, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start + 1, x_stop - 1, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                            communication.append([x_start, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-                            communication.append([x_start + 1, x_stop - 1, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-
-                    else: 
-                        communication.append([x_start, x_stop, y_start + 1, y_stop, -1 if x == x_start else 1, 0, 1, 2])
-                        communication.append([x_start, x_stop, y_start, y_stop - 1, 1 if x == x_start else -1, 0, 1, 2])
-
-                    # vertical movement
-                    # not dependent on pipelined as if we have a column it's already pipelined
-                    if x == x_start:
-                        # print('lower left corner even')
-                        if y_stop - y_start > 2:
-                            communication.append([x_start, x_start + 1, y_start + 1, y_stop - 1, 0, 1, 1, 1])
-                        if y_stop - y_start > 1:
-                            communication.append([x_stop - 1, x_stop, y_start, y_stop, 0, 1, 1, 1])
-                    if x == x_stop - 1:
-                        # print('lower right corner even')
-                        if y_stop - y_start > 2:
-                            communication.append([x_stop - 1, x_stop, y_start + 1, y_stop - 1, 0, 1, 1, 1])
-                        if y_stop - y_start > 1:
-                            communication.append([x_start, x_start + 1, y_start, y_stop, 0, 1, 1, 1])
-            else:
-                raise NotImplementedError("Only the corners are implemented for 'snake'")
-            
-            self.snake_streams.update({name: communication})
+            self.snake_communication_pattern(x_start, x_stop, y_start, y_stop, x, y, name, pipelined)
 
         elif mode == 'grid':
-            # TODO add steps for pipelined communication
-            if x == x_start:
-                # horizontal movement
-                if x_start == x_stop - 1:
-                    # print('no horizontal movement needed')
-                    pass
-                elif x_stop - x_start == 2:
-                    # print('right to left')
-                    communication.append([x_start, x_stop, y_start, y_stop, -1, 0, 1, 1])
-                else:
-                    if pipelined:
-                        if (x_stop - x_start) % 2 == 0:
-                            communication.append([x_start, x_stop, y_start, y_stop, -1, 0, 1, 1])
-                            communication.append([x_start + 1, x_stop - 1, y_start, y_stop, -1, 0, 1, 1])
-                        else:
-                            communication.append([x_start, x_stop - 1, y_start, y_stop, -1, 0, 1, 1])
-                            communication.append([x_start + 1, x_stop, y_start, y_stop, -1, 0, 1, 1])
-                    else:
-                        communication.append([x_start, x_stop, y_start, y_stop, -1, 0, 1, 1])
-                # TODO add steps for pipelined communication from here
-
-                # vertical movement
-                if y_start == y_stop - 1:
-                    # print('no vertical movement needed')
-                    pass
-                elif y == y_start:
-                    # print('upper left corner')
-                    if not pipelined or y_stop - y_start <= 2:
-                        communication.append([x_start, x_start + 1, y_start, y_stop, 0, -1, 1, 1])
-                    else:
-                        if (y_stop - y_start) % 2 == 0:
-                            communication.append([x_start, x_start + 1, y_start, y_stop, 0, -1, 1, 1])
-                            communication.append([x_start, x_start + 1, y_start + 1, y_stop - 1, 0, -1, 1, 1])
-                        else:
-                            communication.append([x_start, x_start + 1, y_start, y_stop - 1, 0, -1, 1, 1])
-                            communication.append([x_start, x_start + 1, y_start + 1, y_stop, 0, -1, 1, 1])
-                elif y == y_stop - 1:
-                    # print('lower left corner')
-                    if not pipelined or y_stop - y_start <= 2:
-                        communication.append([x_start, x_start + 1, y_start, y_stop, 0, 1, 1, 1])
-                    else:
-                        if (y_stop - y_start) % 2 == 0:
-                            communication.append([x_start, x_start + 1, y_start, y_stop, 0, 1, 1, 1])
-                            communication.append([x_start, x_start + 1, y_start + 1, y_stop - 1, 0, 1, 1, 1])
-                        else:
-                            communication.append([x_start, x_start + 1, y_start, y_stop - 1, 0, 1, 1, 1])
-                            communication.append([x_start, x_start + 1, y_start + 1, y_stop, 0, 1, 1, 1])
-                else:
-                    # print('left edge')
-                    if not pipelined:
-                        communication.append([x_start, x_start + 1, y_start, y + 1, 0, 1, 1, 1])
-                        communication.append([x_start, x_start + 1, y, y_stop, 0, -1, 1, 1])
-                    else:
-                        # upper part
-                        if (y - y_start) >= 2: # y is inclusive while y_stop is exclusive
-                            if (y - y_start) % 2 == 0:
-                                communication.append([x_start, x_start + 1, y_start, y, 0, 1, 1, 1])
-                                communication.append([x_start, x_start + 1, y_start + 1, y + 1, 0, 1, 1, 1])
-                            else:
-                                communication.append([x_start, x_start + 1, y_start, y + 1, 0, 1, 1, 1])
-                                communication.append([x_start, x_start + 1, y_start + 1, y, 0, 1, 1, 1])
-                        else:
-                            communication.append([x_start, x_start + 1, y_start, y + 1, 0, 1, 1, 1])
-
-                        # lower part
-                        if (y_stop - y) > 2:
-                            if (y_stop - y) % 2 == 0:
-                                communication.append([x_start, x_start + 1, y, y_stop, 0, -1, 1, 1])
-                                communication.append([x_start, x_start + 1, y + 1, y_stop - 1, 0, -1, 1, 1])
-                            else:
-                                communication.append([x_start, x_start + 1, y, y_stop - 1, 0, -1, 1, 1])
-                                communication.append([x_start, x_start + 1, y + 1, y_stop, 0, -1, 1, 1])
-                        else:
-                            communication.append([x_start, x_start + 1, y, y_stop, 0, -1, 1, 1])
-
-                        
-
-            elif x == x_stop - 1:
-                # horizontal movement
-                if x_start == x_stop - 1:
-                    # print('no horizontal movement needed')
-                    pass
-                elif x_stop - x_start == 2:
-                    # print('left to right')
-                    communication.append([x_start, x_stop, y_start, y_stop, 1, 0, 1, 1])
-                else:
-                    # print('left to right')
-                    if pipelined:
-                        if (x_stop - x_start) % 2 == 0:
-                            communication.append([x_start, x_stop, y_start, y_stop, 1, 0, 1, 1])
-                            communication.append([x_start + 1, x_stop - 1, y_start, y_stop, 1, 0, 1, 1])
-                        else:
-                            communication.append([x_start, x_stop - 1, y_start, y_stop, 1, 0, 1, 1])
-                            communication.append([x_start + 1, x_stop, y_start, y_stop, 1, 0, 1, 1])
-                    else:
-                        communication.append([x_start, x_stop, y_start, y_stop, 1, 0, 1, 1])
-
-                # vertical movement
-                if y_start == y_stop - 1:
-                    # print('no vertical movement needed')
-                    pass
-                elif y == y_start:
-                    # print('upper right corner')
-                    if not pipelined or y_stop - y_start <= 2:
-                        communication.append([x_stop - 1, x_stop, y_start, y_stop, 0, -1, 1, 1])
-                    else:
-                        if (y_stop - y_start) % 2 == 0:
-                            communication.append([x_stop - 1, x_stop, y_start, y_stop, 0, -1, 1, 1])
-                            communication.append([x_stop - 1, x_stop, y_start + 1, y_stop - 1, 0, -1, 1, 1])
-                        else:
-                            communication.append([x_stop - 1, x_stop, y_start, y_stop - 1, 0, -1, 1, 1])
-                            communication.append([x_stop - 1, x_stop, y_start + 1, y_stop, 0, -1, 1, 1])
-                elif y == y_stop - 1:
-                    # print('lower right corner')
-                    if not pipelined or y_stop - y_start <= 2:
-                        communication.append([x_stop - 1, x_stop, y_start, y_stop, 0, 1, 1, 1])
-                    else:
-                        if (y_stop - y_start) % 2 == 0:
-                            communication.append([x_stop - 1, x_stop, y_start, y_stop, 0, 1, 1, 1])
-                            communication.append([x_stop - 1, x_stop, y_start + 1, y_stop - 1, 0, 1, 1, 1])
-                        else:
-                            communication.append([x_stop - 1, x_stop, y_start, y_stop - 1, 0, 1, 1, 1])
-                            communication.append([x_stop - 1, x_stop, y_start + 1, y_stop, 0, 1, 1, 1])
-                else:
-                    # print('right edge')
-                    if not pipelined:
-                        communication.append([x_stop - 1, x_stop, y_start, y + 1, 0, 1, 1, 1])
-                        communication.append([x_stop - 1, x_stop, y, y_stop, 0, -1, 1, 1])
-                    else:
-                        # upper part
-                        if (y - y_start) >= 2: # y is inclusive while y_stop is exclusive
-                            if (y - y_start) % 2 == 0:
-                                communication.append([x_stop - 1, x_stop, y_start, y, 0, 1, 1, 1])
-                                communication.append([x_stop - 1, x_stop, y_start + 1, y + 1, 0, 1, 1, 1])
-                            else:
-                                communication.append([x_stop - 1, x_stop, y_start, y + 1, 0, 1, 1, 1])
-                                communication.append([x_stop - 1, x_stop, y_start + 1, y, 0, 1, 1, 1])
-                        else:
-                            communication.append([x_stop - 1, x_stop, y_start, y + 1, 0, 1, 1, 1])
-
-                        # lower part
-                        if (y_stop - y) > 2:
-                            if (y_stop - y) % 2 == 0:
-                                communication.append([x_stop - 1, x_stop, y, y_stop, 0, -1, 1, 1])
-                                communication.append([x_stop - 1, x_stop, y + 1, y_stop - 1, 0, -1, 1, 1])
-                            else:
-                                communication.append([x_stop - 1, x_stop, y, y_stop - 1, 0, -1, 1, 1])
-                                communication.append([x_stop - 1, x_stop, y + 1, y_stop, 0, -1, 1, 1])
-                        else:
-                            communication.append([x_stop - 1, x_stop, y, y_stop, 0, -1, 1, 1])
-
-            else:
-                # horizontal movement
-                # print('middle')
-                if not pipelined:
-                    communication.append([x_start, x + 1, y_start, y_stop, 1, 0, 1, 1]) # left to middle
-                    communication.append([x, x_stop, y_start, y_stop, -1, 0, 1, 1]) # right to middle
-                else:
-                    # left
-                    if (x - x_start) >= 2: # x is inclusive while x_stop is exclusive
-                        if (x - x_start) % 2 == 0:
-                            communication.append([x_start, x, y_start, y_stop, 1, 0, 1, 1])
-                            communication.append([x_start + 1, x + 1, y_start, y_stop, 1, 0, 1, 1])
-                        else:
-                            communication.append([x_start, x + 1, y_start, y_stop, 1, 0, 1, 1])
-                            communication.append([x_start + 1, x, y_start, y_stop, 1, 0, 1, 1])
-                    else:
-                        communication.append([x_start, x + 1, y_start, y_stop, 1, 0, 1, 1])
-
-                    # right
-                    if (x_stop - x) > 2:
-                        if (x_stop - x) % 2 == 0:
-                            communication.append([x, x_stop, y_start, y_stop, -1, 0, 1, 1])
-                            communication.append([x + 1, x_stop - 1, y_start, y_stop, -1, 0, 1, 1])
-                        else:
-                            communication.append([x, x_stop - 1, y_start, y_stop, -1, 0, 1, 1])
-                            communication.append([x + 1, x_stop, y_start, y_stop, -1, 0, 1, 1])
-                    else:
-                        communication.append([x, x_stop, y_start, y_stop, -1, 0, 1, 1])
-
-                # vertical movement
-                if y_start == y_stop - 1:
-                    # print('no vertical movement needed')
-                    pass
-                elif y == y_start:
-                    # print('upper edge')
-                    if not pipelined or y_stop - y_start <= 2:
-                        communication.append([x, x + 1, y_start, y_stop, 0, -1, 1, 1])
-                    else:
-                        if (y_stop - y_start) % 2 == 0:
-                            communication.append([x, x + 1, y_start, y_stop, 0, -1, 1, 1])
-                            communication.append([x, x + 1, y_start + 1, y_stop - 1, 0, -1, 1, 1])
-                        else:
-                            communication.append([x, x + 1, y_start, y_stop - 1, 0, -1, 1, 1])
-                            communication.append([x, x + 1, y_start + 1, y_stop, 0, -1, 1, 1])
-                elif y == y_stop - 1:
-                    # print('lower edge')
-                    if not pipelined or y_stop - y_start <= 2:
-                        communication.append([x, x + 1, y_start, y_stop, 0, 1, 1, 1])
-                    else:
-                        if (y_stop - y_start) % 2 == 0:
-                            communication.append([x, x + 1, y_start, y_stop, 0, 1, 1, 1])
-                            communication.append([x, x + 1, y_start + 1, y_stop - 1, 0, 1, 1, 1])
-                        else:
-                            communication.append([x, x + 1, y_start, y_stop - 1, 0, 1, 1, 1])
-                            communication.append([x, x + 1, y_start + 1, y_stop, 0, 1, 1, 1])
-                else:
-                    # print('center')
-                    if not pipelined:
-                        communication.append([x, x + 1, y_start, y + 1, 0, 1, 1, 1])
-                        communication.append([x, x + 1, y, y_stop, 0, -1, 1, 1])
-                    else:
-                        # upper part
-                        if (y - y_start) >= 2: # y is inclusive while y_stop is exclusive
-                            if (y - y_start) % 2 == 0:
-                                communication.append([x, x + 1, y_start, y, 0, 1, 1, 1])
-                                communication.append([x, x + 1, y_start + 1, y + 1, 0, 1, 1, 1])
-                            else:
-                                communication.append([x, x + 1, y_start, y + 1, 0, 1, 1, 1])
-                                communication.append([x, x + 1, y_start + 1, y, 0, 1, 1, 1])
-                        else:
-                            communication.append([x, x + 1, y_start, y + 1, 0, 1, 1, 1])
-
-                        # lower part
-                        if (y_stop - y) > 2:
-                            if (y_stop - y) % 2 == 0:
-                                communication.append([x, x + 1, y, y_stop, 0, -1, 1, 1])
-                                communication.append([x, x + 1, y + 1, y_stop - 1, 0, -1, 1, 1])
-                            else:
-                                communication.append([x, x + 1, y, y_stop - 1, 0, -1, 1, 1])
-                                communication.append([x, x + 1, y + 1, y_stop, 0, -1, 1, 1])
-                        else:
-                            communication.append([x, x + 1, y, y_stop, 0, -1, 1, 1])
-        
-            self.grid_streams.update({name : communication})
+            self.grid_communication_pattern(x_start, x_stop, y_start, y_stop, x, y, name, pipelined)
 
         else:
             raise NotImplementedError(f"Communication mode '{mode}' is not implemented.")
@@ -958,6 +989,9 @@ class ReduceOptimizer():
         return None
     
 
+    ##
+    # Updates the datablocks with the new communication patterns
+    ##
     def change_data_blocks(self) -> None:
         newbody = []
         self.reduce_operations = {}
@@ -971,17 +1005,17 @@ class ReduceOptimizer():
                                                            elem.subgrid.x_range.stop.value.value, 
                                                            elem.subgrid.y_range.start.value.value, 
                                                            elem.subgrid.y_range.stop.value.value, 
-                                                           stmt.dx.value.value, 
-                                                           stmt.dy.value.value,
+                                                           stmt.x.value.value, 
+                                                           stmt.y.value.value,
                                                            stmt.stream_name.name,
                                                            stmt.routing.graph,
                                                            stmt.routing.pipelined)
 
-                        self.reduce_operations.update({stmt.stream_name.name: [{'op': stmt.routing.op}, [stmt.dx.value.value, stmt.dy.value.value], 
+                        self.reduce_operations.update({stmt.stream_name.name: [{'op': stmt.routing.op}, [stmt.x.value.value, stmt.y.value.value], 
                                                                                [elem.subgrid.x_range.start.value.value, elem.subgrid.x_range.stop.value.value],
                                                                                [elem.subgrid.y_range.start.value.value, elem.subgrid.y_range.stop.value.value],
-                                                                               [stmt.dx.value.value if (elem.subgrid.y_range.stop.value.value - elem.subgrid.y_range.start.value.value) % 2 == 0 else (elem.subgrid.x_range.stop.value.value - stmt.dx.value.value - 1),
-                                                                                elem.subgrid.y_range.stop.value.value - 1 if elem.subgrid.y_range.start.value.value == stmt.dy.value.value else elem.subgrid.y_range.start.value.value],
+                                                                               [stmt.x.value.value if (elem.subgrid.y_range.stop.value.value - elem.subgrid.y_range.start.value.value) % 2 == 0 else (elem.subgrid.x_range.stop.value.value - stmt.x.value.value - 1),
+                                                                                elem.subgrid.y_range.stop.value.value - 1 if elem.subgrid.y_range.start.value.value == stmt.y.value.value else elem.subgrid.y_range.start.value.value],
                                                                                 None,
                                                                                 None]})
                         new_grid_streams = []
@@ -1101,7 +1135,7 @@ class ReduceOptimizer():
                     else:
                         olddataflobblock.append(stmt)
 
-                if olddataflobblock != []: # not tested
+                if olddataflobblock != []:
                     newbody.append(DataflowBlock(variables=elem.variables, subgrid=elem.subgrid, statements=olddataflobblock))
                 for newdataflobblock in newdataflobblocks:
                     newbody.append(
@@ -1137,6 +1171,9 @@ class ReduceOptimizer():
         self.body = newbody
 
 
+    ##
+    # Updates the compute block tiling for the new communication patterns
+    ##
     def fix_subgrid(self) -> None:
         newbody = []
 
@@ -1146,10 +1183,8 @@ class ReduceOptimizer():
             if isinstance(elem, ComputeBlock):
                 x_start = elem.subgrid.x_range.start.value.value
                 x_stop = elem.subgrid.x_range.stop.value.value
-                x_step = elem.subgrid.x_range.step.value.value if elem.subgrid.x_range.step is not None else None
                 y_start = elem.subgrid.y_range.start.value.value
                 y_stop = elem.subgrid.y_range.stop.value.value
-                y_step = elem.subgrid.y_range.step.value.value if elem.subgrid.y_range.step is not None else None
                 grid = [[[x_start, x_stop], [y_start, y_stop]]]
 
                 for stmt in elem.statements:
@@ -1325,20 +1360,18 @@ class ReduceOptimizer():
         return None
 
 
+    ##
+    # Changes the occurences of reduce statements in the compute blocks
+    ##
     def change_compute_blocks(self) -> None:
         finalbody = []
         for elem in self.body:
             if isinstance(elem, ComputeBlock):
                 statements = []
-                for stmt in elem.statements: # walk operators in baseclass
+                for stmt in elem.statements:
                     new_stmts = self.replace_stmt(stmt, elem, ReduceStatement)
-                    print(new_stmts)
-                    print('*'*50)
-                    print('*'*50)
                     for nstmt in new_stmts:
                         statements.append(nstmt)
-                print(statements)
-                print('*'*50)
                 finalbody.append(ComputeBlock(elem.variables, elem.subgrid, statements))
             else:
                 finalbody.append(elem) 

@@ -128,6 +128,8 @@ class TreeToSpatialIR(lark.Transformer):
             return irnodes.SendStatement(*arguments, completion_name=completion)
         elif func == 'receive':
             return irnodes.ReceiveStatement(*arguments, completion_name=completion)
+        elif func == 'broadcast':
+            return irnodes.BroadcastStatement(*arguments, completion_name=completion)
         elif func == 'reduce':
             return irnodes.ReduceStatement(*arguments, completion_name=completion)
         raise SyntaxError(f'Unrecognized free function call to "{func}"')

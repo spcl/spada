@@ -486,15 +486,15 @@ class MulStreamDeclaration(SpatialNode):
     """
     dtype: MultiStreamType
     stream_name: Identifier
-    dx: Expression
-    dy: Expression
+    x: Expression
+    y: Expression
     routing: Optional[Union[BroadcastRoutingDeclaration, ReduceRoutingDeclaration]] = None
 
     def validate(self) -> None:
         assert isinstance(self.dtype, MultiStreamType)
         assert isinstance(self.stream_name, Identifier)
-        assert isinstance(self.dx, Expression)
-        assert isinstance(self.dy, Expression)
+        assert isinstance(self.x, Expression)
+        assert isinstance(self.y, Expression)
         if self.routing:
             assert isinstance(self.routing, Union[BroadcastRoutingDeclaration, ReduceRoutingDeclaration])
 
@@ -504,9 +504,9 @@ class MulStreamDeclaration(SpatialNode):
         if self.routing:
             routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{' ' * indent}}}"
         if isinstance(self.routing, ReduceRoutingDeclaration):
-            return f'{indent_str}multistream<{self.dtype.dtype.as_ir()}> {self.stream_name.as_ir()} = reduce({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
+            return f'{indent_str}multistream<{self.dtype.dtype.as_ir()}> {self.stream_name.as_ir()} = reduce_stream({self.x.as_ir()}, {self.y.as_ir()}){routing_str}'
         elif isinstance(self.routing, BroadcastRoutingDeclaration):
-            return f'{indent_str}multistream<{self.dtype.dtype.as_ir()}> {self.stream_name.as_ir()} = broadcast({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
+            return f'{indent_str}multistream<{self.dtype.dtype.as_ir()}> {self.stream_name.as_ir()} = broadcast_stream({self.x.as_ir()}, {self.y.as_ir()}){routing_str}'
         else:
             raise ValueError("Invalid routing declaration")
 
@@ -611,6 +611,27 @@ class ReceiveStatement(Statement):
             return f'{indent_str}{self.completion_name.as_ir()} = receive({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
         return f'{indent_str}await receive({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
     
+
+@dataclass
+class BroadcastStatement(Statement):
+    """
+    Branch statement for sending data asynchronously through a stream.
+    """
+    local_array: Union[Identifier, ArraySlice]
+    stream_name: Union[Identifier, ArraySlice]
+    completion_name: Optional[Completion] = None
+
+    def validate(self) -> None:
+        assert isinstance(self.local_array, (Identifier, ArraySlice))
+        assert isinstance(self.stream_name, (Identifier, ArraySlice))
+        if self.completion_name:
+            assert isinstance(self.completion_name, Completion)
+
+    def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
+        if self.completion_name:
+            return f'{indent_str}{self.completion_name.as_ir()} = broadcast({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
+        return f'{indent_str}await broadcast({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
 
 @dataclass
 class ReduceStatement(Statement):

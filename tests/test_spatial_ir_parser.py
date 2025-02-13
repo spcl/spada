@@ -96,8 +96,6 @@ def _rountrip_test(file):
     program = parser.parse_file(file)
     program_optimized = optimization_pass(program)
     ir_1 = program_optimized.as_ir()
-    print(ir_1)
-    exit()
     program2 = parser.parse_string(ir_1)
     ir_2 = program2.as_ir()
     assert ir_1 == ir_2
@@ -112,41 +110,12 @@ def test_spatial_roundtrip_two_phase_split():
     _rountrip_test(file)
 
 
-def test_spatial_bcast():
-    file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spatial', 'bcast.sptl')
-    _rountrip_test(file)
-
-
-def test_simple_reduce():
-    file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spatial', 'simple_reduce.sptl')
-    _rountrip_test(file)
-
-
-def test_simple_reduce_reference():
-    file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spatial', 'simple_reduce_after.sptl')
-    _rountrip_test(file)
-
-
-def test_simple_reduce_three():
-    file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spatial', 'simple_reduce_three.sptl')
-    _rountrip_test(file)
-
-
-def test_simple_reduce_four():
-    file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spatial', 'simple_reduce_four.sptl')
-    _rountrip_test(file)
-
 
 if __name__ == '__main__':
-    # test_spatial_roundtrip_laplacian()
-    # test_spatial_visitor()
-    # test_spatial_roundtrip_two_phase()
-    # test_spatial_roundtrip_two_phase_unrouted()
-    # test_spatial_roundtrip_two_phase_split()
-    # test_spatial_roundtrip_forward()
-    # test_spatial_roundtrip_backward()
-    # test_spatial_bcast()
-    test_simple_reduce()
-    # test_simple_reduce_reference()
-    # test_simple_reduce_three()
-    # test_simple_reduce_four()
+    test_spatial_roundtrip_laplacian()
+    test_spatial_visitor()
+    test_spatial_roundtrip_two_phase()
+    test_spatial_roundtrip_two_phase_unrouted()
+    test_spatial_roundtrip_two_phase_split()
+    test_spatial_roundtrip_forward()
+    test_spatial_roundtrip_backward()

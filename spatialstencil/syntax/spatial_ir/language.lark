@@ -123,8 +123,8 @@ field_declaration : builtin_type identifier  (";")? //(";" | NEWLINE)
 stream_declaration : classic_stream | mul_stream
 classic_stream : "stream" "<" scalar_type ">" identifier "=" "relative_stream" "(" value_expr "," value_expr ")" ("{" routing "}")?  (";")?
 mul_stream : bcast | red
-bcast : "multistream" "<" scalar_type ">" identifier "=" "broadcast" "(" value_expr "," value_expr ")" ("{" broadcast_routing "}")?  (";")?
-red : "multistream" "<" scalar_type ">" identifier "=" "reduce" "(" value_expr "," value_expr ")" ("{" reduce_routing "}")?  (";")?
+bcast : "multistream" "<" scalar_type ">" identifier "=" "broadcast_stream" "(" value_expr "," value_expr ")" ("{" broadcast_routing "}")?  (";")?
+red : "multistream" "<" scalar_type ">" identifier "=" "reduce_stream" "(" value_expr "," value_expr ")" ("{" reduce_routing "}")?  (";")?
 vars : identifier ("," identifier)*
 typed_var : scalar_type identifier
 typed_vars : typed_var ("," typed_var)*

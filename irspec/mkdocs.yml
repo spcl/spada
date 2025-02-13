@@ -16,6 +16,7 @@ nav:
   - Collective IR:
     - Design Goals: collective/design_goals.md
     - Specification: collective/collective.md
+    - Layouts: collective/layouts.md
   - Dataflow Task IR: dataflowtask/dataflowtask.md
 
 markdown_extensions:

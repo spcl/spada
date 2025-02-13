@@ -1,0 +1,32 @@
+
+kernel @add<N,K>() {
+
+    place i16 i, i16 j in [0:5, 0:5] {
+        i16[100] a
+    }
+
+    dataflow i16 i, i16 j in [0:5, 0:5] {
+        multistream<i16> red = reduce_stream(0, 0) {
+            graph = grid,
+            op = CL_SUM,
+            pipelined = false
+        }
+        multistream<i16> red1 = reduce_stream(2, 2) {
+            graph = grid,
+            op = CL_SUM,
+            pipelined = false
+        }
+        multistream<i16> red2 = reduce_stream(4, 4) {
+            graph = grid,
+            op = CL_SUM,
+            pipelined = false
+        }
+    }
+
+    compute i16 i, i16 j in [0:5, 0:5] {
+        a[0] = 1
+        await reduce(a, red)
+        await reduce(a, red1)
+        await reduce(a, red2)
+    }
+}
