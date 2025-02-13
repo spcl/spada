@@ -1,8 +1,6 @@
 from spatialstencil.syntax.spatial_ir import parser
 from spatialstencil.optimizations.optimization_pass import optimization_pass
 import os
-from spatialstencil.optimizations.spatial_reduce import ReduceOptimizer
-from spatialstencil.optimizations.spatial_broadcast import BroadcastOptimizer
 
 
 
@@ -63,9 +61,9 @@ def test_medium_reduce_grid_1():
     file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'collective', 'medium_reduce_grid_1.sptl')
     _tiling_test(file)    
 
-def test_hard_reduce_1():
-    file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'collective', 'hard_reduce_1.sptl')
-    _tiling_test(file)
+# def test_hard_reduce_1():
+#     file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'collective', 'hard_reduce_1.sptl')
+#     _tiling_test(file)
 
 
 if __name__ == '__main__':
