@@ -117,7 +117,7 @@ hop : "(" posneg_integer_literal "," posneg_integer_literal ")"  // 2D at the mo
 hops : "[" hop ("," hop)* "]"
 routing : "hops" "=" (auto | hops) "," "channel" "=" (auto | integer_literal)
 broadcast_routing : "channels" "=" (auto | integer_literal)
-reduce_routing :  "graph" "=" (auto | constant_literal) "," "op" "=" constant_literal "," "pipelined" "=" bool_literal
+reduce_routing :  "algorithm" "=" (auto | constant_literal) "," "op" "=" constant_literal "," "pipelined" "=" bool_literal
 
 field_declaration : builtin_type identifier  (";")? //(";" | NEWLINE)
 stream_declaration : classic_stream | mul_stream

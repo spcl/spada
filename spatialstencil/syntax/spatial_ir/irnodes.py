@@ -435,19 +435,19 @@ class ReduceRoutingDeclaration(SpatialNode):
     """
     A routing declaration for a reduce, optionally specifying hops and channel.
     """
-    graph: str = ''
+    algorithm: str = ''
     op: str = ''
     pipelined: bool = False
 
     def validate(self) -> None:
-        assert isinstance(self.graph, str)
+        assert isinstance(self.algorithm, str)
         assert isinstance(self.op, str)
         assert isinstance(self.pipelined, bool)
 
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
-        return f"{indent_str}graph = {self.graph},\n{indent_str}op = {self.op},\n{indent_str}pipelined = {self.pipelined}"
+        return f"{indent_str}algorithm = {self.algorithm},\n{indent_str}op = {self.op},\n{indent_str}pipelined = {self.pipelined}"
 
 
 @dataclass
@@ -522,11 +522,11 @@ class DataflowBlock(SpatialNode):
     """
     variables: list[TypedIdentifier]
     subgrid: SubgridExpression
-    statements: Union[list[RelativeStreamDeclaration], list[MulStreamDeclaration]]
+    statements: list[Union[list[RelativeStreamDeclaration], list[MulStreamDeclaration]]]
 
     def validate(self) -> None:
         assert all(isinstance(var, TypedIdentifier) for var in self.variables)
-        assert all(isinstance(stmt, RelativeStreamDeclaration) for stmt in self.statements) or all(isinstance(stmt, MulStreamDeclaration) for stmt in self.statements)
+        assert all(isinstance(stmt, RelativeStreamDeclaration) or isinstance(stmt, MulStreamDeclaration) for stmt in self.statements)
         assert len(self.variables) == 2
 
     def as_ir(self, indent: int = 0) -> str:

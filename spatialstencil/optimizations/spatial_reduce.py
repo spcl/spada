@@ -162,7 +162,7 @@ class ReduceOptimizer():
                                 ForeachStatement(
                                     variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
                                     parameter_range=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                                    stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                                    stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
                                                                     step=None)],
                                     stream_variable=TypedIdentifier(dtype=con[2].dtype,
                                                                     identifier=self.versioning.next_version("reduce_receive")),
@@ -434,7 +434,7 @@ class ReduceOptimizer():
                         ForeachStatement(
                             variables=[TypedIdentifier(dtype=ScalarType.i32, identifier=self.versioning.next_version("reduce_runner"))],
                             parameter_range=[RangeExpression(start=Expression(ConstantLiteral(0, ScalarType.i32)),
-                                                            stop=Expression(ConstantLiteral(1, ScalarType.i32)),
+                                                            stop=Expression(ConstantLiteral(send_amount, ScalarType.i32)),
                                                             step=None)],
                             stream_variable=TypedIdentifier(dtype=receive_stream[2].dtype,
                                                             identifier=self.versioning.next_version("reduce_receive")),
@@ -966,7 +966,7 @@ class ReduceOptimizer():
     ##
     # Creates the communication patterns for the reduce operation (snake or grid)
     ##
-    def create_communication_patterns(self, x_start, x_stop, y_start, y_stop, x, y, name, graph, pipelined) -> None:
+    def create_communication_patterns(self, x_start, x_stop, y_start, y_stop, x, y, name, algorithm, pipelined) -> None:
         if x < x_start or x >= x_stop or y < y_start or y >= y_stop:
             if x == x_stop or y == y_stop:
                 raise ValueError(f"The communication point (x, y) = ({x}, {y}) is not within the subgrid" +
@@ -976,7 +976,7 @@ class ReduceOptimizer():
                              f"[x_start, x_stop, y_start, y_stop] = [{x_start}, {x_stop}, {y_start}, {y_stop}] for the operation {name}.")
         communication = []
         self.pipelined.update({name : False})
-        mode = graph if graph != 'auto' else 'snake'
+        mode = algorithm if algorithm != 'auto' else 'snake'
         if mode == 'snake':
             self.snake_communication_pattern(x_start, x_stop, y_start, y_stop, x, y, name, pipelined)
 
@@ -1008,7 +1008,7 @@ class ReduceOptimizer():
                                                            stmt.x.value.value, 
                                                            stmt.y.value.value,
                                                            stmt.stream_name.name,
-                                                           stmt.routing.graph,
+                                                           stmt.routing.algorithm,
                                                            stmt.routing.pipelined)
 
                         self.reduce_operations.update({stmt.stream_name.name: [{'op': stmt.routing.op}, [stmt.x.value.value, stmt.y.value.value], 
