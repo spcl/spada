@@ -1177,8 +1177,6 @@ class ReduceOptimizer():
     def fix_subgrid(self) -> None:
         newbody = []
 
-        # change the outer loops to go through everything for each reduce and in that loop change the subgrids for the compute blocks
-
         for elem in self.body:
             if isinstance(elem, ComputeBlock):
                 x_start = elem.subgrid.x_range.start.value.value
@@ -1188,21 +1186,23 @@ class ReduceOptimizer():
                 grid = [[[x_start, x_stop], [y_start, y_stop]]]
 
                 for stmt in elem.statements:
-                    red_stmt = None
+                    red_stmt = []
                     nodes = [stmt]
-                    found = False
-                    while len(nodes) > 0 and not found:
-                        for intermediate_stmt in nodes[0].iter_child_nodes():
-                            if not isinstance(intermediate_stmt, types.GeneratorType):
-                                nodes.append(intermediate_stmt)
-                            if isinstance(intermediate_stmt, ReduceStatement): # only finds one reduce statement
-                                found = True
-                                red_stmt = intermediate_stmt
-                        nodes.pop(0)
+                    while len(nodes) > 0:
+                        for intermediate_stmt in nodes:
+                            if isinstance(intermediate_stmt, ForeachStatement) or isinstance(intermediate_stmt, ForStatement) or isinstance(intermediate_stmt, MapStatement) or isinstance(intermediate_stmt, AsyncBlock):
+                                for element in intermediate_stmt.body:
+                                    nodes.append(element)
+                            if isinstance(intermediate_stmt, TernaryOperator):
+                                pass
+                            if isinstance(intermediate_stmt, ReduceStatement):
+                                red_stmt.append(intermediate_stmt)
+                            nodes.remove(intermediate_stmt)
 
-                    if red_stmt is not None or isinstance(stmt, ReduceStatement):
-                        if red_stmt is not None:
-                            stmt = red_stmt
+                    if isinstance(stmt, ReduceStatement):
+                        red_stmt.append(stmt)
+
+                    for stmt in red_stmt:
                         stream_name = stmt.stream_name.name
 
                         if self.reduce_operations[stream_name][5] == None:
