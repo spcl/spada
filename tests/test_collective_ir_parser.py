@@ -61,9 +61,9 @@ def test_medium_reduce_grid_1():
     file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'collective', 'medium_reduce_grid_1.sptl')
     _tiling_test(file)    
 
-# def test_hard_reduce_1():
-#     file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'collective', 'hard_reduce_1.sptl')
-#     _tiling_test(file)
+def test_hard_reduce_1():
+    file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'collective', 'hard_reduce_1.sptl')
+    _tiling_test(file)
 
 
 if __name__ == '__main__':
@@ -73,4 +73,4 @@ if __name__ == '__main__':
     test_simple_reduce_snake_pipelined_1()
     test_simple_reduce_snake_1()
     test_medium_reduce_grid_1()
-    #test_hard_reduce_1()
+    test_hard_reduce_1()

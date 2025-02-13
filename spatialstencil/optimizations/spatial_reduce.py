@@ -1277,15 +1277,13 @@ class ReduceOptimizer():
                                     # delete old unused
                                     for rmv in to_remove:
                                         grid.remove(rmv)
-
                             else:
                                 #pipelined
                                 new_grid = []
-                                for i in range(grid[0][0][0], grid[0][0][1]):
-                                    for j in range(grid[0][1][0], grid[0][1][1]):
+                                for i in range(x_start, x_stop):
+                                    for j in range(y_start, y_stop):
                                         new_grid.append([[i, i + 1], [j, j + 1]])
                                 grid = new_grid
-
 
 
                 # needs to be tested in combination with grid_streams
@@ -1297,43 +1295,43 @@ class ReduceOptimizer():
                     for name in self.snake_streams:
                         complete_grid = [self.reduce_operations[name][2], self.reduce_operations[name][3]]
                         pipelined = self.snake_streams[name][0][6]
-                        break
+                        
 
-                    if not pipelined:
+                        if not pipelined:
 
-                        list_grid = [[x] for x in grid]
+                            list_grid = [[x] for x in grid]
 
-                        for com_grid in list_grid:
-                            to_remove = []
-                            for com in com_grid:
-                                if com[0][0] == complete_grid[0][0] and com[0][1] != complete_grid[0][0] + 1:
-                                    # print("left")
-                                    com_grid.append([[complete_grid[0][0], complete_grid[0][0] + 1], [com[1][0], com[1][1]]])
-                                    com_grid.append([[complete_grid[0][0] + 1, com[0][1]], [com[1][0], com[1][1]]])
-                                    to_remove.append(com)
-                                elif com[0][1] == complete_grid[0][1] and com[0][0] != complete_grid[0][1] - 1:
-                                    # print("right")
-                                    com_grid.append([[complete_grid[0][1] - 1, complete_grid[0][1]], [com[1][0], com[1][1]]])
-                                    com_grid.append([[com[0][0], complete_grid[0][1] - 1], [com[1][0], com[1][1]]])
-                                    to_remove.append(com)
-                                elif com[1][1] - com[1][0] != 1:
-                                    # print('multiple rows')
-                                    for i in range(com[1][0], com[1][1]):
-                                        com_grid.append([[com[0][0], com[0][1]], [i, i + 1]])
-                                    to_remove.append(com)
+                            for com_grid in list_grid:
+                                to_remove = []
+                                for com in com_grid:
+                                    if com[0][0] == complete_grid[0][0] and com[0][1] != complete_grid[0][0] + 1:
+                                        # print("left")
+                                        com_grid.append([[complete_grid[0][0], complete_grid[0][0] + 1], [com[1][0], com[1][1]]])
+                                        com_grid.append([[complete_grid[0][0] + 1, com[0][1]], [com[1][0], com[1][1]]])
+                                        to_remove.append(com)
+                                    elif com[0][1] == complete_grid[0][1] and com[0][0] != complete_grid[0][1] - 1:
+                                        # print("right")
+                                        com_grid.append([[complete_grid[0][1] - 1, complete_grid[0][1]], [com[1][0], com[1][1]]])
+                                        com_grid.append([[com[0][0], complete_grid[0][1] - 1], [com[1][0], com[1][1]]])
+                                        to_remove.append(com)
+                                    elif com[1][1] - com[1][0] != 1:
+                                        # print('multiple rows')
+                                        for i in range(com[1][0], com[1][1]):
+                                            com_grid.append([[com[0][0], com[0][1]], [i, i + 1]])
+                                        to_remove.append(com)
 
-                            for rmv in to_remove:
-                                com_grid.remove(rmv)
+                                for rmv in to_remove:
+                                    com_grid.remove(rmv)
 
-                            for com in com_grid:
-                                new_grid.append(com)
-                    
-                    else:
-                        for i in range(grid[0][0][0], grid[0][0][1]):
-                            for j in range(grid[0][1][0], grid[0][1][1]):
-                                new_grid.append([[i, i + 1], [j, j + 1]])
+                                for com in com_grid:
+                                    new_grid.append(com)
+                        
+                        else:
+                            for i in range(x_start, x_stop):
+                                for j in range(y_start, y_stop):
+                                    new_grid.append([[i, i + 1], [j, j + 1]])
 
-                    grid = new_grid
+                        grid = new_grid
 
                 
                 for com_grid in grid:
