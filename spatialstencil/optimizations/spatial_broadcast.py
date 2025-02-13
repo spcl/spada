@@ -1,5 +1,6 @@
-from spatialstencil.syntax.spatial_ir.irnodes import Kernel, DataflowBlock, MulStreamDeclaration, BroadcastRoutingDeclaration, ComputeBlock, ConstantLiteral, SubgridExpression, RangeExpression, Expression, ScalarType, ForeachStatement, ForStatement, MapStatement, AsyncBlock, TernaryOperator, BroadcastStatement, SendStatement, ReceiveStatement, ArraySlice
-import spatialstencil.syntax.spatial_ir.irnodes as spa
+from spatialstencil.syntax.spatial_ir.irnodes import (Kernel, DataflowBlock, MulStreamDeclaration, BroadcastRoutingDeclaration, ComputeBlock, ConstantLiteral,
+                                                      SubgridExpression, RangeExpression, Expression, ScalarType, ForeachStatement, ForStatement, MapStatement,
+                                                      AsyncBlock, BroadcastStatement, SendStatement, ReceiveStatement, Identifier)
 from spatialstencil.lowering.versioning import Versioning
 
 class BroadcastOptimizer():
@@ -11,7 +12,7 @@ class BroadcastOptimizer():
         self.parameters = kernel.parameters
         self.arguments = kernel.arguments
         self.body = kernel.body
-        self.versioning = Versioning[spa.Identifier](spa.Identifier)
+        self.versioning = Versioning[Identifier](Identifier)
         self.roots = []
         self.broadcast_operations = {}
         return None
@@ -180,7 +181,7 @@ class BroadcastOptimizer():
 
         name = stmt.stream_name.name
         root = self.broadcast_operations[name]
-        
+
         if x_start == root[0] and y_start == root[1] and x_stop == root[0] + 1 and y_stop == root[1] + 1:
             send = SendStatement(
                 local_array=stmt.local_array,
@@ -214,12 +215,6 @@ class BroadcastOptimizer():
                 for replaced_stmt in replaced_stmts:
                     new_body.append(replaced_stmt)
             input_stmt.body = new_body
-
-        # uses if_true and if_false
-        elif isinstance(stmt, TernaryOperator):
-            print("TODO: TernaryOperator")
-            print(stmt)
-
         return [input_stmt]
 
 

@@ -1,9 +1,9 @@
-from spatialstencil.syntax.spatial_ir.irnodes import Kernel, ComputeBlock, ReduceStatement, Expression, SubgridExpression, RangeExpression, ConstantLiteral, ScalarType, DataflowBlock, MulStreamDeclaration, ReduceRoutingDeclaration, RoutingDeclaration, RoutingHop, StreamType, Identifier, TypedIdentifier, ForeachStatement, ArraySlice, BinaryOperator, SendStatement, ReceiveGenerator, AssignmentStatement, RelativeStreamDeclaration, PlaceBlock, Phase, Parameter, KernelArgument, ReceiveStatement, ForStatement,FieldDeclaration,ArrayType, MapStatement, AsyncBlock, TernaryOperator
-from typing import Union, Tuple, Optional, Literal
-import spatialstencil.syntax.spatial_ir.irnodes as spa
+from spatialstencil.syntax.spatial_ir.irnodes import (Kernel, ComputeBlock, ReduceStatement, Expression, SubgridExpression, RangeExpression, ConstantLiteral, ScalarType,
+                                                      DataflowBlock, MulStreamDeclaration, ReduceRoutingDeclaration, StreamType, TypedIdentifier, ForeachStatement, ArraySlice,
+                                                      BinaryOperator, SendStatement, ReceiveGenerator, AssignmentStatement, RelativeStreamDeclaration, PlaceBlock, Phase,
+                                                      Parameter, KernelArgument, ReceiveStatement, ForStatement, FieldDeclaration, ArrayType, MapStatement, AsyncBlock, Identifier)
+from typing import Union, Optional, Literal
 from spatialstencil.lowering.versioning import Versioning
-import types
-# TODO from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle
 
 
 class ReduceOptimizer():
@@ -23,7 +23,7 @@ class ReduceOptimizer():
         self.parameters = kernel.parameters
         self.arguments = kernel.arguments
         self.body = kernel.body
-        self.versioning = Versioning[spa.Identifier](spa.Identifier)
+        self.versioning = Versioning[Identifier](Identifier)
         self._communication_patterns = None
         self.reduce_operations = {}
         self.grid_streams = {}
@@ -566,12 +566,6 @@ class ReduceOptimizer():
                 for replaced_stmt in replaced_stmts:
                     new_body.append(replaced_stmt)
             input_stmt.body = new_body
-
-        # uses if_true and if_false
-        elif isinstance(stmt, TernaryOperator):
-            print("TODO: TernaryOperator")
-            print(stmt)
-
         return [input_stmt]
     
 
@@ -1193,9 +1187,7 @@ class ReduceOptimizer():
                             if isinstance(intermediate_stmt, ForeachStatement) or isinstance(intermediate_stmt, ForStatement) or isinstance(intermediate_stmt, MapStatement) or isinstance(intermediate_stmt, AsyncBlock):
                                 for element in intermediate_stmt.body:
                                     nodes.append(element)
-                            if isinstance(intermediate_stmt, TernaryOperator):
-                                pass
-                            if isinstance(intermediate_stmt, ReduceStatement):
+                            elif isinstance(intermediate_stmt, ReduceStatement):
                                 red_stmt.append(intermediate_stmt)
                             nodes.remove(intermediate_stmt)
 
