@@ -12,7 +12,7 @@ class ReduceOptimizer():
     arguments: list[KernelArgument]
     body: list[PlaceBlock | DataflowBlock | ComputeBlock | Phase]
     _communication_patterns: Optional[dict[str, dict[tuple[int, int], list[list[list[int]]]]]] = None
-    reduce_operations: dict[str, dict[str, Union[int, Literal['OP_SUM'], list[int]]]] = {}  # needs to be adapted
+    reduce_operations: dict[str, dict[str, Union[int, Literal['OP_SUM'], list[int]]]] = {}
     grid_streams: dict[str, list[list]] = {}
     snake_streams: dict[str, list[list]] = {}
     pipelined: dict[str, bool] = {}
@@ -115,6 +115,8 @@ class ReduceOptimizer():
         origin = self.reduce_operations[stmt.stream_name.name][4]
         complete_grid = [self.reduce_operations[stmt.stream_name.name][2], self.reduce_operations[stmt.stream_name.name][3]]
         send_identifier = self.reduce_operations[stmt.stream_name.name][5]
+
+        # send_amount is the length of the array that is being sent - needed for the custom for loop
         send_amount = self.reduce_operations[stmt.stream_name.name][6]
         if send_amount == None:
             for elem in self.body:
@@ -189,6 +191,7 @@ class ReduceOptimizer():
 
 
             else:
+                # pipelined
                 for con_list in connections:
                     for con in con_list[1]:
                         if (current_position[0] >= con[0] and current_position[1] <= con[1]
@@ -199,6 +202,7 @@ class ReduceOptimizer():
                                 pipelined_receive.append(con_list[0])
 
                 if pipelined_send != [] and pipelined_receive != []:
+                    # receive first then send
                     newstatements.append(
                         AssignmentStatement(
                             destination=self.versioning.next_version("pipeline_helper"),
@@ -294,6 +298,7 @@ class ReduceOptimizer():
                             )
                         )
                 elif pipelined_send == [] and pipelined_receive != []:
+                    # receive only
                     newstatements.append(
                         AssignmentStatement(
                             destination=self.versioning.next_version("pipeline_helper"),
@@ -381,6 +386,7 @@ class ReduceOptimizer():
                             )
                         )
                 elif pipelined_send != [] and pipelined_receive == []:
+                    # send only
                     send = self.create_send_statement(stmt, pipelined_send, 0)
                     newstatements.append(
                         ForStatement(
@@ -576,7 +582,7 @@ class ReduceOptimizer():
     def snake_communication_pattern(self, x_start, x_stop, y_start, y_stop, x, y, name, pipelined) -> None:
         communication = []
         if y == y_start:
-            if (y_stop - 1 - y_start) % 2 == 0:
+            if (y_stop - y_start) % 2 != 0:
 
                 # horizontal movement
                 if pipelined and x_stop - x_start > 2:
@@ -596,7 +602,7 @@ class ReduceOptimizer():
                         communication.append([x_start, x_stop, y_start + 1, y_stop - 1, 1 if x == x_start else -1, 0, 1, 1])
 
                 # vertical movement
-                # not dependent on pipelined as if we have a column it's already pipelined
+                # not dependent on pipelined as if we have a column it's already pipelined through the left and right edge being the same edge
                 if x == x_start:
                     # print('upper left corner odd')
                     if y_stop - y_start > 2:
@@ -644,7 +650,7 @@ class ReduceOptimizer():
                         communication.append([x_start, x_start + 1, y_start, y_stop, 0, -1, 1, 1])
 
         elif y == y_stop - 1:
-            if (y_stop - 1 - y_start) % 2 == 0:
+            if (y_stop - y_start) % 2 != 0:
 
                 # horizontal movement
                 if pipelined and x_stop - x_start > 2:
@@ -1020,6 +1026,7 @@ class ReduceOptimizer():
                         elif stmt.stream_name.name in self.snake_streams:
                             current_grid_streams = self.snake_streams[stmt.stream_name.name]
 
+                        # create intermediate datastructure to express all communication
                         for com in current_grid_streams:
                             newdataflobblocks.append([[com[0], com[1]], [com[2], com[3]],
                                 RelativeStreamDeclaration(
@@ -1182,6 +1189,8 @@ class ReduceOptimizer():
                 for stmt in elem.statements:
                     red_stmt = []
                     nodes = [stmt]
+
+                    # get all the reduce statements
                     while len(nodes) > 0:
                         for intermediate_stmt in nodes:
                             if isinstance(intermediate_stmt, ForeachStatement) or isinstance(intermediate_stmt, ForStatement) or isinstance(intermediate_stmt, MapStatement) or isinstance(intermediate_stmt, AsyncBlock):
@@ -1202,7 +1211,6 @@ class ReduceOptimizer():
                                 self.reduce_operations[stream_name][5] = tst
                                 break
 
-                        # test if stream_name is in grid_streams
                         if stmt.stream_name.name in self.grid_streams:
                             connections = self.grid_streams[stream_name]
                             
@@ -1225,8 +1233,7 @@ class ReduceOptimizer():
                                     reduce_connections.append(send)
 
                                 reduce_connections.append([root[0], root[0] + 1, root[1], root[1] + 1])
-
-                                # needs to be tested properly
+                                
                                 for com_grid in reduce_connections:
                                     to_remove = []
                                     for sub_grid in grid:
@@ -1277,8 +1284,6 @@ class ReduceOptimizer():
                                         new_grid.append([[i, i + 1], [j, j + 1]])
                                 grid = new_grid
 
-
-                # needs to be tested in combination with grid_streams
                 if self.snake_streams != {}:
                     new_grid = []
                     complete_grid = []
