@@ -970,7 +970,7 @@ class ReduceOptimizer():
                              f"[x_start, x_stop, y_start, y_stop] = [{x_start}, {x_stop}, {y_start}, {y_stop}] for the operation {name}.")
         communication = []
         self.pipelined.update({name : False})
-        mode = algorithm if algorithm != 'auto' else 'snake'
+        mode = algorithm if algorithm != 'auto' else 'grid'
         if mode == 'snake':
             self.snake_communication_pattern(x_start, x_stop, y_start, y_stop, x, y, name, pipelined)
 
