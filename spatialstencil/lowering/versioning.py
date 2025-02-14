@@ -21,3 +21,10 @@ class Versioning(Generic[T]):
         version = self._var_counter[name]
         self._var_counter[name] += 1
         return self.cls(name, version)
+    
+
+    def current_version(self, name: str) -> T:
+        """
+        Gets the current version of a variable name.
+        """
+        return self.cls(name, self._var_counter[name])

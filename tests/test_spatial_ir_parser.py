@@ -1,4 +1,5 @@
 from spatialstencil.syntax.spatial_ir import irnodes as spast, parser
+from spatialstencil.optimizations.optimization_pass import optimization_pass
 import os
 
 
@@ -93,7 +94,8 @@ def _rountrip_test(file):
     :return:
     """
     program = parser.parse_file(file)
-    ir_1 = program.as_ir()
+    program_optimized = optimization_pass(program)
+    ir_1 = program_optimized.as_ir()
     program2 = parser.parse_string(ir_1)
     ir_2 = program2.as_ir()
     assert ir_1 == ir_2
@@ -106,6 +108,7 @@ def test_spatial_roundtrip_two_phase_unrouted():
 def test_spatial_roundtrip_two_phase_split():
     file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spatial', 'two_phase_split.sptl')
     _rountrip_test(file)
+
 
 
 if __name__ == '__main__':
