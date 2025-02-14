@@ -21,7 +21,6 @@ def _tiling_test(file):
     program = parser.parse_file(file)
     program_optimized = optimization_pass(program)
     ir_1 = program_optimized.as_ir()
-    #print(ir_1)
 
     ir_ref = _load_ref_file(file)
     num_dataflow = ir_ref[-1]
@@ -53,8 +52,16 @@ def test_simple_reduce_grid_pipelined_1():
     file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'collective', 'simple_reduce_grid_pipelined_1.sptl')
     _tiling_test(file)
 
+def test_simple_reduce_grid_pipelined_2():
+    file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'collective', 'simple_reduce_grid_pipelined_2.sptl')
+    _tiling_test(file)
+
 def test_simple_reduce_grid_1():
     file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'collective', 'simple_reduce_grid_1.sptl')
+    _tiling_test(file)
+
+def test_simple_reduce_grid_2():
+    file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'collective', 'simple_reduce_grid_2.sptl')
     _tiling_test(file)
 
 def test_simple_reduce_snake_pipelined_1():
@@ -89,7 +96,9 @@ def test_hard_reduce_3():
 if __name__ == '__main__':
     test_simple_bcast()
     test_simple_reduce_grid_pipelined_1()
+    test_simple_reduce_grid_pipelined_2()
     test_simple_reduce_grid_1()
+    test_simple_reduce_grid_2()
     test_simple_reduce_snake_pipelined_1()
     test_simple_reduce_snake_1()
     test_simple_reduce_looped()
