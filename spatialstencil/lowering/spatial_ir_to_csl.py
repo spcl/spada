@@ -160,6 +160,8 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
         elif task.task_type == 'data':
             _generate_data_task(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map)
 
+        footer.write(f'    @bind_{task.task_type}_task(task_{task.task_id}, task_{task.task_id}_id);\n')
+
         # Make sure to block tasks
         if task.blocked:
             footer.write(f'    @block(task_{task.task_id}_id);\n')
@@ -167,11 +169,14 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
     # Write entry point code
     current_code.write(f'''\nfn {kernel.name}({", ".join(scalar_arguments)}) void {{
 ''')
-    # for task in source_tasks:
-    #     current_code.write(f'    @activate({task});\n')
+    non_source_tasks = set(n for t in tasks for n, _ in t.outgoing)
+    source_tasks = set(t.task_id for t in tasks) - non_source_tasks
+    for task in source_tasks:
+        current_code.write(f'    @activate(task_{task}_id);\n')
     current_code.write('}\n')
 
     current_code.write(f'''
+const exit_task_id = @get_local_task_id({csl.EXIT_TASK_ID});
 task exit_task() void {{
     // On completion, unblock command stream
     sys_mod.unblock_cmd_stream();
@@ -360,8 +365,11 @@ def _generate_data_task(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
     #   * If index is requested: before unblocking task, set k; inc at end of task
     #   * Wavelet-triggered task as fallback
     assert task.task_type == 'data'
+    assert len(task.statements) == 1
 
-    pass
+    stmt = task.statements[0]
+    next_task, itedge = task.outgoing[0]
+    # print(task)
 
 
 def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringIO, header: StringIO, footer: StringIO,
@@ -388,7 +396,21 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
     #    * @map as a fallback
     # if ``foreach``, has to be a DSD operation
     assert task.task_type == 'local'
-    pass
+
+    for stmt, (next_task, itedge) in zip(task.statements, task.outgoing):
+        # TODO: Write op contents, if DSD or asynchronous, continue
+
+        # If not DSD or asynchronous op, activate/unblock must be called after the generated operation code
+        if itedge in (tdag.InterTaskEdge.ACTIVATE, tdag.InterTaskEdge.UNBLOCK):
+            # Determine task ID
+            if next_task == -1:
+                task_id = 'exit_task_id'
+            else:
+                task_id = f'task_{next_task}_id'
+            if itedge == tdag.InterTaskEdge.ACTIVATE:
+                current_code.write(f'    @activate({task_id});\n')
+            elif itedge == tdag.InterTaskEdge.UNBLOCK:
+                current_code.write(f'    @unblock({task_id});\n')
 
 
 def _collect_identifier_types(rect: PEBlock) -> dict[spir.Identifier, spir.IRType]:

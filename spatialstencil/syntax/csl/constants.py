@@ -14,10 +14,12 @@ DATA_TASK_IDS = _CSL_DATA_TASK_IDS[ARCH]
 
 # From the SDK: IDs 29 and 30 should generally be avoided in programs as they are used for system tasks.
 # https://sdk.cerebras.net/csl/language/task-ids?highlight=color#activatable-identifiers
+# NOTE: We also avoid task ID 28 as we reserve it for ``exit_task``
 _CSL_LOCAL_TASK_IDS = {
-    'wse2': list(range(0, 29)),
-    'wse3': list(range(8, 29)),
+    'wse2': list(range(0, 28)),
+    'wse3': list(range(8, 28)),
 }
+EXIT_TASK_ID = 28
 LOCAL_TASK_IDS = _CSL_LOCAL_TASK_IDS[ARCH]
 
 _CSL_CONTROL_TASK_IDS = {

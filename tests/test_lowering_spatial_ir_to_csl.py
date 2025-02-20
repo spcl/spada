@@ -82,6 +82,6 @@ if __name__ == '__main__':
     test_non_concrete_program()
     test_add()
     test_reduce()
-    test_laplacian()
     test_two_phase_split()
+    test_laplacian()
     test_forward_sum()

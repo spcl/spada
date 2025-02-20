@@ -300,7 +300,7 @@ def create_csl_tasks(completion_dag: nx.DiGraph, block: spir.ComputeBlock, dtype
         # Create a new task
         task_id = len(result)
         cnode_to_task_id[cnode] = task_id
-        current_task = CSLTask(task_id, this_task_type, [], [], blocked=(indeg > 0))
+        current_task = CSLTask(task_id, this_task_type, [], [], blocked=(indeg > 1))
         result.append(current_task)
         statement_id_to_task_id[cnode.statement_id] = task_id
 
