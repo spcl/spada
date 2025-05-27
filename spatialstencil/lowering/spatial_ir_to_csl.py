@@ -463,3 +463,15 @@ def name_to_csl(name: spir.Identifier) -> str:
         return name.name
     else:
         return f'{name.name}__{name.version}'
+
+
+def generate_memcpys():
+    # Do seprately for h2d and d2h
+    # On the host, memcopied buffers are always internally 3D. Source arrays can be any-dimensional
+    # Step 1: Find bounding box rectangles (think place-interleaved PE equivalence classes)
+    # Step 2: Pad ``place`` storage according to the max in rectangle (usually K)
+    # Step 3: Create internal 3D array B' - shape = PE rectangle shape (even if it's one value, it's a 3D array with
+    #         last dim = 1)
+    # On host: B'[i, j, :] = B[a(i,j),b(i,j),...]; then memcpy_{h2d,d2h}(B')
+    # Memcpy shape ignores shape of src array, always the shape is the shape of ``place``
+    pass
