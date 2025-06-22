@@ -475,3 +475,4 @@ def generate_memcpys():
     # On host: B'[i, j, :] = B[a(i,j),b(i,j),...]; then memcpy_{h2d,d2h}(B')
     # Memcpy shape ignores shape of src array, always the shape is the shape of ``place``
     pass
+

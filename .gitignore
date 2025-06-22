@@ -156,3 +156,4 @@ cython_debug/
 /.vscode/
 *.png
 /*.dot
+wslenv/

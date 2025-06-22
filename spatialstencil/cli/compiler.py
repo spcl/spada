@@ -1,0 +1,77 @@
+import click
+import os
+from spatialstencil.lowering import spatial_ir_to_csl as s2c
+from spatialstencil.syntax.spatial_ir import parser, passes
+import subprocess
+
+
+@click.command()
+@click.argument('input_file', type=click.Path(exists=True, dir_okay=False))
+@click.argument('output_folder', type=click.Path(dir_okay=True))
+@click.option('--param', '-p', multiple=True, help='Kernel parameters in key=value format')
+@click.option('--offset-x', '-x', default=0, type=int, help='Offset for rectangular region in x direction')
+@click.option('--offset-y', '-y', default=0, type=int, help='Offset for rectangular region in y direction')
+@click.option('--generate-only', '-g', is_flag=True, help='Only generate the output files without compiling them')
+def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], offset_x: int, offset_y: int,
+                       generate_only: bool):
+    # Parse parameters into dictionary
+    kernel_parameters = {}
+    for p in param:
+        if '=' not in p:
+            raise ValueError(f'Invalid parameter format: {p}. Expected key=value')
+        key, value = p.split('=', 1)
+        # Try to parse as int, then float, otherwise keep as string
+        try:
+            kernel_parameters[key] = int(value)
+        except ValueError:
+            try:
+                kernel_parameters[key] = float(value)
+            except ValueError:
+                kernel_parameters[key] = value
+
+    kernel = parser.parse_file(input_file)
+    # If there are unconcretized parameters, we need to concretize them
+    non_concrete_parameters = {param.name for param in kernel.parameters if param.value is None}
+    non_concrete_parameters -= set(kernel_parameters.keys())
+    if non_concrete_parameters:
+        raise ValueError(f'Kernel has non-concrete parameters: {", ".join(non_concrete_parameters)}.\n'
+                         'Please provide values for them using --param option. For example: -p I=128 -p J=128 -p K=80')
+
+    # Concretize parameters and propagate constant expressions
+    print("Concretizing parameters:", kernel_parameters)
+    kernel = passes.concretize_parameters(kernel, **kernel_parameters)
+    kernel = passes.constexpr_propagation(kernel)
+
+    # Lower the spatial IR to CSL
+    csl_files = s2c.lower_spatial_ir_to_csl(kernel)
+
+    # Create output folder if it doesn't exist
+    os.makedirs(output_folder, exist_ok=True)
+    for f in csl_files:
+        output_path = os.path.join(output_folder, f.filename)
+        with open(output_path, 'w') as out_file:
+            out_file.write(f.code)
+
+    if generate_only:
+        print("Generated output files without compiling.")
+        return
+
+    # Compile the generated CSL files using the cslc command (and change the cwd to the output folder)
+    # Get the fabric dimensions from the kernel and offsets from the command line arguments
+    # Command: cslc layout.csl --fabric-dims=16,16 --fabric-offsets=0,0 --memcpy --channels=1
+    xbegin, xend, ybegin, yend = kernel.get_grid_rect()
+    memcpy_channels = 1  # TODO: Determine the number of memcpy channels based on the kernel arguments
+    cslc_command = [
+        'cslc', 'layout.csl', f'--fabric-dims={xend - xbegin},{yend - ybegin}',
+        f'--fabric-offsets={offset_x + xbegin},{offset_y + ybegin}', '--memcpy', f'--channels={memcpy_channels}'
+    ]
+    print("Compiling with command:", ' '.join(cslc_command))
+    try:
+        subprocess.run(cslc_command, cwd=output_folder, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Compilation failed with error: {e}")
+        exit(e.returncode)
+
+
+if __name__ == '__main__':
+    compile_spatial_ir()

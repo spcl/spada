@@ -38,6 +38,8 @@ def to_completion_dag(compute: spir.ComputeBlock) -> nx.DiGraph:
         node: CompletionDAGNode
         completion_node: CompletionDAGNode | None = None
 
+        # TODO: If seeing foreach or for and communication is inside, raise NotImplementedError
+
         # awaitall
         if isinstance(stmt, spir.AwaitAllStatement):
             # If there is nothing to wait for, skip node
