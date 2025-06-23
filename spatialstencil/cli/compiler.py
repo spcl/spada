@@ -1,7 +1,9 @@
 import click
+import json
 import os
 from spatialstencil.lowering import spatial_ir_to_csl as s2c
-from spatialstencil.syntax.spatial_ir import parser, passes
+from spatialstencil.syntax.spatial_ir import parser, passes, analysis, irnodes as spa
+from spatialstencil.syntax.common import serialization
 import subprocess
 
 
@@ -42,6 +44,11 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     kernel = passes.concretize_parameters(kernel, **kernel_parameters)
     kernel = passes.constexpr_propagation(kernel)
 
+    # Change all shapes to be lists of integers
+    for arg in kernel.arguments:
+        if hasattr(arg.dtype, 'shape'):
+            arg.dtype.shape = [dim.eval() if isinstance(dim, spa.Expression) else int(dim) for dim in arg.dtype.shape]
+
     # Lower the spatial IR to CSL
     csl_files = s2c.lower_spatial_ir_to_csl(kernel)
 
@@ -51,6 +58,16 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         output_path = os.path.join(output_folder, f.filename)
         with open(output_path, 'w') as out_file:
             out_file.write(f.code)
+
+    # Generate metadata.json file
+    input_args, output_args = analysis.get_kernel_stream_arguments(kernel)
+    metadata = {
+        'kernel_name': kernel.name,
+        'inputs': input_args,
+        'outputs': output_args,
+        "argument_order": [a.identifier.name for a in kernel.arguments],
+    }
+    serialization.save_to_json(metadata, os.path.join(output_folder, 'metadata.json'))
 
     if generate_only:
         print("Generated output files without compiling.")

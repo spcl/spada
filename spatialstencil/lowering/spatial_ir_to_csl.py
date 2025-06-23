@@ -448,7 +448,7 @@ def dtype_as_csl(dtype: spir.ScalarType | spir.StreamType | spir.ArrayType) -> s
     if isinstance(dtype, spir.StreamType):
         return dtype.element_type.as_ir()
     if isinstance(dtype, spir.ArrayType):
-        shape = f'[{", ".join(s.as_ir() for s in dtype.shape)}]' if len(dtype.shape) > 0 else ''
+        shape = f'[{", ".join(str(s) if isinstance(s, int) else s.as_ir() for s in dtype.shape)}]' if len(dtype.shape) > 0 else ''
         return shape + dtype_as_csl(dtype.base_type)
 
 

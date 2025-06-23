@@ -157,3 +157,35 @@ def sends_and_receives(compute: spir.ComputeBlock) -> dict[spir.Identifier, tupl
     collector.visit(compute)
     all_identifiers = {k for k in collector.sends | collector.receives}
     return {k: (k in collector.sends, k in collector.receives) for k in all_identifiers}
+
+
+def get_kernel_stream_arguments(
+        kernel: spir.Kernel) -> tuple[dict[str, tuple[str, list[int]]], dict[str, tuple[str, list[int]]]]:
+    """
+    Returns two dictionaries:
+    1. A dictionary mapping input stream names to their data types and shapes.
+    2. A dictionary mapping output stream names to their data types and shapes.
+    """
+    input_streams = {}
+    output_streams = {}
+    for arg in kernel.arguments:
+        if arg.compiletime:
+            continue
+
+        shape = []
+        if isinstance(arg.dtype, spir.ArrayType):
+            for dim in arg.dtype.shape:
+                if isinstance(dim, int):
+                    shape.append(dim)
+                else:
+                    shape.append(dim.eval())
+
+        if arg.readonly:
+            input_streams[arg.identifier.name] = arg.dtype
+        elif arg.writeonly:
+            output_streams[arg.identifier.name] = arg.dtype
+        else:
+            input_streams[arg.identifier.name] = arg.dtype
+            output_streams[arg.identifier.name] = arg.dtype
+
+    return input_streams, output_streams
