@@ -7,7 +7,7 @@ import os
 import json
 import enum
 from dataclasses import dataclass
-from typing import Union, List, Optional
+from typing import Union, List, Optional, Dict
 from spatialstencil.syntax.common.serialization import (DataclassEncoder, dataclass_decoder, save_to_json,
                                                         load_from_json)
 
@@ -87,6 +87,14 @@ class OptionalFields:
     required_field: str
     optional_shape: Optional[Union[Circle, Rectangle]] = None
     default_color: Color = Color.RED
+
+
+@dataclass
+class DictContainer:
+    """Test dictionary fields with union types as values."""
+    shape_registry: Dict[str, Union[Circle, Rectangle, Triangle]]
+    config_map: Dict[Color, Union[str, int]]
+    name: str
 
 
 class TestSerialization(unittest.TestCase):
@@ -381,6 +389,77 @@ class TestSerialization(unittest.TestCase):
         self.assertEqual(len(restored.shapes), 0)
         self.assertEqual(restored.title, "Empty Drawing")
         self.assertEqual(restored.background_color, Color.RED)
+
+    def test_dict_with_union_values(self):
+        """Test serialization of dictionaries with union type values."""
+        # Create various shapes
+        circle = Circle(Point(1, 2), 3.0, Color.RED)
+        rectangle = Rectangle(Point(4, 5), 6, 7, Color.GREEN)
+        triangle = Triangle(Point(8, 9), Point(10, 11), Point(12, 13), Color.BLUE)
+
+        # Create dictionary container with union values
+        dict_container = DictContainer(
+            shape_registry={
+                "my_circle": circle,
+                "my_rectangle": rectangle,
+                "my_triangle": triangle
+            },
+            config_map={
+                Color.RED: "primary",
+                Color.GREEN: 42,
+                Color.BLUE: "secondary"
+            },
+            name="Test Container")
+
+        # Serialize to JSON
+        json_str = json.dumps(dict_container, cls=DataclassEncoder)
+        parsed = json.loads(json_str)
+
+        # Verify the JSON structure contains type information for union values
+        self.assertEqual(parsed['__dataclass_type__'], 'DictContainer')
+        self.assertEqual(parsed['name'], "Test Container")
+
+        # Check shape registry
+        shape_registry = parsed['shape_registry']
+        self.assertEqual(shape_registry['my_circle']['__dataclass_type__'], 'Circle')
+        self.assertEqual(shape_registry['my_rectangle']['__dataclass_type__'], 'Rectangle')
+        self.assertEqual(shape_registry['my_triangle']['__dataclass_type__'], 'Triangle')
+
+        # Check config map - enum keys should be serialized as names
+        config_map = parsed['config_map']
+        self.assertIn('RED', config_map)
+        self.assertIn('GREEN', config_map)
+        self.assertIn('BLUE', config_map)
+        self.assertEqual(config_map['RED'], "primary")
+        self.assertEqual(config_map['GREEN'], 42)
+        self.assertEqual(config_map['BLUE'], "secondary")
+
+        # Test round-trip deserialization
+        decoder = dataclass_decoder(DictContainer)
+        restored_container = decoder(parsed)
+
+        # Verify the restored object
+        self.assertIsInstance(restored_container, DictContainer)
+        self.assertEqual(restored_container.name, "Test Container")
+
+        # Verify shape registry
+        self.assertEqual(len(restored_container.shape_registry), 3)
+        self.assertIsInstance(restored_container.shape_registry['my_circle'], Circle)
+        self.assertIsInstance(restored_container.shape_registry['my_rectangle'], Rectangle)
+        self.assertIsInstance(restored_container.shape_registry['my_triangle'], Triangle)
+
+        # Verify specific shape properties
+        restored_circle = restored_container.shape_registry['my_circle']
+        self.assertEqual(restored_circle.radius, 3.0)
+        self.assertEqual(restored_circle.color, Color.RED)
+        self.assertEqual(restored_circle.center.x, 1)
+        self.assertEqual(restored_circle.center.y, 2)
+
+        # Verify config map
+        self.assertEqual(len(restored_container.config_map), 3)
+        self.assertEqual(restored_container.config_map[Color.RED], "primary")
+        self.assertEqual(restored_container.config_map[Color.GREEN], 42)
+        self.assertEqual(restored_container.config_map[Color.BLUE], "secondary")
 
 
 if __name__ == '__main__':

@@ -16,18 +16,18 @@ class DataclassEncoder(json.JSONEncoder):
         if isinstance(obj, enum.Enum):
             return obj.name
         return super().default(obj)
-    
+
     def _convert_dataclass(self, obj):
         """Convert a dataclass to dict, recursively handling nested dataclasses."""
         result = {}
         result['__dataclass_type__'] = obj.__class__.__name__
-        
+
         for field in dataclasses.fields(obj):
             field_value = getattr(obj, field.name)
             result[field.name] = self._convert_value(field_value)
-        
+
         return result
-    
+
     def _convert_value(self, value):
         """Convert a value, handling dataclasses, enums, lists recursively."""
         if dataclasses.is_dataclass(value):
@@ -37,7 +37,9 @@ class DataclassEncoder(json.JSONEncoder):
         elif isinstance(value, list):
             return [self._convert_value(item) for item in value]
         elif isinstance(value, dict):
-            return {k: self._convert_value(v) for k, v in value.items()}
+            # Convert dictionary keys and values recursively
+            # JSON keys must be strings, so convert enum keys to their names
+            return {(k.name if isinstance(k, enum.Enum) else k): self._convert_value(v) for k, v in value.items()}
         else:
             return value
 
@@ -47,10 +49,9 @@ def dataclass_decoder(dataclass_type: Type[T]) -> callable:
     def decode_dataclass(obj: Dict[str, Any]) -> T:
         # Make a copy to avoid modifying the original
         obj_copy = obj.copy()
-        
+
         # Remove the type marker as it's not needed for instantiation
         obj_copy.pop('__dataclass_type__', None)
-        
         # Handle nested dataclasses if needed
         for field in dataclasses.fields(dataclass_type):
             field_name = field.name
@@ -65,6 +66,9 @@ def dataclass_decoder(dataclass_type: Type[T]) -> callable:
                 # Handle lists that might contain dataclasses or unions
                 elif _is_list_type(field.type):
                     obj_copy[field_name] = _decode_list_field(obj_copy[field_name], field.type)
+                # Handle dicts that might contain dataclasses or unions
+                elif _is_dict_type(field.type):
+                    obj_copy[field_name] = _decode_dict_field(obj_copy[field_name], field.type)
                 # Convert enum fields if necessary
                 elif isinstance(field.type, type) and issubclass(field.type, enum.Enum):
                     if isinstance(obj_copy[field_name], str):
@@ -83,6 +87,12 @@ def _is_list_type(field_type) -> bool:
     """Check if a field type is a List type."""
     origin = get_origin(field_type)
     return origin is list or (hasattr(field_type, '__name__') and field_type.__name__ == 'list')
+
+
+def _is_dict_type(field_type) -> bool:
+    """Check if a field type is a Dict type."""
+    origin = get_origin(field_type)
+    return origin is dict or (hasattr(field_type, '__name__') and field_type.__name__ == 'dict')
 
 
 def _decode_union_field(value: Any, union_type: Type) -> Any:
@@ -128,6 +138,41 @@ def _decode_list_field(value: list, list_type: Type) -> list:
             result.append(element_type[item])
         else:
             result.append(item)
+
+    return result
+
+
+def _decode_dict_field(value: dict, dict_type: Type) -> dict:
+    """Decode a field that has a Dict type annotation."""
+    if not value:
+        return value
+
+    # Get the key and value types of the dict
+    args = get_args(dict_type)
+    if not args or len(args) < 2:
+        return value
+
+    key_type, value_type = args[0], args[1]
+    result = {}
+
+    for k, v in value.items():
+        # Decode the key if necessary (usually keys are strings, but could be enums)
+        decoded_key = k
+        if isinstance(key_type, type) and issubclass(key_type, enum.Enum):
+            decoded_key = key_type[k]
+
+        # Decode the value based on its type
+        if _is_union_type(value_type):
+            decoded_value = _decode_union_field(v, value_type)
+        elif dataclasses.is_dataclass(value_type):
+            decoder = dataclass_decoder(value_type)
+            decoded_value = decoder(v)
+        elif isinstance(value_type, type) and issubclass(value_type, enum.Enum):
+            decoded_value = value_type[v]
+        else:
+            decoded_value = v
+
+        result[decoded_key] = decoded_value
 
     return result
 
