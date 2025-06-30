@@ -86,8 +86,14 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     try:
         subprocess.run(cslc_command, cwd=output_folder, check=True)
     except subprocess.CalledProcessError as e:
-        print(f"Compilation failed with error: {e}")
+        print(f"\033[91mCompilation failed with error:\033[0m {e}")
         exit(e.returncode)
+
+    print("\033[92mCompilation successful.\033[0m "
+          "To run the program, use the Cerebras SDK python runtime with npy files as arguments:")
+    runtime_path = os.path.abspath(os.path.join(os.path.dirname(__file__), *("..", "runtime", "runtime.py")))
+    args_str = ' '.join(f"{arg}.npy" for arg in metadata["argument_order"] if arg in input_args)
+    print(f"cs_python {runtime_path} {output_folder} {args_str}")
 
 
 if __name__ == '__main__':
