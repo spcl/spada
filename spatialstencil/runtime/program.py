@@ -1,21 +1,48 @@
 from dataclasses import dataclass
 import json
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Union
 import numpy as np
 
-from spatialstencil.syntax.common.serialization import load_from_json
-from spatialstencil.syntax.spatial_ir import irnodes as spa
+
+@dataclass
+class ArrayType:
+    """Type for array arguments."""
+    shape: List[int]
+    dtype: str  # One of f32, f16, i32, u32, etc.
 
 
 @dataclass
 class ProgramMetadata:
     """Metadata for a compiled program."""
     kernel_name: str
-    inputs: Dict[str, Union[spa.ArrayType, spa.ScalarType, spa.StreamType]]
-    outputs: Dict[str, Union[spa.ArrayType, spa.ScalarType, spa.StreamType]]
+    inputs: Dict[str, ArrayType]
+    outputs: Dict[str, ArrayType]
     argument_order: List[str]
+
+    @classmethod
+    def from_json(cls, json_data: Union[str, Dict[str, Any]]) -> 'ProgramMetadata':
+        """
+        Create a ProgramMetadata instance from JSON data.
+        
+        :param json_data: JSON string or dictionary containing metadata
+        :return: ProgramMetadata instance
+        """
+        if isinstance(json_data, str):
+            try:
+                json_data = json.loads(json_data)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON data: {e}")
+
+        return cls(
+            kernel_name=json_data.get("kernel_name", ""),
+            inputs={
+                k: ArrayType(**v) for k, v in json_data.get("inputs", {}).items()
+            },
+            outputs={
+                k: ArrayType(**v) for k, v in json_data.get("outputs", {}).items()
+            },
+            argument_order=json_data.get("argument_order", []))
 
 
 class Program:
@@ -35,7 +62,10 @@ class Program:
         if not metadata_path.exists():
             raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
 
-        self.metadata = load_from_json(ProgramMetadata, metadata_path)
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+
+        self.metadata = ProgramMetadata.from_json(metadata)
 
         # Initialize SDK runtime
         try:

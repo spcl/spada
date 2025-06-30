@@ -180,12 +180,17 @@ def get_kernel_stream_arguments(
                 else:
                     shape.append(dim.eval())
 
+        arg_as_dict = {
+            "dtype": arg.dtype.element_type.element_type.element_type.element_type.as_ir(),
+            "shape": shape
+        }
+
         if arg.readonly:
-            input_streams[arg.identifier.name] = arg.dtype
+            input_streams[arg.identifier.name] = arg_as_dict
         elif arg.writeonly:
-            output_streams[arg.identifier.name] = arg.dtype
+            output_streams[arg.identifier.name] = arg_as_dict
         else:
-            input_streams[arg.identifier.name] = arg.dtype
-            output_streams[arg.identifier.name] = arg.dtype
+            input_streams[arg.identifier.name] = arg_as_dict
+            output_streams[arg.identifier.name] = arg_as_dict
 
     return input_streams, output_streams
