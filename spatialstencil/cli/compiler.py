@@ -78,6 +78,12 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     # Command: cslc layout.csl --fabric-dims=16,16 --fabric-offsets=0,0 --memcpy --channels=1
     xbegin, xend, ybegin, yend = kernel.get_grid_rect()
     memcpy_channels = 1  # TODO: Determine the number of memcpy channels based on the kernel arguments
+    if memcpy_channels >= 0:
+        xbegin += 4
+        xend += 4*3
+        ybegin += 1
+        yend += 1*3
+
     cslc_command = [
         'cslc', 'layout.csl', f'--fabric-dims={xend - xbegin},{yend - ybegin}',
         f'--fabric-offsets={offset_x + xbegin},{offset_y + ybegin}', '--memcpy', f'--channels={memcpy_channels}'
@@ -91,7 +97,7 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
 
     print("\033[92mCompilation successful.\033[0m "
           "To run the program, use the Cerebras SDK python runtime with npy files as arguments:")
-    runtime_path = os.path.abspath(os.path.join(os.path.dirname(__file__), *("..", "runtime", "runtime.py")))
+    runtime_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "runtime", "runtime.py"))
     args_str = ' '.join(f"{arg}.npy" for arg in metadata["argument_order"] if arg in input_args)
     print(f"cs_python {runtime_path} {output_folder} {args_str}")
 
