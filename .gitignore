@@ -158,3 +158,8 @@ cython_debug/
 /*.dot
 wslenv/
 /bla*/
+sim_stats.json
+simconfig.json
+simfab_traces/
+*.npy
+wio_flow.json

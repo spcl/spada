@@ -1,3 +1,4 @@
+import argparse
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -132,8 +133,8 @@ class Program:
         self.runtime = SdkRuntime(str(self.out_folder))
 
         # Store input/output information from metadata
-        self.inputs = self.metadata.get("inputs", {})
-        self.outputs = self.metadata.get("outputs", {})
+        self.inputs = self.metadata.inputs
+        self.outputs = self.metadata.outputs
 
     def __call__(self, *args, **kwargs) -> Dict[str, np.ndarray]:
         """
@@ -146,12 +147,12 @@ class Program:
         from cerebras.sdk.runtime.sdkruntimepybind import MemcpyDataType, MemcpyOrder  # pylint: disable=no-name-in-module
 
         # Use argument_order from metadata if available
-        if self.metadata.argument_order and len(args) == len(self.metadata.argument_order):
+        if self.metadata.argument_order and len(args) == len(self.inputs):
             if len(kwargs) > 0:
                 raise ValueError("Cannot provide both positional and keyword arguments.")
             kwargs = {name: value for name, value in zip(self.metadata.argument_order, args)}
-        if len(args) + len(kwargs) < len(self.metadata.argument_order):
-            raise ValueError(f"Expected {len(self.metadata.argument_order)} arguments, got {len(args) + len(kwargs)}")
+        if len(args) + len(kwargs) < len(self.inputs):
+            raise ValueError(f"Expected {len(self.inputs)} arguments, got {len(args) + len(kwargs)}")
 
         # Validate inputs
         for input_name in self.inputs:
@@ -171,35 +172,28 @@ class Program:
                 data = np.array(data, dtype=dtype_to_numpy[self.inputs[name]["dtype"]])
 
             # Validate shape if specified in metadata
-            if "shape" in self.inputs[name]:
-                expected_shape = tuple(self.inputs[name]["shape"])
-                if data.shape != expected_shape:
-                    raise ValueError(f"Input {name} has wrong shape. Expected {expected_shape}, got {data.shape}")
+            expected_shape = tuple(self.inputs[name].shape)
+            if data.shape != expected_shape:
+                raise ValueError(f"Input {name} has wrong shape. Expected {expected_shape}, got {data.shape}")
 
             # Use flatten_copy to copy data to device
-            shape = self.inputs[name].shape if isinstance(self.inputs[name], ArrayType) else []
-            if not shape:
-                shape = list(data.shape)
-
-            # Copy data to device
-            flatten_copy(name, data, shape, self.runtime)
+            flatten_copy(name, data, expected_shape, self.runtime)
 
         # Run the program
-        func_name = self.metadata.get("function_name", "main")
-        self.runtime.launch(func_name, nonblock=False)
+        self.runtime.launch(self.metadata.kernel_name, nonblock=False)
 
         # Copy outputs back from device
         results = {}
         for output_name, output_info in self.outputs.items():
             # Get output shape from metadata
-            shape = tuple(output_info.get("shape", []))
-            dtype = dtype_to_numpy.get(output_info["dtype"], np.float32)
+            shape = output_info.shape
+            dtype = dtype_to_numpy.get(output_info.dtype, np.float32)
 
             # Allocate buffer for output
             output_data = np.zeros(shape, dtype=dtype)
 
             # Copy data from device
-            copy_unflatten(output_name, output_data, self.runtime)
+            copy_unflatten(output_name, output_data, shape, self.runtime)
             results[output_name] = output_data
 
         self.runtime.stop()
@@ -208,15 +202,25 @@ class Program:
 
 
 if __name__ == "__main__":
-    # Example usage
-    program = Program("bla")
 
-    # Prepare input data
-    a = np.random.rand(256, 256, 80).astype(np.float32)
-    b = np.random.rand(256, 256, 80).astype(np.float32)
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description="Run a compiled program with numpy array inputs")
+    parser.add_argument("program_folder", help="Path to the program folder")
+    parser.add_argument("input_files", nargs="+", help="Input .npy files for the program")
 
-    # Run the program
-    outputs = program(a, b)  # Or use keyword arguments: program(a=a, b=b)
+    args = parser.parse_args()
+
+    # Load the program
+    program = Program(args.program_folder)
+
+    # Load input arrays from .npy files
+    inputs = []
+    for input_file in args.input_files:
+        data = np.load(input_file)
+        inputs.append(data)
+
+    # Run the program with loaded inputs
+    outputs = program(*inputs)
 
     # Print output shapes
     for name, output in outputs.items():
