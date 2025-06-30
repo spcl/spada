@@ -4,12 +4,30 @@ from pathlib import Path
 from typing import Any, Dict, List, Union
 import numpy as np
 
+########################################################
+# Serialization and Type Definitions
+########################################################
+
 
 @dataclass
 class ArrayType:
     """Type for array arguments."""
     shape: List[int]
     dtype: str  # One of f32, f16, i32, u32, etc.
+
+
+dtype_to_numpy = {
+    "i8": np.int8,
+    "u8": np.uint8,
+    "i16": np.int16,
+    "u16": np.uint16,
+    "f16": np.float16,
+    "i32": np.int32,
+    "u32": np.uint32,
+    "f32": np.float32,
+    "f64": np.float64,
+    "bool": np.bool_,
+}
 
 
 @dataclass
@@ -43,6 +61,44 @@ class ProgramMetadata:
                 k: ArrayType(**v) for k, v in json_data.get("outputs", {}).items()
             },
             argument_order=json_data.get("argument_order", []))
+
+
+########################################################
+# Copying and Flattening Utilities
+########################################################
+
+
+def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime):
+    """
+    Copy data to the device, flattening it if necessary.
+    This function assumes that the runtime has a method `memcpy_h2d` for copying.
+
+    :param name: Name of the tensor in the device memory
+    :param data: Numpy array to copy
+    :param shape: Shape of the data to be copied
+    :param runtime: The Cerebras SDK runtime object to perform the copy operation
+    """
+    # runtime.memcpy_h2d(name, data, ...)
+    pass
+
+
+def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime):
+    """
+    Copy data from the device, unflattening it if necessary.
+    This function assumes that the runtime has a method `memcpy_d2h` for copying.
+
+    :param name: Name of the tensor in the device memory
+    :param data: Numpy array to copy
+    :param shape: Shape of the data to be copied
+    :param runtime: The Cerebras SDK runtime object to perform the copy operation
+    """
+    # runtime.memcpy_d2h(name, data, ...)
+    pass
+
+
+########################################################
+# Program Class
+########################################################
 
 
 class Program:
@@ -110,10 +166,9 @@ class Program:
             if name not in self.inputs:
                 raise ValueError(f"Unexpected input: {name}")
 
-            # TODO: Use flatten_copy
             # Convert to numpy array if needed
             if not isinstance(data, np.ndarray):
-                data = np.array(data)
+                data = np.array(data, dtype=dtype_to_numpy[self.inputs[name]["dtype"]])
 
             # Validate shape if specified in metadata
             if "shape" in self.inputs[name]:
@@ -121,8 +176,13 @@ class Program:
                 if data.shape != expected_shape:
                     raise ValueError(f"Input {name} has wrong shape. Expected {expected_shape}, got {data.shape}")
 
+            # Use flatten_copy to copy data to device
+            shape = self.inputs[name].shape if isinstance(self.inputs[name], ArrayType) else []
+            if not shape:
+                shape = list(data.shape)
+
             # Copy data to device
-            self.runtime.memcpy_h2d(name, data, ...)
+            flatten_copy(name, data, shape, self.runtime)
 
         # Run the program
         func_name = self.metadata.get("function_name", "main")
@@ -133,15 +193,13 @@ class Program:
         for output_name, output_info in self.outputs.items():
             # Get output shape from metadata
             shape = tuple(output_info.get("shape", []))
-            total_size = np.prod(shape)
-            dtype = output_info.get("dtype", "float32")
+            dtype = dtype_to_numpy.get(output_info["dtype"], np.float32)
 
-            # TODO: Use copy_unflatten
             # Allocate buffer for output
             output_data = np.zeros(shape, dtype=dtype)
 
             # Copy data from device
-            self.runtime.memcpy_d2h(output_data, output_name, ...)
+            copy_unflatten(output_name, output_data, self.runtime)
             results[output_name] = output_data
 
         self.runtime.stop()
