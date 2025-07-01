@@ -168,7 +168,7 @@ where `T` is a scalar type, stream type, or stream array type.
 Notable, it is not possible to pass scalar arrays as arguments, instead,
 arrays must be read through streams.
 
-If an argument may be *only* read from or written to, it is marked as `readonly` or `writeonly`, respectively.
+If an argument may be *only* read from or written to, it is marked as `readonly` or `writeonly`, respectively. Stream arguments must be marked with either `readonly` or `writeonly`.
 
 ???+ example "Example: Kernel arguments"
     `stream<f32>[I, J] readonly arg1`, `stream<f32>[I, J] writeonly arg2`, `f32 arg3` are arguments.
