@@ -25,6 +25,9 @@ For any scalar type `T`,  `stream<T>` indicates the corresponding element type s
 Streams do not send a predetermined number of elements, but the sender and receiver must agree on the number of elements sent and received.
 This can be done explicitly (when the size is known from the parameters) or implicitly (by sending a completion signal with/after the last element).
 
+Kernel arguments that are streams may have a second template parameter `stream<T, K>`. If the second parameter is given, then
+exactly `K` elements are transferred over the stream. This is useful for enabling, e.g., memcpy mode in CSL.
+
 ### Arrays
 
 Any scalar or stream type `T` and one or more parameter expressions `S_1`, `S_2`, ... `S_d` may be used to create an array type `T[S_1, S_2, ... S_d]`.
