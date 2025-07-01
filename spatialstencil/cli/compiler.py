@@ -44,10 +44,34 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     kernel = passes.concretize_parameters(kernel, **kernel_parameters)
     kernel = passes.constexpr_propagation(kernel)
 
-    # Change all shapes to be lists of integers
+    # Argument checks
+    using_memcpy_mode = None
     for arg in kernel.arguments:
+        # Change all shapes to be lists of integers
         if hasattr(arg.dtype, 'shape'):
             arg.dtype.shape = [dim.eval() if isinstance(dim, spa.Expression) else int(dim) for dim in arg.dtype.shape]
+        # Ensure all stream arguments are readonly or writeonly
+        if not (arg.readonly or arg.writeonly):
+            raise ValueError(f"Argument '{arg.identifier.name}' must be either readonly or writeonly, "
+                             f"but it is neither. Please check the kernel definition.")
+        # Check if the argument is a stream and has a memcpy mode
+        if isinstance(arg.dtype, spa.ArrayType) and isinstance(arg.dtype.base_type, spa.StreamType):
+            if arg.dtype.base_type.buffer_size is not None:
+                if using_memcpy_mode is None:
+                    using_memcpy_mode = True
+                elif not using_memcpy_mode:
+                    raise ValueError("Kernel has both memcpy and non-memcpy stream arguments. "
+                                     "Please ensure all stream arguments are either memcpy or non-memcpy.")
+            else:
+                if using_memcpy_mode is None:
+                    using_memcpy_mode = False
+                elif using_memcpy_mode:
+                    raise ValueError("Kernel has both memcpy and non-memcpy stream arguments. "
+                                     "Please ensure all stream arguments are either memcpy or non-memcpy.")
+
+    if using_memcpy_mode is None:
+        # If no stream arguments are present, default to non-memcpy mode
+        using_memcpy_mode = False
 
     # Lower the spatial IR to CSL
     csl_files = s2c.lower_spatial_ir_to_csl(kernel)
@@ -62,10 +86,11 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     # Generate metadata.json file
     input_args, output_args = analysis.get_kernel_stream_arguments(kernel)
     metadata = {
-        'kernel_name': kernel.name,
-        'inputs': input_args,
-        'outputs': output_args,
+        "kernel_name": kernel.name,
+        "inputs": input_args,
+        "outputs": output_args,
         "argument_order": [a.identifier.name for a in kernel.arguments],
+        "memcpy_mode": using_memcpy_mode,
     }
     serialization.save_to_json(metadata, os.path.join(output_folder, 'metadata.json'))
 
@@ -80,9 +105,9 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     memcpy_channels = 1  # TODO: Determine the number of memcpy channels based on the kernel arguments
     if memcpy_channels >= 0:
         xbegin += 4
-        xend += 4*3
+        xend += 4 * 3
         ybegin += 1
-        yend += 1*3
+        yend += 1 * 3
 
     cslc_command = [
         'cslc', 'layout.csl', f'--fabric-dims={xend - xbegin},{yend - ybegin}',
