@@ -65,7 +65,9 @@ class TreeToSpatialIR(lark.Transformer):
     typed_var = irnodes.TypedIdentifier.from_lark
 
     float_type = int_type = uint_type = bool_type = lambda self, args: getattr(irnodes.ScalarType, str(args[0]))
-    stream_type = irnodes.StreamType.from_lark
+
+    def stream_type(self, args):
+        return irnodes.StreamType(args[0], args[1] if len(args) > 1 else None)
 
     def array_type(self, args):
         return irnodes.ArrayType(args[0], args[1:])

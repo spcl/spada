@@ -89,11 +89,14 @@ class StreamType(SpatialNode, IRType):
     A stream type that sends elements of type T.
     """
     element_type: ScalarType
+    buffer_size: Optional['Expression'] = None
 
     def validate(self) -> None:
         assert isinstance(self.element_type, ScalarType)
 
     def as_ir(self, indent: int = 0) -> str:
+        if self.buffer_size is not None:
+            return f'stream<{self.element_type.as_ir()}, {self.buffer_size.as_ir()}>'
         return f'stream<{self.element_type.as_ir()}>'
 
     @property

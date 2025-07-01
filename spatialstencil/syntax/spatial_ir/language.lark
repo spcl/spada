@@ -32,7 +32,7 @@ identifier : suffix_id ("#" digits)?
 !uint_type : "u8" | "u16" | "u32"
 !bool_type : "bool"
 ?scalar_type : float_type | int_type | uint_type | bool_type
-stream_type : "stream" "<" scalar_type ">"
+stream_type : "stream" "<" scalar_type ("," value_expr)? ">"
 ?standard_type : scalar_type | stream_type
 
 // Array types
