@@ -47,6 +47,7 @@ class ProgramMetadata:
     inputs: Dict[str, ArrayType]
     outputs: Dict[str, ArrayType]
     argument_order: List[str]
+    memcpy_mode: bool
 
     @classmethod
     def from_json(cls, json_data: Union[str, Dict[str, Any]]) -> 'ProgramMetadata':
@@ -70,7 +71,9 @@ class ProgramMetadata:
             outputs={
                 k: ArrayType(**v) for k, v in json_data.get("outputs", {}).items()
             },
-            argument_order=json_data.get("argument_order", []))
+            argument_order=json_data.get("argument_order", []),
+            memcpy_mode=json_data.get("memcpy_mode", False)
+        )
 
 
 ########################################################
