@@ -2,8 +2,17 @@ import argparse
 from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, TYPE_CHECKING
 import numpy as np
+
+if TYPE_CHECKING:
+    from spatialstencil.runtime import cerebras_runtime_stub as crt
+else:
+    try:
+        from cerebras.sdk.runtime import sdkruntimepybind as crt
+    except (ImportError, ModuleNotFoundError):
+        raise ImportError("Cerebras SDK not found. Please install the Cerebras SDK or use `cs_python` to "
+                          "execute this script.")
 
 ########################################################
 # Serialization and Type Definitions
@@ -69,7 +78,7 @@ class ProgramMetadata:
 ########################################################
 
 
-def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime):
+def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.SdkRuntime):
     """
     Copy data to the device, flattening it if necessary.
     This function assumes that the runtime has a method `memcpy_h2d` for copying.
@@ -83,7 +92,7 @@ def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime):
     pass
 
 
-def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime):
+def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.SdkRuntime):
     """
     Copy data from the device, unflattening it if necessary.
     This function assumes that the runtime has a method `memcpy_d2h` for copying.
@@ -125,12 +134,7 @@ class Program:
         self.metadata = ProgramMetadata.from_json(metadata)
 
         # Initialize SDK runtime
-        try:
-            from cerebras.sdk.runtime.sdkruntimepybind import SdkRuntime
-        except (ImportError, ModuleNotFoundError):
-            raise ImportError("Cerebras SDK not found. Please install the Cerebras SDK or use `cs_python` to "
-                              "execute this script.")
-        self.runtime = SdkRuntime(str(self.out_folder))
+        self.runtime = crt.SdkRuntime(str(self.out_folder))
 
         # Store input/output information from metadata
         self.inputs = self.metadata.inputs
@@ -144,8 +148,6 @@ class Program:
         :param kwargs: Keyword arguments for the program
         :return: Dictionary of output tensors
         """
-        from cerebras.sdk.runtime.sdkruntimepybind import MemcpyDataType, MemcpyOrder  # pylint: disable=no-name-in-module
-
         # Use argument_order from metadata if available
         if self.metadata.argument_order and len(args) == len(self.inputs):
             if len(kwargs) > 0:

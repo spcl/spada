@@ -103,7 +103,7 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     # Get the fabric dimensions from the kernel and offsets from the command line arguments
     # Command: cslc layout.csl --fabric-dims=16,16 --fabric-offsets=0,0 --memcpy --channels=1
     xbegin, xend, ybegin, yend = kernel.get_grid_rect()
-    memcpy_channels = 1  # TODO: Determine the number of memcpy channels based on the kernel arguments
+    memcpy_channels = 1  # TODO: Determine the number of memcpy channels (1-16) based on the kernel arguments
     if memcpy_channels >= 0:
         xbegin += 4
         xend += 4 * 3
