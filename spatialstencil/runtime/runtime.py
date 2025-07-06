@@ -24,6 +24,7 @@ class ArrayType:
     """Type for array arguments."""
     shape: List[int]
     dtype: str  # One of f32, f16, i32, u32, etc.
+    buffer_size: Union[int, None] = None  # Optional buffer size for streams
 
 
 dtype_to_numpy = {
@@ -48,6 +49,8 @@ class ProgramMetadata:
     outputs: Dict[str, ArrayType]
     argument_order: List[str]
     memcpy_mode: bool
+    fabric_dims: List[int]
+    fabric_offsets: List[int]
 
     @classmethod
     def from_json(cls, json_data: Union[str, Dict[str, Any]]) -> 'ProgramMetadata':
@@ -72,7 +75,9 @@ class ProgramMetadata:
                 k: ArrayType(**v) for k, v in json_data.get("outputs", {}).items()
             },
             argument_order=json_data.get("argument_order", []),
-            memcpy_mode=json_data.get("memcpy_mode", False)
+            memcpy_mode=json_data.get("memcpy_mode", False),
+            fabric_dims=json_data.get("fabric_dims", []),
+            fabric_offsets=json_data.get("fabric_offsets", [])
         )
 
 
@@ -81,7 +86,7 @@ class ProgramMetadata:
 ########################################################
 
 
-def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.SdkRuntime):
+def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.SdkRuntime, metadata: ProgramMetadata):
     """
     Copy data to the device, flattening it if necessary.
     This function assumes that the runtime has a method `memcpy_h2d` for copying.
@@ -90,12 +95,28 @@ def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.Sdk
     :param data: Numpy array to copy
     :param shape: Shape of the data to be copied
     :param runtime: The Cerebras SDK runtime object to perform the copy operation
+    :param metadata: Program metadata containing input/output information
     """
-    # runtime.memcpy_h2d(name, data, ...)
-    pass
+    buffer_id = runtime.get_id(name)
+    if buffer_id is None:
+        raise ValueError(f"Buffer ID for '{name}' not found in program.")
+
+    runtime.memcpy_h2d(
+        dest=buffer_id,
+        src=data,
+        px=metadata.fabric_offsets[0],  # PE offset in x direction
+        py=metadata.fabric_offsets[1],  # PE offset in y direction
+        w=shape[1],  # Width is the second dimension
+        h=shape[0],  # Height is the first dimension
+        elem_per_pe=shape[2],
+        streaming=not metadata.memcpy_mode,  # Use streaming if not in memcpy mode
+        data_type=crt.MemcpyDataType.MEMCPY_32BIT if data.dtype == np.float32 else crt.MemcpyDataType.MEMCPY_16BIT,
+        order=crt.MemcpyOrder.ROW_MAJOR,
+        nonblock=True,  # Non-blocking copy
+    )
 
 
-def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.SdkRuntime):
+def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.SdkRuntime, metadata: ProgramMetadata):
     """
     Copy data from the device, unflattening it if necessary.
     This function assumes that the runtime has a method `memcpy_d2h` for copying.
@@ -104,9 +125,25 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
     :param data: Numpy array to copy
     :param shape: Shape of the data to be copied
     :param runtime: The Cerebras SDK runtime object to perform the copy operation
+    :param metadata: Program metadata containing input/output information
     """
-    # runtime.memcpy_d2h(name, data, ...)
-    pass
+    buffer_id = runtime.get_id(name)
+    if buffer_id is None:
+        raise ValueError(f"Buffer ID for '{name}' not found in program.")
+
+    runtime.memcpy_d2h(
+        dest=data,
+        src=buffer_id,
+        px=metadata.fabric_offsets[0],  # PE offset in x direction
+        py=metadata.fabric_offsets[1],  # PE offset in y direction
+        w=shape[1],  # Width is the second dimension
+        h=shape[0],  # Height is the first dimension
+        elem_per_pe=shape[2],
+        streaming=not metadata.memcpy_mode,  # Use streaming if not in memcpy mode
+        data_type=crt.MemcpyDataType.MEMCPY_32BIT if data.dtype == np.float32 else crt.MemcpyDataType.MEMCPY_16BIT,
+        order=crt.MemcpyOrder.ROW_MAJOR,
+        nonblock=False,  # Blocking copy to ensure data is ready after copy
+    )
 
 
 ########################################################
@@ -164,8 +201,10 @@ class Program:
             if input_name not in kwargs:
                 raise ValueError(f"Missing required input: {input_name}")
 
+        print("Loading program...", flush=True, end='')
         self.runtime.load()
         self.runtime.run()
+        print("done.", flush=True)
 
         # Copy data to device
         for name, data in kwargs.items():
@@ -177,31 +216,35 @@ class Program:
                 data = np.array(data, dtype=dtype_to_numpy[self.inputs[name]["dtype"]])
 
             # Validate shape if specified in metadata
-            expected_shape = tuple(self.inputs[name].shape)
+            expected_shape = tuple(self.inputs[name].shape + [self.inputs[name].buffer_size or 1])
             if data.shape != expected_shape:
                 raise ValueError(f"Input {name} has wrong shape. Expected {expected_shape}, got {data.shape}")
 
             # Use flatten_copy to copy data to device
-            flatten_copy(name, data, expected_shape, self.runtime)
+            flatten_copy(name, data, expected_shape, self.runtime, self.metadata)
 
         # Run the program
+        print("Launching kernel...", flush=True, end='')
         self.runtime.launch(self.metadata.kernel_name, nonblock=False)
+        print("kernel complete.", flush=True)
 
         # Copy outputs back from device
         results = {}
         for output_name, output_info in self.outputs.items():
             # Get output shape from metadata
-            shape = output_info.shape
+            shape = output_info.shape + [output_info.buffer_size or 1]
             dtype = dtype_to_numpy.get(output_info.dtype, np.float32)
 
             # Allocate buffer for output
-            output_data = np.zeros(shape, dtype=dtype)
+            output_data = np.empty(shape, dtype=dtype)
 
             # Copy data from device
-            copy_unflatten(output_name, output_data, shape, self.runtime)
+            copy_unflatten(output_name, output_data, shape, self.runtime, self.metadata)
             results[output_name] = output_data
 
+        print("Stopping runtime...", flush=True, end='')
         self.runtime.stop()
+        print("done.", flush=True)
 
         return results
 
@@ -222,11 +265,17 @@ if __name__ == "__main__":
     inputs = []
     for input_file in args.input_files:
         data = np.load(input_file)
+        if len(data.shape) not in (2, 3):
+            raise ValueError(f"Input data from {input_file} must be 2D or 3D. Got shape {data.shape}.")
+        if len(data.shape) == 2:
+            data = data.reshape((data.shape[0], data.shape[1], 1))  # Ensure at least 3 dimensions
         inputs.append(data)
 
     # Run the program with loaded inputs
     outputs = program(*inputs)
 
-    # Print output shapes
+    # Save outputs to .npy files
     for name, output in outputs.items():
-        print(f"{name}: {output.shape}")
+        output_file = f"OUT_{name}.npy"
+        np.save(output_file, output)
+        print(f"Output saved to {output_file}")

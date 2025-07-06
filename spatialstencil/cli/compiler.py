@@ -84,21 +84,6 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         with open(output_path, 'w') as out_file:
             out_file.write(f.code)
 
-    # Generate metadata.json file
-    input_args, output_args = analysis.get_kernel_stream_arguments(kernel)
-    metadata = {
-        "kernel_name": kernel.name,
-        "inputs": input_args,
-        "outputs": output_args,
-        "argument_order": [a.identifier.name for a in kernel.arguments],
-        "memcpy_mode": using_memcpy_mode,
-    }
-    serialization.save_to_json(metadata, os.path.join(output_folder, 'metadata.json'))
-
-    if generate_only:
-        print("Generated output files without compiling.")
-        return
-
     # Compile the generated CSL files using the cslc command (and change the cwd to the output folder)
     # Get the fabric dimensions from the kernel and offsets from the command line arguments
     # Command: cslc layout.csl --fabric-dims=16,16 --fabric-offsets=0,0 --memcpy --channels=1
@@ -109,6 +94,23 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         xend += 4 * 3
         ybegin += 1
         yend += 1 * 3
+
+    # Generate metadata.json file
+    input_args, output_args = analysis.get_kernel_stream_arguments(kernel)
+    metadata = {
+        "kernel_name": kernel.name,
+        "inputs": input_args,
+        "outputs": output_args,
+        "argument_order": [a.identifier.name for a in kernel.arguments],
+        "memcpy_mode": using_memcpy_mode,
+        "fabric_dims": [xend - xbegin, yend - ybegin],
+        "fabric_offsets": [offset_x + xbegin, offset_y + ybegin],
+    }
+    serialization.save_to_json(metadata, os.path.join(output_folder, 'metadata.json'))
+
+    if generate_only:
+        print("Generated output files without compiling.")
+        return
 
     cslc_command = [
         'cslc', 'layout.csl', f'--fabric-dims={xend - xbegin},{yend - ybegin}',
