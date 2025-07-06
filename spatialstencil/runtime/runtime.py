@@ -49,8 +49,9 @@ class ProgramMetadata:
     outputs: Dict[str, ArrayType]
     argument_order: List[str]
     memcpy_mode: bool
-    fabric_dims: List[int]
-    fabric_offsets: List[int]
+    kernel_dims: List[int]  # Dimensions of the kernel grid
+    fabric_dims: List[int]  # Dimensions of the fabric (i.e., with memcpy extras)
+    fabric_offsets: List[int]  # Offsets in the fabric for the kernel
 
     @classmethod
     def from_json(cls, json_data: Union[str, Dict[str, Any]]) -> 'ProgramMetadata':
@@ -76,6 +77,7 @@ class ProgramMetadata:
             },
             argument_order=json_data.get("argument_order", []),
             memcpy_mode=json_data.get("memcpy_mode", False),
+            kernel_dims=json_data.get("kernel_dims", []),
             fabric_dims=json_data.get("fabric_dims", []),
             fabric_offsets=json_data.get("fabric_offsets", [])
         )
@@ -217,6 +219,8 @@ class Program:
 
             # Validate shape if specified in metadata
             expected_shape = tuple(self.inputs[name].shape + [self.inputs[name].buffer_size or 1])
+            assert list(expected_shape[0:2]) == self.metadata.kernel_dims, \
+                f"Input {name} shape {expected_shape[0:2]} does not match kernel dimensions {self.metadata.kernel_dims}"
             if data.shape != expected_shape:
                 raise ValueError(f"Input {name} has wrong shape. Expected {expected_shape}, got {data.shape}")
 

@@ -88,6 +88,7 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     # Get the fabric dimensions from the kernel and offsets from the command line arguments
     # Command: cslc layout.csl --fabric-dims=16,16 --fabric-offsets=0,0 --memcpy --channels=1
     xbegin, xend, ybegin, yend = kernel.get_grid_rect()
+    kernel_dims = [xend - xbegin, yend - ybegin]
     memcpy_channels = 1  # TODO: Determine the number of memcpy channels (1-16) based on the kernel arguments
     if memcpy_channels >= 0:
         xbegin += 4
@@ -104,6 +105,7 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         "argument_order": [a.identifier.name for a in kernel.arguments],
         "memcpy_mode": using_memcpy_mode,
         "fabric_dims": [xend - xbegin, yend - ybegin],
+        "kernel_dims": kernel_dims,
         "fabric_offsets": [offset_x + xbegin, offset_y + ybegin],
     }
     serialization.save_to_json(metadata, os.path.join(output_folder, 'metadata.json'))
