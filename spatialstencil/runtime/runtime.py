@@ -224,9 +224,10 @@ class Program:
             flatten_copy(name, data, expected_shape, self.runtime, self.metadata)
 
         # Run the program
-        print("Launching kernel...", flush=True, end='')
-        self.runtime.launch(self.metadata.kernel_name, nonblock=False)
-        print("kernel complete.", flush=True)
+        if self.metadata.memcpy_mode:
+            print("Launching kernel...", flush=True, end='')
+            self.runtime.launch(self.metadata.kernel_name, nonblock=False)
+            print("kernel complete.", flush=True)
 
         # Copy outputs back from device
         results = {}
@@ -242,7 +243,7 @@ class Program:
             copy_unflatten(output_name, output_data, shape, self.runtime, self.metadata)
             results[output_name] = output_data
 
-        print("Stopping runtime...", flush=True, end='')
+        print("Copy-back complete. Stopping runtime...", flush=True, end='')
         self.runtime.stop()
         print("done.", flush=True)
 
