@@ -1,10 +1,15 @@
 """
 This file contains type hints and stubs for the Cerebras SdkRuntime class and related enums.
 """
-from typing import Union, Literal
+from typing import Union
 from enum import Enum
 import pathlib
 import numpy
+
+try:
+    from typing import Literal
+except ImportError:
+    from typing_extensions import Literal
 
 
 class MemcpyDataType(Enum):

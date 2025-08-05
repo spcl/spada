@@ -79,8 +79,7 @@ class ProgramMetadata:
             memcpy_mode=json_data.get("memcpy_mode", False),
             kernel_dims=json_data.get("kernel_dims", []),
             fabric_dims=json_data.get("fabric_dims", []),
-            fabric_offsets=json_data.get("fabric_offsets", [])
-        )
+            fabric_offsets=json_data.get("fabric_offsets", []))
 
 
 ########################################################
@@ -215,7 +214,7 @@ class Program:
 
             # Convert to numpy array if needed
             if not isinstance(data, np.ndarray):
-                data = np.array(data, dtype=dtype_to_numpy[self.inputs[name]["dtype"]])
+                data = np.array(data, dtype=dtype_to_numpy[self.inputs[name].dtype])
 
             # Validate shape if specified in metadata
             expected_shape = tuple(self.inputs[name].shape + [self.inputs[name].buffer_size or 1])

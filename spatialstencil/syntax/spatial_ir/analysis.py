@@ -187,7 +187,8 @@ def get_kernel_stream_arguments(
         if isinstance(arg.dtype, spir.StreamType):
             arg_as_dict["buffer_size"] = arg.dtype.buffer_size.eval() if arg.dtype.buffer_size else None
         elif isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType):
-            arg_as_dict["buffer_size"] = arg.dtype.base_type.buffer_size.eval() if arg.dtype.base_type.buffer_size else None
+            arg_as_dict["buffer_size"] = arg.dtype.base_type.buffer_size.eval(
+            ) if arg.dtype.base_type.buffer_size else None
         else:
             arg_as_dict["buffer_size"] = None
 
