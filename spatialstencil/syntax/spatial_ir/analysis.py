@@ -201,3 +201,16 @@ def get_kernel_stream_arguments(
             output_streams[arg.identifier.name] = arg_as_dict
 
     return input_streams, output_streams
+
+
+def kernel_uses_memcpy_mode(kernel: spir.Kernel) -> bool:
+    """
+    Returns whether the kernel uses memcpy mode for any of its stream arguments.
+    """
+    for arg in kernel.arguments:
+        if isinstance(arg.dtype, spir.StreamType) and arg.dtype.buffer_size is not None:
+            return True
+        if isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType):
+            if arg.dtype.base_type.buffer_size is not None:
+                return True
+    return False
