@@ -80,7 +80,48 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
 }});
 ''')
     else:
-        raise NotImplementedError('Streaming mode is not implemented yet')
+        input_args = []
+        output_args = []
+        for arg in kernel.arguments:
+            if arg.compiletime:
+                continue
+            if arg.readonly:
+                input_args.append(arg)
+            elif arg.writeonly:
+                output_args.append(arg)
+            else:
+                input_args.append(arg)
+                output_args.append(arg)
+
+        # Only up to 4 streams in each direction are supported (4 input, 4 output streams)
+        if len(input_args) > 4 or len(output_args) > 4:
+            raise ValueError('Too many input/output streams: only 4 input and 4 output streams are supported in CSL')
+
+        # Generate streaming DATA_*_ID parameters for each input/output stream
+        layout_code.write('// Streaming copy setup\n')
+        for i, input_arg in enumerate(input_args):
+            layout_code.write(f'''param MEMCPYH2D_DATA_{i}_ID: i16;
+const MEMCPYH2D_DATA_{i}: color = @get_color(MEMCPYH2D_DATA_{i}_ID);
+''')
+        for i, output_arg in enumerate(output_args):
+            layout_code.write(f'''param MEMCPYD2H_DATA_{i}_ID: i16;
+const MEMCPYD2H_DATA_{i}: color = @get_color(MEMCPYD2H_DATA_{i}_ID);
+''')
+
+        layout_code.write(f'''
+const memcpy = @import_module("<memcpy/get_params>", .{{
+     .width = width,
+     .height = height,
+''')
+        for i, input_arg in enumerate(input_args):
+            layout_code.write(f'''    .MEMCPYH2D_{i} = MEMCPYH2D_DATA_{i}_ID,
+''')
+        for i, output_arg in enumerate(output_args):
+            layout_code.write(f'''    .MEMCPYD2H_{i} = MEMCPYD2H_DATA_{i}_ID,
+''')
+        layout_code.write(f'''
+}});
+''')
 
     layout_code.write(f'''layout {{
     // Rectangle and code setup
