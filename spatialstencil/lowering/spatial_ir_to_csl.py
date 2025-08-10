@@ -154,8 +154,7 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
     layout_code.write('\n    // Arguments\n')
     for argument in kernel.arguments:
         layout_code.write(
-            f'    @export_name("{argument.identifier.name}", {dtype_as_csl(argument.dtype, export=True)}, '
-            f'{"false" if argument.writeonly else "true"});\n')
+            f'    @export_name("{argument.identifier.name}", {dtype_as_csl(argument.dtype, export=True)}, true);\n')
 
     layout_code.write(f'''
     // Kernel
