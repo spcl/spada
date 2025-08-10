@@ -57,7 +57,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     for rect in rectangles:
         # Create a unique CSL code file based on rectangle offset
         csl_name = f'code_{rect.x_range[0]}_{rect.y_range[0]}.csl'
-        rect_code = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments)
+        rect_code = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode)
         csl_codes.append(CodeFile(csl_name, rect_code))
 
     # Prepare outputs
@@ -167,7 +167,7 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
 
 
 def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_instructions: list[str],
-                       scalar_arguments: list[str]):
+                       scalar_arguments: list[str], use_memcpy_mode: bool):
     # Code generation carets
     header = StringIO()
     current_code = StringIO()
@@ -192,7 +192,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     #     * Generate routing instructions from dataflow blocks
     #     * Make unique colors out of streams, reduce number of streams
     color_map = _collect_and_allocate_colors(rect.metadata, header)
-    _collect_and_generate_fields(rect.metadata.place, header, footer)
+    _collect_and_generate_fields(rect.metadata.place, header, footer, kernel, use_memcpy_mode)
     dtypes = _collect_identifier_types(rect.metadata)
 
     # Convert compute block subgraphs into tasks:
@@ -288,7 +288,8 @@ def _collect_and_allocate_colors(rect: PEBlock, header: StringIO) -> dict[str, i
     return result
 
 
-def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, footer: StringIO):
+def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, footer: StringIO, kernel: spir.Kernel,
+                                 use_memcpy_mode: bool) -> None:
     """
     Generates array allocation and symbol exports from a rectangle's ``place`` block.
 
@@ -301,8 +302,25 @@ def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, foote
         name = name_to_csl(field_dec.field_name)
         header.write(f'var {name}: {dtype_as_csl(field_dec.dtype)};\n')
 
-        header.write(f'var __{name}_ptr = &{name};\n')
-        # footer.write(f'    @export_symbol(__{name}_ptr, "{name}");\n')
+    # Add arguments to header and footer
+    if use_memcpy_mode:
+        for argument in kernel.arguments:
+            if isinstance(argument.dtype, spir.ArrayType) and isinstance(argument.dtype.base_type, spir.StreamType):
+                assert argument.dtype.base_type.buffer_size is not None, f'Argument {argument.identifier.name} has no buffer size defined'
+                name = name_to_csl(argument.identifier)
+                # Ignore array size in arguments, as they are spatially mapped
+                size = argument.dtype.base_type.buffer_size.eval()
+            else:
+                size = 1
+
+            header.write(f'var {name}: [{size}]'
+                         f'{dtype_as_csl(argument.dtype.element_type.element_type.element_type)};\n')
+            header.write(f'var __{name}_ptr: {dtype_as_csl(argument.dtype, export=True)} = &{name};\n')
+            footer.write(f'    @export_symbol(__{name}_ptr, "{name}");\n')
+    else:
+        # TODO(later): Some scaffolding for streaming indices within rectangle code
+        pass
+
     header.write('\n')
 
 
