@@ -103,13 +103,13 @@ def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.Sdk
         raise ValueError(f"Buffer ID for '{name}' not found in program.")
 
     runtime.memcpy_h2d(
-        dest=buffer_id,
-        src=data,
-        px=metadata.fabric_offsets[0],  # PE offset in x direction
-        py=metadata.fabric_offsets[1],  # PE offset in y direction
-        w=shape[1],  # Width is the second dimension
-        h=shape[0],  # Height is the first dimension
-        elem_per_pe=shape[2],
+        buffer_id,
+        data.ravel(),
+        0,#metadata.fabric_offsets[0],  # PE offset in x direction
+        0,#metadata.fabric_offsets[1],  # PE offset in y direction
+        shape[1],  # Width is the second dimension
+        shape[0],  # Height is the first dimension
+        shape[2],
         streaming=not metadata.memcpy_mode,  # Use streaming if not in memcpy mode
         data_type=crt.MemcpyDataType.MEMCPY_32BIT if data.dtype == np.float32 else crt.MemcpyDataType.MEMCPY_16BIT,
         order=crt.MemcpyOrder.ROW_MAJOR,
@@ -133,13 +133,13 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
         raise ValueError(f"Buffer ID for '{name}' not found in program.")
 
     runtime.memcpy_d2h(
-        dest=data,
-        src=buffer_id,
-        px=metadata.fabric_offsets[0],  # PE offset in x direction
-        py=metadata.fabric_offsets[1],  # PE offset in y direction
-        w=shape[1],  # Width is the second dimension
-        h=shape[0],  # Height is the first dimension
-        elem_per_pe=shape[2],
+        data.ravel(),
+        buffer_id,
+        0,#metadata.fabric_offsets[0],  # PE offset in x direction
+        0,#metadata.fabric_offsets[1],  # PE offset in y direction
+        shape[1],  # Width is the second dimension
+        shape[0],  # Height is the first dimension
+        shape[2],
         streaming=not metadata.memcpy_mode,  # Use streaming if not in memcpy mode
         data_type=crt.MemcpyDataType.MEMCPY_32BIT if data.dtype == np.float32 else crt.MemcpyDataType.MEMCPY_16BIT,
         order=crt.MemcpyOrder.ROW_MAJOR,
@@ -202,52 +202,54 @@ class Program:
             if input_name not in kwargs:
                 raise ValueError(f"Missing required input: {input_name}")
 
-        print("Loading program...", flush=True, end='')
-        self.runtime.load()
-        self.runtime.run()
-        print("done.", flush=True)
+        try:
+            print("Loading program...", flush=True, end='')
+            self.runtime.load()
+            self.runtime.run()
+            print("done.", flush=True)
 
-        # Copy data to device
-        for name, data in kwargs.items():
-            if name not in self.inputs:
-                raise ValueError(f"Unexpected input: {name}")
+            # Copy data to device
+            for name, data in kwargs.items():
+                if name not in self.inputs:
+                    raise ValueError(f"Unexpected input: {name}")
 
-            # Convert to numpy array if needed
-            if not isinstance(data, np.ndarray):
-                data = np.array(data, dtype=dtype_to_numpy[self.inputs[name].dtype])
+                # Convert to numpy array if needed
+                if not isinstance(data, np.ndarray):
+                    data = np.array(data, dtype=dtype_to_numpy[self.inputs[name].dtype])
 
-            # Validate shape if specified in metadata
-            expected_shape = tuple(self.inputs[name].shape + [self.inputs[name].buffer_size or 1])
-            assert list(expected_shape[0:2]) == self.metadata.kernel_dims, \
-                f"Input {name} shape {expected_shape[0:2]} does not match kernel dimensions {self.metadata.kernel_dims}"
-            if data.shape != expected_shape:
-                raise ValueError(f"Input {name} has wrong shape. Expected {expected_shape}, got {data.shape}")
+                # Validate shape if specified in metadata
+                expected_shape = tuple(self.inputs[name].shape + [self.inputs[name].buffer_size or 1])
+                assert list(expected_shape[0:2]) == self.metadata.kernel_dims, \
+                    f"Input {name} shape {expected_shape[0:2]} does not match kernel dimensions {self.metadata.kernel_dims}"
+                if data.shape != expected_shape:
+                    raise ValueError(f"Input {name} has wrong shape. Expected {expected_shape}, got {data.shape}")
 
-            # Use flatten_copy to copy data to device
-            flatten_copy(name, data, expected_shape, self.runtime, self.metadata)
+                # Use flatten_copy to copy data to device
+                flatten_copy(name, data, expected_shape, self.runtime, self.metadata)
 
-        # Run the program
-        if self.metadata.memcpy_mode:
-            print("Launching kernel...", flush=True, end='')
-            self.runtime.launch(self.metadata.kernel_name, nonblock=False)
-            print("kernel complete.", flush=True)
+            # Run the program
+            if self.metadata.memcpy_mode:
+                print("Launching kernel...", flush=True, end='')
+                self.runtime.launch(self.metadata.kernel_name, nonblock=False)
+                print("kernel complete.", flush=True)
 
-        # Copy outputs back from device
-        results = {}
-        for output_name, output_info in self.outputs.items():
-            # Get output shape from metadata
-            shape = output_info.shape + [output_info.buffer_size or 1]
-            dtype = dtype_to_numpy.get(output_info.dtype, np.float32)
+            # Copy outputs back from device
+            results = {}
+            for output_name, output_info in self.outputs.items():
+                # Get output shape from metadata
+                shape = output_info.shape + [output_info.buffer_size or 1]
+                dtype = dtype_to_numpy.get(output_info.dtype, np.float32)
 
-            # Allocate buffer for output
-            output_data = np.empty(shape, dtype=dtype)
+                # Allocate buffer for output
+                output_data = np.empty(shape, dtype=dtype)
 
-            # Copy data from device
-            copy_unflatten(output_name, output_data, shape, self.runtime, self.metadata)
-            results[output_name] = output_data
+                # Copy data from device
+                copy_unflatten(output_name, output_data, shape, self.runtime, self.metadata)
+                results[output_name] = output_data
 
-        print("Copy-back complete. Stopping runtime...", flush=True, end='')
-        self.runtime.stop()
+            print("Copy-back complete. Stopping runtime...", flush=True, end='')
+        finally:
+            self.runtime.stop()
         print("done.", flush=True)
 
         return results
