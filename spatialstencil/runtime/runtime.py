@@ -105,8 +105,8 @@ def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.Sdk
     runtime.memcpy_h2d(
         buffer_id,
         data.ravel(),
-        0,#metadata.fabric_offsets[0],  # PE offset in x direction
-        0,#metadata.fabric_offsets[1],  # PE offset in y direction
+        0,  #metadata.fabric_offsets[0],  # PE offset in x direction
+        0,  #metadata.fabric_offsets[1],  # PE offset in y direction
         shape[1],  # Width is the second dimension
         shape[0],  # Height is the first dimension
         shape[2],
@@ -135,8 +135,8 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
     runtime.memcpy_d2h(
         data.ravel(),
         buffer_id,
-        0,#metadata.fabric_offsets[0],  # PE offset in x direction
-        0,#metadata.fabric_offsets[1],  # PE offset in y direction
+        0,  #metadata.fabric_offsets[0],  # PE offset in x direction
+        0,  #metadata.fabric_offsets[1],  # PE offset in y direction
         shape[1],  # Width is the second dimension
         shape[0],  # Height is the first dimension
         shape[2],
@@ -231,7 +231,7 @@ class Program:
             if self.metadata.memcpy_mode:
                 print("Launching kernel...", flush=True, end='')
                 self.runtime.launch(self.metadata.kernel_name, nonblock=False)
-                print("kernel complete.", flush=True)
+                print("kernel launched.", flush=True)
 
             # Copy outputs back from device
             results = {}

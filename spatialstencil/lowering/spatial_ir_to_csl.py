@@ -6,7 +6,7 @@ from io import StringIO
 import networkx as nx
 from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, analysis
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
-from spatialstencil.syntax.csl import constants as csl, preprocessing, tasks as tdag
+from spatialstencil.syntax.csl import constants as csl, preprocessing, tasks as tdag, statements as cslstmt
 from spatialstencil.syntax.csl.structures import DataStructureDescriptor
 from spatialstencil.syntax.csl.codefile import CodeFile
 
@@ -193,7 +193,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     #     * Make unique colors out of streams, reduce number of streams
     color_map = _collect_and_allocate_colors(rect.metadata, header)
     _collect_and_generate_fields(rect.metadata.place, header, footer, kernel, use_memcpy_mode)
-    dtypes = _collect_identifier_types(rect.metadata)
+    dtypes = _collect_identifier_types(rect.metadata, kernel.arguments)
 
     # Convert compute block subgraphs into tasks:
     #    * Make task DAG out of computations
@@ -475,8 +475,17 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
     # if ``foreach``, has to be a DSD operation
     assert task.task_type == 'local'
 
-    for stmt, (next_task, itedge) in zip(task.statements, task.outgoing):
-        # TODO: Write op contents, if DSD or asynchronous, continue
+    for stmt_id, (next_task, itedge) in zip(task.statements, task.outgoing):
+        # Write op contents
+        stmt = rect.compute.statements[stmt_id]
+        # TODO: if DSD or asynchronous, encode the next task and edge type (activate/unblock)
+        #       into the DSD operation
+        code: str = cslstmt.generate_csl_statement(stmt, dsds, dtypes)
+        lines = code.splitlines()
+        for line in lines:
+            current_code.write(f'    {line}\n')
+        if '@' in code:  # TODO(later): Better check for DSD operations
+            continue  # DSD operation or async call
 
         # If not DSD or asynchronous op, activate/unblock must be called after the generated operation code
         if itedge in (tdag.InterTaskEdge.ACTIVATE, tdag.InterTaskEdge.UNBLOCK):
@@ -491,11 +500,16 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
                 current_code.write(f'    @unblock({task_id});\n')
 
 
-def _collect_identifier_types(rect: PEBlock) -> dict[spir.Identifier, spir.IRType]:
+def _collect_identifier_types(rect: PEBlock,
+                              kernel_args: list[spir.KernelArgument]) -> dict[spir.Identifier, spir.IRType]:
     """
     Returns a dictionary mapping all place, dataflow, and compute variables (streams, arrays, scalars) to datatypes.
     """
     result = {}
+
+    # Collect from kernel arguments
+    for arg in kernel_args:
+        result[arg.identifier] = arg.dtype
 
     # Collect from place blocks
     for fielddec in rect.place.statements:

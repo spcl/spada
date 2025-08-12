@@ -48,7 +48,7 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     using_memcpy_mode = None
     for arg in kernel.arguments:
         # Change all shapes to be lists of integers
-        if hasattr(arg.dtype, 'shape'):
+        if isinstance(arg.dtype, spa.ArrayType):
             arg.dtype.shape = [dim.eval() if isinstance(dim, spa.Expression) else int(dim) for dim in arg.dtype.shape]
         # Check if the argument is a stream and has a memcpy mode
         if isinstance(arg.dtype, spa.ArrayType) and isinstance(arg.dtype.base_type, spa.StreamType):
