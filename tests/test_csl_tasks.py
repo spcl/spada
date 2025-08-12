@@ -6,7 +6,7 @@ from spatialstencil.syntax.csl import tasks as tdag
 
 
 def _create_tasks(peblock: PEBlock):
-    dtypes = s2c._collect_identifier_types(peblock)
+    dtypes = s2c._collect_identifier_types(peblock, [])
     completion_dag = analysis.to_completion_dag(peblock.compute)
     return tdag.create_csl_tasks(completion_dag, peblock.compute, dtypes)
 
@@ -58,7 +58,7 @@ kernel @two_phase<K> (stream<f32>[4] readonly in,
     }}
 }}""")
     place, dataflow, compute = kernel.body
-    dtypes = s2c._collect_identifier_types(PEBlock(place, dataflow, compute))
+    dtypes = s2c._collect_identifier_types(PEBlock(place, dataflow, compute), [])
     assert len(compute.statements) == 8
     assert tdag.get_dsd_op(dtypes, compute.statements[0]) == "@fadds"
     assert tdag.get_dsd_op(dtypes, compute.statements[1]) == "@faddhs"
