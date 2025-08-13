@@ -80,23 +80,67 @@ kernel @laplacian<>(stream<f32>[130, 131] _in, stream<f32>[128, 128] _kernel_out
       f32[80] _temp_0_0_0#4
     }
     dataflow u16 i#12, u16 j#12 in [129:130 , 1:130] {
+      stream<f32> _stream_in#3 = relative_stream(-1, 0) {
+        hops = [(-1, 0)],
+        channel = 3
+      }
+      stream<f32> _stream_out_mat = relative_stream(0, -1) {
+        hops = [(0, -1)],
+        channel = 2
+      }
       stream<f32> _stream_in = relative_stream(1, 0) {
         hops = [(1, 0)],
         channel = 0
       }
-    }
-    dataflow u16 i#13, u16 j#13 in [1:129 , 130:131] {
       stream<f32> _stream_in#1 = relative_stream(0, 1) {
         hops = [(0, 1)],
         channel = 1
       }
-    }
-    dataflow u16 i#14, u16 j#14 in [1:129 , 0:1] {
       stream<f32> _stream_in#2 = relative_stream(0, -1) {
         hops = [(0, -1)],
         channel = 2
       }
+    }
+    dataflow u16 i#13, u16 j#13 in [1:129 , 130:131] {
+      stream<f32> _stream_in#3 = relative_stream(-1, 0) {
+        hops = [(-1, 0)],
+        channel = 3
+      }
       stream<f32> _stream_out_mat = relative_stream(0, -1) {
+        hops = [(0, -1)],
+        channel = 2
+      }
+      stream<f32> _stream_in = relative_stream(1, 0) {
+        hops = [(1, 0)],
+        channel = 0
+      }
+      stream<f32> _stream_in#1 = relative_stream(0, 1) {
+        hops = [(0, 1)],
+        channel = 1
+      }
+      stream<f32> _stream_in#2 = relative_stream(0, -1) {
+        hops = [(0, -1)],
+        channel = 2
+      }
+    }
+    dataflow u16 i#14, u16 j#14 in [1:129 , 0:1] {
+      stream<f32> _stream_in#3 = relative_stream(-1, 0) {
+        hops = [(-1, 0)],
+        channel = 3
+      }
+      stream<f32> _stream_out_mat = relative_stream(0, -1) {
+        hops = [(0, -1)],
+        channel = 2
+      }
+      stream<f32> _stream_in = relative_stream(1, 0) {
+        hops = [(1, 0)],
+        channel = 0
+      }
+      stream<f32> _stream_in#1 = relative_stream(0, 1) {
+        hops = [(0, 1)],
+        channel = 1
+      }
+      stream<f32> _stream_in#2 = relative_stream(0, -1) {
         hops = [(0, -1)],
         channel = 2
       }
@@ -128,11 +172,31 @@ kernel @laplacian<>(stream<f32>[130, 131] _in, stream<f32>[128, 128] _kernel_out
         hops = [(-1, 0)],
         channel = 3
       }
+      stream<f32> _stream_out_mat = relative_stream(0, -1) {
+        hops = [(0, -1)],
+        channel = 2
+      }
+      stream<f32> _stream_in = relative_stream(1, 0) {
+        hops = [(1, 0)],
+        channel = 0
+      }
+      stream<f32> _stream_in#1 = relative_stream(0, 1) {
+        hops = [(0, 1)],
+        channel = 1
+      }
+      stream<f32> _stream_in#2 = relative_stream(0, -1) {
+        hops = [(0, -1)],
+        channel = 2
+      }
     }
     dataflow u16 i#17, u16 j#17 in [1:129 , 129:130] {
       stream<f32> _stream_in#3 = relative_stream(-1, 0) {
         hops = [(-1, 0)],
         channel = 3
+      }
+      stream<f32> _stream_out_mat = relative_stream(0, -1) {
+        hops = [(0, -1)],
+        channel = 2
       }
       stream<f32> _stream_in = relative_stream(1, 0) {
         hops = [(1, 0)],
@@ -244,7 +308,7 @@ kernel @laplacian<>(stream<f32>[130, 131] _in, stream<f32>[128, 128] _kernel_out
   }
   phase {
     compute u32 i#24, u32 j#24 in [1:129 , 1:129] {
-      await send(res_0_0_0, kernel_out_0[(i#24 - 1), (j#24 - 1)])
+      await send(res_0_0_0, _kernel_out_0[(i#24 - 1), (j#24 - 1)])
     }
   }
 }
