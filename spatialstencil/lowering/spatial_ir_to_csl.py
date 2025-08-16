@@ -215,7 +215,20 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         current_code.write(f'const task_{task.task_id}_id = @get_{task.task_type}_task_id({task.task_id});\n')
         if task.task_type == 'local':
             current_code.write(f'task task_{task.task_id}() void {{\n')
-            _generate_task_code(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map)
+            try:
+                _generate_task_code(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map)
+            except KeyError as e:
+                # If a KeyError occurs with an identifier, it means that it is not defined in the current scope
+                identifier = e.args[0]
+                if isinstance(identifier, spir.Identifier):
+                    if identifier.lineinfo:
+                        raise SyntaxError(
+                            f'Undefined identifier "{identifier.as_ir()}" in {identifier.lineinfo}') from e
+                    else:
+                        raise SyntaxError(
+                            f'Undefined identifier "{identifier.as_ir()}" in task "task_{task.task_id}"') from e
+                else:
+                    raise
             current_code.write(f'}}\n')
         elif task.task_type == 'data':
             _generate_data_task(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map)
