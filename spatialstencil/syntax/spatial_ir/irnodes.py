@@ -24,6 +24,19 @@ class SpatialNode(BaseNode):
         raise NotImplementedError()
 
 
+@dataclass
+class LineInfo:
+    """
+    Represents source line information for a node in the IR.
+    """
+    filename: str
+    line: int
+    column: int
+
+    def __str__(self) -> str:
+        return f"{self.filename}:{self.line}:{self.column}"
+
+
 # Constant Literals
 @dataclass
 class ConstantLiteral(SpatialNode):

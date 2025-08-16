@@ -6,6 +6,27 @@ from spatialstencil.syntax.spatial_ir.irnodes import StreamType, Identifier
 
 
 class TreeToSpatialIR(lark.Transformer):
+
+    def __init__(self, filename: str = None):
+        super().__init__()
+        self.filename = filename
+
+    def _call_userfunc(self, tree, new_children=None):
+        """
+        Override the default _call_userfunc to add source line information.
+        """
+        # Call the original function with the transformed children
+        result = super()._call_userfunc(tree, new_children)
+
+        # Add source line information to the result
+        if isinstance(result, irnodes.SpatialNode):
+            try:
+                result.lineinfo = irnodes.LineInfo(self.filename, tree.meta.line, tree.meta.column)
+            except AttributeError:
+                result.lineinfo = None
+
+        return result
+
     # Low-level literal syntax
     digit = lambda self, val: int(val[0])
     digits = lambda self, val: int(val[0])

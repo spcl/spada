@@ -21,32 +21,35 @@ class Parser:
             ebnf = fp.read()
 
         # Create a parser
-        self.parser = lark.Lark(ebnf, parser='earley')
+        self.parser = lark.Lark(ebnf, parser='earley', propagate_positions=True)
         self.transformer = lark_to_ir.TreeToSpatialIR()
 
-    def parse(self, code: str) -> irnodes.Kernel:
+    def parse(self, code: str, name: str = None) -> irnodes.Kernel:
         """
         Parses a string representing a spatial IR kernel, returning the
         top-level kernel IR node.
         
         :param code: A code string in spatial stencil format.
+        :param name: An optional name for the file, used for error messages.
         :return: A Kernel node representing the root of the spatial IR.
         """
         tree = self.parser.parse(code)
+        self.transformer.filename = name or '<unknown>'
         ast = self.transformer.transform(tree)
         return ast
 
 
-def parse_string(code: str) -> irnodes.Kernel:
+def parse_string(code: str, name: str = None) -> irnodes.Kernel:
     """
     Parses a string representing a spatial IR kernel, returning the
     top-level kernel IR node.
     
     :param code: A code string in spatial stencil format.
+    :param name: An optional name for the file, used for error messages.
     :return: A Kernel node representing the root of the spatial IR.
     """
     parser = Parser()
-    return parser.parse(code)
+    return parser.parse(code, name)
 
 
 def parse_file(file_or_filename: TextIO | str) -> irnodes.Kernel:
@@ -59,7 +62,7 @@ def parse_file(file_or_filename: TextIO | str) -> irnodes.Kernel:
     """
     if isinstance(file_or_filename, str):
         with open(file_or_filename, 'r') as fp:
-            return parse_string(fp.read())
+            return parse_string(fp.read(), name=file_or_filename)
     return parse_string(file_or_filename.read())
 
 
