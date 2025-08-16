@@ -26,6 +26,8 @@ def generate_csl_statement(statement: spir.Statement, dsds: dict[spir.Identifier
         pass
         # return emit_for(statement, dsds, dtypes)
     elif isinstance(statement, spir.AsyncBlock):
+        # In the beginning, activate the next sequential-dependency task
+        # In the end, unblock the completion waiters
         pass
         # return emit_async_block(statement, dsds, dtypes)
     elif isinstance(statement, spir.AssignmentStatement):
