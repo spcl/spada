@@ -1,8 +1,8 @@
 import click
-import json
+import itertools
 import os
 from spatialstencil.lowering import spatial_ir_to_csl as s2c
-from spatialstencil.syntax.spatial_ir import parser, passes, analysis, irnodes as spa
+from spatialstencil.syntax.spatial_ir import parser, passes, analysis, irnodes as spa, canonicalization
 from spatialstencil.syntax.common import serialization
 import subprocess
 
@@ -98,6 +98,16 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
 
     # Generate metadata.json file
     input_args, output_args = analysis.get_kernel_stream_arguments(kernel)
+    rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    stream_extents = analysis.detect_stream_argument_extents(rectangles, kernel)
+    for argname, arg in itertools.chain(input_args.items(), output_args.items()):
+        arg_id = spa.Identifier(argname, 0)
+        if arg_id not in stream_extents.extents:
+            raise ValueError(f"Argument '{argname}' does not have a detected extent. "
+                             "Please ensure the argument is properly defined in the kernel.")
+        arg["rect_offset"] = [
+            stream_extents.extents[arg_id][0].x_range[0], stream_extents.extents[arg_id][0].y_range[0]
+        ]
     metadata = {
         "kernel_name": kernel.name,
         "inputs": input_args,

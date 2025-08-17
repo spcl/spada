@@ -1,5 +1,5 @@
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Union, TYPE_CHECKING
@@ -25,6 +25,7 @@ class ArrayType:
     shape: List[int]
     dtype: str  # One of f32, f16, i32, u32, etc.
     buffer_size: Union[int, None] = None  # Optional buffer size for streams
+    rect_offset: List[int] = field(default_factory=lambda: [0, 0])  # Optional rectangle offset for streams
 
 
 dtype_to_numpy = {
@@ -105,8 +106,8 @@ def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.Sdk
     runtime.memcpy_h2d(
         buffer_id,
         data.ravel(),
-        0,  #metadata.fabric_offsets[0],  # PE offset in x direction
-        0,  #metadata.fabric_offsets[1],  # PE offset in y direction
+        metadata.inputs[name].rect_offset[0],  # PE offset in x direction
+        metadata.inputs[name].rect_offset[1],  # PE offset in y direction
         shape[1],  # Width is the second dimension
         shape[0],  # Height is the first dimension
         shape[2],
@@ -135,8 +136,8 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
     runtime.memcpy_d2h(
         data.ravel(),
         buffer_id,
-        0,  #metadata.fabric_offsets[0],  # PE offset in x direction
-        0,  #metadata.fabric_offsets[1],  # PE offset in y direction
+        metadata.outputs[name].rect_offset[0],  # PE offset in x direction
+        metadata.outputs[name].rect_offset[1],  # PE offset in y direction
         shape[1],  # Width is the second dimension
         shape[0],  # Height is the first dimension
         shape[2],
