@@ -343,7 +343,7 @@ def create_csl_tasks(completion_dag: nx.DiGraph, block: spir.ComputeBlock, dtype
             result[stmt_task].outgoing[ind] = (succ_task, etype)
 
     # If the last task is local and empty, we can contract it with our exit task
-    if not result[-1].statements:
+    if len(result) > 0 and not result[-1].statements:
         result = result[:-1]
 
     # Determine terminators: if a task has a predecessor but no matching activator (outgoing statement),
