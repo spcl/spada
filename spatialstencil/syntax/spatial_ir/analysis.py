@@ -161,7 +161,7 @@ def sends_and_receives(compute: spir.ComputeBlock) -> dict[spir.Identifier, tupl
 
 
 def get_kernel_stream_arguments(
-        kernel: spir.Kernel) -> tuple[dict[str, tuple[str, list[int]]], dict[str, tuple[str, list[int]]]]:
+        kernel: spir.Kernel) -> tuple[dict[str, dict[str, list[int] | str]], dict[str, dict[str, list[int] | str]]]:
     """
     Returns two dictionaries:
     1. A dictionary mapping input stream names to their data types and shapes.
@@ -267,6 +267,8 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
 
                 # If array slice, ensure that the indices are valid for the rectangle
                 if isinstance(stream_name, spir.ArraySlice):
+                    if stream_name.array not in stream_extents.argnames:
+                        continue
                     # For 1D rectangle subsets (e.g., ``place i,j in [0:1, 0:N]`` with ``a[j]``),
                     # we need to check that the used indices correspond to valid compute block variables
 
@@ -287,6 +289,9 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
                             f".\n  In {stream_name.lineinfo}")
 
                     stream_name = stream_name.array
+
+                if stream_name not in stream_extents.argnames:
+                    continue
 
                 # For every variable name that is not in the position order, ensure the dimension is 1
                 for i, var in enumerate(compute_block.variables):
