@@ -1,3 +1,4 @@
+import copy
 from spatialstencil.syntax.spatial_ir import irnodes as spa
 from spatialstencil.syntax.stencil_ir.type_inference import _result_type_of
 
@@ -21,6 +22,26 @@ class Concretizer(spa.NodeTransformer):
         if node.name in self.params:
             return spa.ConstantLiteral(self.params[node.name], spa.ScalarType.i32)
         return self.generic_visit(node)
+
+
+class FindAndReplace(spa.NodeTransformer):
+    """
+    A node transformer that replaces old nodes with new nodes.
+    """
+
+    def __init__(self, replacements: dict[spa.SpatialNode, spa.SpatialNode]):
+        super().__init__()
+        self.replacements = replacements
+
+    def visit(self, node: spa.SpatialNode):
+        try:
+            if node in self.replacements:
+                return copy.deepcopy(self.replacements[node])
+        except TypeError:
+            # If the node is not hashable, we cannot use it as a key in a dict.
+            # This is the case for some complex nodes like expressions.
+            pass
+        return super().visit(node)
 
 
 def concretize_parameters(kernel: spa.Kernel, **parameters: int) -> spa.Kernel:

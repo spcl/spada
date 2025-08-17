@@ -4,7 +4,7 @@ Canonicalization passes for Spatial IR
 from collections import defaultdict
 import copy
 from dataclasses import dataclass
-from spatialstencil.syntax.spatial_ir import irnodes as spir, analysis
+from spatialstencil.syntax.spatial_ir import irnodes as spir, analysis, passes
 from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle
 
 
@@ -70,14 +70,19 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
             for place in block.place:
                 rect = place.get_grid_rect()
                 if rect in rect_place:
-                    rect_place[rect].statements.extend(place.statements)
+                    # Replace variables in place statements with the new variables
+                    rep = passes.FindAndReplace({oldv.identifier: newv.identifier for oldv, newv in zip(place.variables, rect_place[rect].variables)})
+                    stmts = [rep.visit(s) for s in place.statements]
+                    rect_place[rect].statements.extend(stmts)
                 else:
                     rect_place[rect] = copy.deepcopy(place)
             # Extend dataflow blocks
             for df in block.dataflow:
                 rect = df.get_grid_rect()
                 if rect in rect_dataflow:
-                    rect_dataflow[rect].statements.extend(df.statements)
+                    rep = passes.FindAndReplace({oldv.identifier: newv.identifier for oldv, newv in zip(df.variables, rect_dataflow[rect].variables)})
+                    stmts = [rep.visit(s) for s in df.statements]
+                    rect_dataflow[rect].statements.extend(stmts)
                 else:
                     rect_dataflow[rect] = copy.deepcopy(df)
             # Concatenate compute blocks with an endphase statement
@@ -85,7 +90,9 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
                 rect = compute.get_grid_rect()
                 if rect in rect_compute:
                     rect_compute[rect].statements.append(spir.AwaitAllStatement())
-                    rect_compute[rect].statements.extend(compute.statements)
+                    rep = passes.FindAndReplace({oldv.identifier: newv.identifier for oldv, newv in zip(compute.variables, rect_compute[rect].variables)})
+                    stmts = [rep.visit(s) for s in compute.statements]
+                    rect_compute[rect].statements.extend(stmts)
                 else:
                     rect_compute[rect] = copy.deepcopy(compute)
         else:

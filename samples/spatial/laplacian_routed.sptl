@@ -308,7 +308,7 @@ kernel @laplacian<>(stream<f32>[130, 131] readonly _in, stream<f32>[128, 128] wr
   }
   phase {
     compute u32 i#24, u32 j#24 in [1:129 , 1:129] {
-      await send(res_0_0_0, _kernel_out_0[(i#24 - 1), (j#24 - 1)])
+      await send(res_0_0_0, _kernel_out_0[(i#24), (j#24)])
     }
   }
 }
