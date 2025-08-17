@@ -194,7 +194,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     #     * Make (unique) DSDs out of memory accesses in compute blocks
     #     * Generate routing instructions from dataflow blocks
     #     * Make unique colors out of streams, reduce number of streams
-    color_map = _collect_and_allocate_colors(rect.metadata, header)
+    color_map = _collect_and_allocate_colors(rect, header, kernel, use_memcpy_mode, stream_extents)
     _collect_and_generate_fields(rect.metadata.place, header, footer, kernel, use_memcpy_mode)
     dtypes = _collect_identifier_types(rect.metadata, kernel.arguments)
 
@@ -267,21 +267,63 @@ task exit_task() void {{
     return header.getvalue() + '\n' + current_code.getvalue() + '\n' + footer.getvalue()
 
 
-def _collect_and_allocate_colors(rect: PEBlock, header: StringIO) -> dict[str, int]:
+def _collect_and_allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Kernel, use_memcpy_mode: bool,
+                                 stream_extents: analysis.StreamExtents) -> dict[str, int]:
     """
     Returns a mapping of each stream to a CSL color, and adds an allocation there.
 
     :param rect: The rectangle to use.
     :param header: A code generator stream for a file's header (where the declarations are).
+    :param kernel: The kernel to use for argument colors.
+    :param use_memcpy_mode: Whether to use memcpy mode.
+    :param stream_extents: The stream extents to use for argument color assignment.
     :return: Dictionary mapping each stream to its respective color
     """
-    result: dict[int, int] = {}
+    result: dict[str, int] = {}
+    wrote_header: bool = False
 
-    if rect.dataflow.statements:
-        header.write('// Colors\n')
+    # Collect colors from kernel arguments if in streaming mode
+    if not use_memcpy_mode:
+        arg_offset = 0
+        input_args = []
+        output_args = []
+        for arg in kernel.arguments:
+            if arg.compiletime:
+                continue
+            if not stream_extents.is_valid(arg.identifier, rect):  # Skip arguments that are not participating in this rectangle
+                continue
+            if arg.readonly:
+                input_args.append((False, arg))
+            elif arg.writeonly:
+                output_args.append((True, arg))
+            else:
+                input_args.append((False, arg))
+                output_args.append((True, arg))
+
+        for is_output, arg in input_args + output_args:
+            if ((isinstance(arg.dtype, spir.StreamType) and arg.dtype.buffer_size is None) or
+                (isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType) and
+                arg.dtype.base_type.buffer_size is None)):
+                if not wrote_header:
+                    header.write('\n// Streaming memcpy colors\n')
+                    wrote_header = True
+
+                # If the argument is a stream, allocate a color for h2d and d2h transfers
+                name = name_to_csl(arg.identifier)
+                if not is_output:
+                    result[name + "_H2D"] = csl.COLORS[arg_offset]
+                    arg_offset += 1
+                    header.write(f'const {name}_H2D_color: color = @get_color({result[name + "_H2D"]});\n')
+                else:
+                    result[name + "_D2H"] = csl.COLORS[arg_offset]
+                    arg_offset += 1
+                    header.write(f'const {name}_D2H_color: color = @get_color({result[name + "_D2H"]});\n')
+
+    if rect.metadata.dataflow.statements:
+        header.write('\n// Colors\n')
 
     # Collect colors from streams in dataflow
-    for stream_decl in rect.dataflow.statements:
+    for stream_decl in rect.metadata.dataflow.statements:
         name = name_to_csl(stream_decl.stream_name)
         if stream_decl.routing is None:
             raise SyntaxError(f'Non-routed stream "{name}". When generating CSL, Spatial IR code must have all streams '
@@ -294,7 +336,7 @@ def _collect_and_allocate_colors(rect: PEBlock, header: StringIO) -> dict[str, i
                               f'{stream_decl.routing.channel}')
 
         # Add to mapping
-        result[name] = csl.COLORS[stream_decl.routing.channel]
+        result[name] = csl.COLORS[stream_decl.routing.channel + arg_offset]
         # Declare color
         header.write(f'const {name}_color: color = @get_color({result[name]});\n')
 
