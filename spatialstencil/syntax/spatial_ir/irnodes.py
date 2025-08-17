@@ -53,6 +53,12 @@ class ConstantLiteral(SpatialNode):
     def as_ir(self, indent: int = 0) -> str:
         return str(self.value)
 
+    def eval(self) -> Union[int, float]:
+        """
+        Evaluate the constant literal.
+        """
+        return self.value
+
 
 # Parameters
 @dataclass
@@ -174,6 +180,14 @@ class UnaryOperator(SpatialNode):
     def as_ir(self, indent: int = 0) -> str:
         return f'{self.op}{self.value.as_ir()}'
 
+    def eval(self) -> Union[int, float]:
+        value = self.value.eval()
+        if self.op == '+':
+            return +value
+        elif self.op == '-':
+            return -value
+        raise ValueError("Cannot evaluate non-constant unary operator.")
+
 
 # Binary Operators
 @dataclass
@@ -192,6 +206,40 @@ class BinaryOperator(SpatialNode):
 
     def as_ir(self, indent: int = 0) -> str:
         return f'({self.left.as_ir()} {self.op} {self.right.as_ir()})'
+
+    def eval(self) -> Union[int, float]:
+        """
+        Evaluate the binary operator if both left and right are constant literals.
+        """
+        left_val = self.left.eval()
+        right_val = self.right.eval()
+
+        if isinstance(left_val, (int, float)) and isinstance(right_val, (int, float)):
+            if self.op == '+':
+                return left_val + right_val
+            elif self.op == '-':
+                return left_val - right_val
+            elif self.op == '*':
+                return left_val * right_val
+            elif self.op == '/':
+                return left_val / right_val
+            elif self.op == '//':
+                return left_val // right_val
+            elif self.op == '%':
+                return left_val % right_val
+            elif self.op == '==':
+                return left_val == right_val
+            elif self.op == '!=':
+                return left_val != right_val
+            elif self.op == '<':
+                return left_val < right_val
+            elif self.op == '<=':
+                return left_val <= right_val
+            elif self.op == '>':
+                return left_val > right_val
+            elif self.op == '>=':
+                return left_val >= right_val
+        raise ValueError("Cannot evaluate non-constant binary operator.")
 
 
 # Ternary Operators
@@ -212,6 +260,18 @@ class TernaryOperator(SpatialNode):
     def as_ir(self, indent: int = 0) -> str:
         return f'({self.if_true.as_ir()} if {self.cond.as_ir()} else {self.if_false.as_ir()})'
 
+    def eval(self) -> Union[int, float, Identifier, Parameter, "ArraySlice"]:
+        """
+        Evaluate the ternary operator if all parts are constant literals.
+        """
+        cond_val = self.cond.eval()
+        if_true_val = self.if_true.eval()
+        if_false_val = self.if_false.eval()
+
+        if isinstance(cond_val, bool):
+            return if_true_val if cond_val else if_false_val
+        raise ValueError("Cannot evaluate non-constant ternary operator.")
+
 
 @dataclass
 class MultiplyAccumulateOperator(SpatialNode):
@@ -229,6 +289,17 @@ class MultiplyAccumulateOperator(SpatialNode):
 
     def as_ir(self, indent: int = 0) -> str:
         return f'fmac({self.a.as_ir()}, {self.b.as_ir()}, {self.c.as_ir()})'
+
+    def eval(self) -> Union[int, float]:
+        """
+        Evaluate the multiply-accumulate operator if all parts are constant literals.
+        """
+        a_val = self.a.eval()
+        b_val = self.b.eval()
+        c_val = self.c.eval()
+        if isinstance(a_val, (int, float)) and isinstance(b_val, (int, float)) and isinstance(c_val, (int, float)):
+            return a_val + b_val * c_val
+        raise ValueError("Cannot evaluate non-constant multiply-accumulate operator.")
 
 
 # ArraySlice to handle both subscripts (single index access) and array slices (start:end)
@@ -276,9 +347,7 @@ class Expression(SpatialNode):
         return self.value.as_ir()
 
     def eval(self) -> int | float | Identifier | Parameter | ArraySlice | UnaryOperator | BinaryOperator:
-        if isinstance(self.value, ConstantLiteral):
-            return self.value.value
-        return self.value
+        return self.value.eval() if hasattr(self.value, 'eval') else self.value
 
 
 @dataclass
@@ -350,25 +419,25 @@ class SubgridExpression(SpatialNode):
         assert isinstance(self.y_range, RangeExpression)
 
     def get_grid_rect(self) -> tuple[int, int, int, int]:
-        start_x, start_y = self.x_range.start.value, self.y_range.start.value
+        start_x, start_y = self.x_range.start.eval(), self.y_range.start.eval()
         if self.x_range.stop is None:
-            stop_x = ConstantLiteral(start_x.value + 1, start_x.dtype)
+            stop_x = start_x + 1
         else:
-            stop_x = self.x_range.stop.value
+            stop_x = self.x_range.stop.eval()
         if self.y_range.stop is None:
-            stop_y = ConstantLiteral(start_y.value + 1, start_y.dtype)
+            stop_y = start_y + 1
         else:
-            stop_y = self.y_range.stop.value
-        if not isinstance(start_x, ConstantLiteral):
-            raise TypeError(f'Cannot obtain concrete grid size. x range value "{start_x.as_ir()}" is not constant')
-        if not isinstance(start_y, ConstantLiteral):
-            raise TypeError(f'Cannot obtain concrete grid size. y range value "{start_y.as_ir()}" is not constant')
-        if not isinstance(stop_x, ConstantLiteral):
-            raise TypeError(f'Cannot obtain concrete grid size. x range value "{stop_x.as_ir()}" is not constant')
-        if not isinstance(stop_y, ConstantLiteral):
-            raise TypeError(f'Cannot obtain concrete grid size. y range value "{stop_y.as_ir()}" is not constant')
+            stop_y = self.y_range.stop.eval()
+        if not isinstance(start_x, int):
+            raise TypeError(f'Cannot obtain concrete grid size. x range value "{start_x.as_ir()}" is not integral')
+        if not isinstance(start_y, int):
+            raise TypeError(f'Cannot obtain concrete grid size. y range value "{start_y.as_ir()}" is not integral')
+        if not isinstance(stop_x, int):
+            raise TypeError(f'Cannot obtain concrete grid size. x range value "{stop_x.as_ir()}" is not integral')
+        if not isinstance(stop_y, int):
+            raise TypeError(f'Cannot obtain concrete grid size. y range value "{stop_y.as_ir()}" is not integral')
 
-        return start_x.value, stop_x.value, start_y.value, stop_y.value
+        return start_x, stop_x, start_y, stop_y
 
     def as_ir(self, indent: int = 0) -> str:
         return f'[{self.x_range.as_ir()} , {self.y_range.as_ir()}]'
