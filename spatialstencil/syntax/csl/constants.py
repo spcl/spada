@@ -33,3 +33,9 @@ _CSL_COLORS = {
     'wse3': list(range(0, 21)),
 }
 COLORS = _CSL_COLORS[ARCH]
+
+_MEMCPY_COLORS = {
+    'wse2': list(range(21, 24)) + list(range(27, 32)),
+    'wse3': list(range(21, 24)) + list(range(27, 32)),
+}
+MEMCPY_COLORS = _MEMCPY_COLORS[ARCH]
