@@ -5,6 +5,7 @@ from spatialstencil.syntax.spatial_ir import irnodes as spir
 from dataclasses import dataclass
 from typing import Literal
 import networkx as nx  # TODO: Switch to igraph
+from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle
 
 
 @dataclass(frozen=True)
@@ -214,3 +215,140 @@ def kernel_uses_memcpy_mode(kernel: spir.Kernel) -> bool:
             if arg.dtype.base_type.buffer_size is not None:
                 return True
     return False
+
+
+class StreamExtents:
+    """
+    Class to manage stream extents for mapping stream arguments to PE rectangles.
+    """
+
+    def __init__(self, kernel: spir.Kernel):
+        self.extents: dict[spir.Identifier, list[Rectangle]] = {}
+        self.argnames: set[spir.Identifier] = set(arg.identifier for arg in kernel.arguments)
+
+    def add_extent(self, arg: spir.Identifier, rect: Rectangle):
+        """
+        Adds a rectangle extent for the given stream argument.
+        If the argument is not already in the extents, it initializes it.
+        """
+        if arg not in self.argnames:
+            return  # Ignore arguments not in the kernel
+        if arg not in self.extents:
+            self.extents[arg] = []
+        self.extents[arg].append(rect)
+
+    def is_valid(self, arg: spir.Identifier, rect: Rectangle) -> bool:
+        return arg in self.extents and any(r.is_subset_of(rect) for r in self.extents[arg])
+
+
+def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Kernel) -> StreamExtents:
+    """
+    Detects the extents of stream arguments in the current kernel.
+    This function collects all rectangles that contain send or receive statements
+    for each stream argument and returns a ``StreamExtents`` object containing this information.
+    
+    Each stream argument has to correspond to a single contiguous rectangle (even if it appears as a union
+    of rectangles). In case of disjoint rectangles, an exception is raised.
+    """
+    # Collect all extents from all rectangles
+    stream_extents = StreamExtents(kernel)
+    for rect in rectangles:
+        compute_block: spir.ComputeBlock = rect.metadata.compute
+        # Create a mapping of variable names to their positions in the compute block
+        var_name_to_position = {var.identifier: i for i, var in enumerate(compute_block.variables)}
+        subgrid = compute_block.get_grid_rect()
+
+        for stmt in compute_block.statements:
+            if isinstance(stmt, spir.SendStatement) or isinstance(stmt, spir.ReceiveStatement):
+                stream_name = stmt.stream_name
+
+                # Keep track of the position order of indices in the array slice (or none if one stream is used)
+                position_order = []
+
+                # If array slice, ensure that the indices are valid for the rectangle
+                if isinstance(stream_name, spir.ArraySlice):
+                    # For 1D rectangle subsets (e.g., ``place i,j in [0:1, 0:N]`` with ``a[j]``),
+                    # we need to check that the used indices correspond to valid compute block variables
+
+                    # Check that each index in the array slice corresponds to a valid compute block variable
+                    for index_expr in stream_name.indices:
+                        index_name = index_expr.value
+                        if not isinstance(index_name, spir.Identifier) or index_name not in var_name_to_position:
+                            raise ValueError(
+                                f"Array slice {stream_name.as_ir()} uses index '{index_name.as_ir()}', "
+                                f"but compute block variables are {[var.identifier.as_ir() for var in compute_block.variables]}. "
+                                f"Index is not available in this compute block.\n  In {stream_name.lineinfo}")
+                        position_order.append(var_name_to_position[index_name])
+                    # If position order is not monotonically increasing, raise an error
+                    if not all(position_order[i] <= position_order[i + 1] for i in range(len(position_order) - 1)):
+                        raise ValueError(
+                            f"Array slice {stream_name.as_ir()} uses an index order that does not match "
+                            f"the compute block variables {[var.identifier.as_ir() for var in compute_block.variables]}"
+                            f".\n  In {stream_name.lineinfo}")
+
+                    stream_name = stream_name.array
+
+                # For every variable name that is not in the position order, ensure the dimension is 1
+                for i, var in enumerate(compute_block.variables):
+                    if i not in position_order:
+                        if (subgrid[2 * i + 1] - subgrid[2 * i]) != 1:
+                            raise ValueError(
+                                f"Array slice {stream_name.as_ir()} skips index '{var.identifier.as_ir()}', "
+                                f"but compute block variable '{var.identifier.as_ir()}' has shape "
+                                f"{(subgrid[2 * i + 1] - subgrid[2 * i])}. Unused index subgrids must have "
+                                f"dimension 1.\n  In {stream_name.lineinfo}")
+
+                stream_extents.add_extent(stream_name, rect)
+
+    # Check for disjoint rectangles and validate that each stream argument maps to a contiguous region
+    for stream_name, extents in stream_extents.extents.items():
+        if len(extents) > 1:
+            # Check if rectangles can be unified into a single contiguous rectangle
+            # For now, we'll raise an error for disjoint rectangles as they're not supported
+
+            # Sort rectangles by their position to check for contiguity
+            extents.sort(key=lambda r: (r.x_range[0], r.y_range[0]))
+
+            # Check if rectangles are contiguous (can be unified)
+            for i in range(len(extents) - 1):
+                current_rect = extents[i]
+                next_rect = extents[i + 1]
+
+                # Check if rectangles are adjacent or overlapping
+                # Two rectangles are contiguous if they share a border or overlap
+                x_adjacent = (
+                    current_rect.x_range[1] == next_rect.x_range[0] or
+                    current_rect.x_range[0] == next_rect.x_range[1] or
+                    (current_rect.x_range[0] <= next_rect.x_range[1] and
+                     next_rect.x_range[0] <= current_rect.x_range[1]))
+
+                y_adjacent = (
+                    current_rect.y_range[1] == next_rect.y_range[0] or
+                    current_rect.y_range[0] == next_rect.y_range[1] or
+                    (current_rect.y_range[0] <= next_rect.y_range[1] and
+                     next_rect.y_range[0] <= current_rect.y_range[1]))
+
+                # For rectangles to be contiguous, they must be adjacent in at least one dimension
+                # and overlap or be adjacent in the other dimension
+                if not (x_adjacent and y_adjacent):
+                    raise ValueError(f"Stream argument '{stream_name.as_ir()}' is used in disjoint rectangles. "
+                                     f"Found rectangles at {current_rect.x_range}×{current_rect.y_range} and "
+                                     f"{next_rect.x_range}×{next_rect.y_range}, which are not contiguous. "
+                                     f"Stream arguments must correspond to a single contiguous rectangular region.")
+
+    # Union all rectangles for each stream argument
+    for stream_name, extents in stream_extents.extents.items():
+        if len(extents) > 1:
+            # Union the rectangles into a single rectangle
+            x_min = min(r.x_range[0] for r in extents)
+            x_max = max(r.x_range[1] for r in extents)
+            y_min = min(r.y_range[0] for r in extents)
+            y_max = max(r.y_range[1] for r in extents)
+
+            # Create a new unified rectangle using the metadata from the first rectangle
+            unified_rect = Rectangle(x_range=(x_min, x_max), y_range=(y_min, y_max), metadata=extents[0].metadata)
+
+            # Replace the list with just the unified rectangle
+            stream_extents.extents[stream_name] = [unified_rect]
+
+    return stream_extents

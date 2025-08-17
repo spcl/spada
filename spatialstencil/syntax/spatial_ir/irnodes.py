@@ -419,6 +419,11 @@ class SubgridExpression(SpatialNode):
         assert isinstance(self.y_range, RangeExpression)
 
     def get_grid_rect(self) -> tuple[int, int, int, int]:
+        """
+        Get the concrete grid rectangle defined by the subgrid expression.
+
+        :return: A tuple of (start_x, stop_x, start_y, stop_y)
+        """
         start_x, start_y = self.x_range.start.eval(), self.y_range.start.eval()
         if self.x_range.stop is None:
             stop_x = start_x + 1
@@ -908,6 +913,11 @@ class ComputeBlock(SpatialNode):
         assert len(self.variables) == 2
 
     def get_grid_rect(self) -> tuple[int, int, int, int]:
+        """
+        Returns the total PE grid rectangle for this compute block.
+
+        :return: A rectangle as a tuple of (x range begin, x range end, y range begin, y range end).
+        """
         return self.subgrid.get_grid_rect()
 
     def as_ir(self, indent: int = 0) -> str:

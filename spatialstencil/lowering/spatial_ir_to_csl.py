@@ -43,6 +43,9 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     # Create mapping between SpIR blocks and PE rectangles. Creates empty blocks as necessary
     rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
 
+    # Detect stream argument extents (mapping e.g., `stream<f32>[N]` to an `Nx1` rectangle, or `stream<f32>` to one PE)
+    stream_rects = analysis.detect_stream_argument_extents(rectangles, kernel)
+    
     # Lower array receives and sends to foreach and for, respectively
     # (maybe unnecessary given that bulk send/receive can be implemented with fabout/fabin)
     # canonicalization.lower_bulk_communication(rectangles)
@@ -57,7 +60,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     for rect in rectangles:
         # Create a unique CSL code file based on rectangle offset
         csl_name = f'code_{rect.x_range[0]}_{rect.y_range[0]}.csl'
-        rect_code = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode)
+        rect_code = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode, stream_rects)
         csl_codes.append(CodeFile(csl_name, rect_code))
 
     # Prepare outputs
@@ -167,7 +170,7 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
 
 
 def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_instructions: list[str],
-                       scalar_arguments: list[str], use_memcpy_mode: bool):
+                       scalar_arguments: list[str], use_memcpy_mode: bool, stream_extents: analysis.StreamExtents) -> str:
     # Code generation carets
     header = StringIO()
     current_code = StringIO()
