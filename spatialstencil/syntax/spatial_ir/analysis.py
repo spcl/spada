@@ -317,25 +317,27 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
             # Check if rectangles are contiguous (can be unified)
             for i in range(len(extents) - 1):
                 current_rect = extents[i]
-                next_rect = extents[i + 1]
+                for next_rect in extents[0:i] + extents[i + 1:]:
+                    # Check if rectangles are adjacent or overlapping
+                    # Two rectangles are contiguous if they share a border or overlap
+                    x_adjacent = (
+                        current_rect.x_range[1] == next_rect.x_range[0] or
+                        current_rect.x_range[0] == next_rect.x_range[1] or
+                        (current_rect.x_range[0] <= next_rect.x_range[1] and
+                         next_rect.x_range[0] <= current_rect.x_range[1]))
 
-                # Check if rectangles are adjacent or overlapping
-                # Two rectangles are contiguous if they share a border or overlap
-                x_adjacent = (
-                    current_rect.x_range[1] == next_rect.x_range[0] or
-                    current_rect.x_range[0] == next_rect.x_range[1] or
-                    (current_rect.x_range[0] <= next_rect.x_range[1] and
-                     next_rect.x_range[0] <= current_rect.x_range[1]))
+                    y_adjacent = (
+                        current_rect.y_range[1] == next_rect.y_range[0] or
+                        current_rect.y_range[0] == next_rect.y_range[1] or
+                        (current_rect.y_range[0] <= next_rect.y_range[1] and
+                         next_rect.y_range[0] <= current_rect.y_range[1]))
 
-                y_adjacent = (
-                    current_rect.y_range[1] == next_rect.y_range[0] or
-                    current_rect.y_range[0] == next_rect.y_range[1] or
-                    (current_rect.y_range[0] <= next_rect.y_range[1] and
-                     next_rect.y_range[0] <= current_rect.y_range[1]))
-
-                # For rectangles to be contiguous, they must be adjacent in at least one dimension
-                # and overlap or be adjacent in the other dimension
-                if not (x_adjacent and y_adjacent):
+                    # For rectangles to be contiguous, they must be adjacent in at least one dimension
+                    # and overlap or be adjacent in the other dimension
+                    if x_adjacent and y_adjacent:
+                        break
+                else:
+                    # If we reach here, it means no adjacent rectangle was found
                     raise ValueError(f"Stream argument '{stream_name.as_ir()}' is used in disjoint rectangles. "
                                      f"Found rectangles at {current_rect.x_range}×{current_rect.y_range} and "
                                      f"{next_rect.x_range}×{next_rect.y_range}, which are not contiguous. "
