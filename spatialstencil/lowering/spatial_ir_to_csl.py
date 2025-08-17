@@ -3,11 +3,10 @@ Converts routed Spatial IR code to Cerebras CSL.
 """
 
 from io import StringIO
-import networkx as nx
 from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, analysis
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
 from spatialstencil.syntax.csl import constants as csl, preprocessing, tasks as tdag, statements as cslstmt
-from spatialstencil.syntax.csl.structures import DataStructureDescriptor
+from spatialstencil.syntax.csl import structures as cslstruct
 from spatialstencil.syntax.csl.codefile import CodeFile
 
 
@@ -45,7 +44,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
 
     # Detect stream argument extents (mapping e.g., `stream<f32>[N]` to an `Nx1` rectangle, or `stream<f32>` to one PE)
     stream_rects = analysis.detect_stream_argument_extents(rectangles, kernel)
-    
+
     # Lower array receives and sends to foreach and for, respectively
     # (maybe unnecessary given that bulk send/receive can be implemented with fabout/fabin)
     # canonicalization.lower_bulk_communication(rectangles)
@@ -60,7 +59,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     for rect in rectangles:
         # Create a unique CSL code file based on rectangle offset
         csl_name = f'code_{rect.x_range[0]}_{rect.y_range[0]}.csl'
-        rect_code = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode, stream_rects)
+        rect_code = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode,
+                                       stream_rects)
         csl_codes.append(CodeFile(csl_name, rect_code))
 
     # Prepare outputs
@@ -170,7 +170,8 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
 
 
 def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_instructions: list[str],
-                       scalar_arguments: list[str], use_memcpy_mode: bool, stream_extents: analysis.StreamExtents) -> str:
+                       scalar_arguments: list[str], use_memcpy_mode: bool,
+                       stream_extents: analysis.StreamExtents) -> str:
     # Code generation carets
     header = StringIO()
     current_code = StringIO()
@@ -209,7 +210,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     #      maintains the current state
     completion_dag = analysis.to_completion_dag(rect.metadata.compute)
     tasks = tdag.create_csl_tasks(completion_dag, rect.metadata.compute, dtypes)
-    dsds = _collect_unique_dsds(tasks, rect.metadata, header, dtypes)
+    dsds = _collect_unique_dsds(tasks, rect.metadata, header, dtypes, kernel)
 
     # TODO: Collect all scalar types for foreach receivers. Every sequential foreach can recycle index var
 
@@ -290,7 +291,8 @@ def _collect_and_allocate_colors(rect: Rectangle[PEBlock], header: StringIO, ker
         for arg in kernel.arguments:
             if arg.compiletime:
                 continue
-            if not stream_extents.is_valid(arg.identifier, rect):  # Skip arguments that are not participating in this rectangle
+            if not stream_extents.is_valid(arg.identifier,
+                                           rect):  # Skip arguments that are not participating in this rectangle
                 continue
             if arg.readonly:
                 input_args.append((False, arg))
@@ -303,7 +305,7 @@ def _collect_and_allocate_colors(rect: Rectangle[PEBlock], header: StringIO, ker
         for is_output, arg in input_args + output_args:
             if ((isinstance(arg.dtype, spir.StreamType) and arg.dtype.buffer_size is None) or
                 (isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType) and
-                arg.dtype.base_type.buffer_size is None)):
+                 arg.dtype.base_type.buffer_size is None)):
                 if not wrote_header:
                     header.write('\n// Streaming memcpy colors\n')
                     wrote_header = True
@@ -382,17 +384,107 @@ def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, foote
     header.write('\n')
 
 
-def _collect_unique_dsds(tasks: list[tdag.CSLTask], rect: PEBlock, header: StringIO,
-                         dtypes: dict[spir.Identifier, spir.IRType]) -> list[tuple[str, DataStructureDescriptor]]:
+def _collect_unique_dsds(
+    tasks: list[tdag.CSLTask],
+    rect: PEBlock,
+    header: StringIO,
+    dtypes: dict[spir.Identifier, spir.IRType],
+    kernel: spir.Kernel,
+) -> list[tuple[str, cslstruct.DataStructureDescriptor]]:
     """
     Returns a list of DSDs and generates them in the header.
     """
-    dsds: list[tuple[str, DataStructureDescriptor]] = []
-
-    # TODO: Find DSDs
+    dsds: list[tuple[str, cslstruct.DataStructureDescriptor]] = []
 
     # Generate appropriate header code
     header.write('// DSDs\n')
+
+    # What defines a DSD?
+    # 1. A (used) dataflow stream;
+    # 2. A (used) local array in a place block, whose manipulation can use DSD operations; or
+    # 3. An argument that is a stream or an array of streams in non memcpy mode, or buffer_size > 1 in memcpy mode.
+
+    # Collect metadata from dataflow and place blocks
+    stream_candidates: dict[str, tuple[spir.RelativeStreamDeclaration | spir.KernelArgument,
+                                       int | spir.Expression]] = {}
+    array_candidates: dict[str, tuple[spir.FieldDeclaration, list[int | spir.Expression]]] = {}
+    for df_statement in rect.dataflow.statements:
+        if isinstance(df_statement, spir.RelativeStreamDeclaration):
+            buffer_size = df_statement.dtype.buffer_size or 1
+            stream_candidates[df_statement.stream_name.as_ir()] = (df_statement, buffer_size)
+    for place_statement in rect.place.statements:
+        if isinstance(place_statement, spir.FieldDeclaration):
+            if isinstance(place_statement.dtype, spir.ArrayType):
+                try:
+                    eval_shape = [s if isinstance(s, int) else s.eval() for s in place_statement.dtype.shape]
+                    # If the product of the shape is 1, it is a scalar
+                    if not eval_shape or all(s == 1 for s in eval_shape):
+                        # Scalar, no DSD
+                        continue
+                except ValueError:
+                    # Dynamic shape, must create a DSD
+                    pass
+
+                array_candidates[place_statement.field_name.as_ir()] = (place_statement, place_statement.dtype.shape)
+    for arg in kernel.arguments:
+        if isinstance(arg.dtype, spir.StreamType):
+            buffer_size = arg.dtype.buffer_size or 1
+            stream_candidates[arg.identifier.as_ir()] = (arg, buffer_size)
+        elif isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType):
+            buffer_size = arg.dtype.base_type.buffer_size or 1
+            stream_candidates[arg.identifier.as_ir()] = (arg, buffer_size)
+
+    # Find used DSDs in compute block
+    for stmt in rect.compute.statements:
+        # Find out if compute block uses this stream for receive/send
+        if isinstance(stmt, (spir.ReceiveStatement, spir.SendStatement)):
+            stream_name = stmt.stream_name.array if isinstance(stmt.stream_name, spir.ArraySlice) else stmt.stream_name
+            if isinstance(stmt, spir.ReceiveStatement) and stream_name.as_ir() in stream_candidates:
+                dsd_type = cslstruct.DSDType.fabin
+                dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
+                extents = stream_candidates[stream_name.as_ir()][1]
+                extents = extents if isinstance(extents, int) else extents.eval()
+                dsd = cslstruct.FabricDSD(dsd_type, f'{name_to_csl(stream_name)}_color', extents)
+                dsds.append((dsd_name, dsd))
+            elif isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
+                dsd_type = cslstruct.DSDType.fabout
+                dsd_name = f'{name_to_csl(stream_name)}_out_dsd'
+                extents = stream_candidates[stream_name.as_ir()][1]
+                extents = extents if isinstance(extents, int) else extents.eval()
+                dsd = cslstruct.FabricDSD(dsd_type, f'{name_to_csl(stream_name)}_color', extents)
+                dsds.append((dsd_name, dsd))
+
+        for substmt in stmt.walk():
+            # If the destination is an array, we need to create a DSD
+            if not isinstance(substmt, spir.ArraySlice):
+                continue
+            if substmt.array.as_ir() not in array_candidates:
+                continue
+
+            _, shape = array_candidates[substmt.array.as_ir()]
+            if len(shape) == 1:
+                dsd_type = cslstruct.DSDType.mem1d
+                extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
+            else:
+                dsd_type = cslstruct.DSDType.mem4d
+                extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape] + ['1'] * (4 - len(shape))
+
+            # Find the index in the array
+            def _find_index(ind: spir.Expression) -> str:
+                for n in ind.walk():
+                    if isinstance(n, spir.Identifier):
+                        return name_to_csl(n)
+
+            dsd = cslstruct.MemoryDSD(
+                dsd_type,
+                name_to_csl(substmt.array),
+                extents,
+                [_find_index(ind) for ind in substmt.indices],
+                [ind.as_ir() for ind in substmt.indices] + ['0'] * (4 - len(shape)),
+            )
+            dsds.append((f"{name_to_csl(substmt.array)}_dsd", dsd))
+
+    # Write DSDs to header
     for name, dsd in dsds:
         header.write(f'const {name} = {dsd.as_csl()};\n')
 
@@ -484,8 +576,8 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]]) -> dict[tuple[int, int
 
 
 def _generate_data_task(rect: PEBlock, task: tdag.CSLTask, current_code: StringIO, header: StringIO, footer: StringIO,
-                        dsds: list[tuple[str, DataStructureDescriptor]], dtypes: dict[spir.Identifier, spir.IRType],
-                        color_map: dict[str, int]):
+                        dsds: list[tuple[str, cslstruct.DataStructureDescriptor]],
+                        dtypes: dict[spir.Identifier, spir.IRType], color_map: dict[str, int]):
     """
     Generates a data task from a foreach loop.
 
@@ -509,8 +601,8 @@ def _generate_data_task(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
 
 
 def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringIO, header: StringIO, footer: StringIO,
-                        dsds: list[tuple[str, DataStructureDescriptor]], dtypes: dict[spir.Identifier, spir.IRType],
-                        color_map: dict[str, int]):
+                        dsds: list[tuple[str, cslstruct.DataStructureDescriptor]],
+                        dtypes: dict[spir.Identifier, spir.IRType], color_map: dict[str, int]):
     """
     Generates a local task from a CSL task.
     This function converts statements to DSD operations or generates appropriate code.

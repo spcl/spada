@@ -35,7 +35,7 @@ class MemoryDSD(DataStructureDescriptor):
     def __post_init__(self):
         assert self.dsd_type in (DSDType.mem1d, DSDType.mem4d)
         assert 1 <= len(self.extent) <= 4
-        assert len(self.idxvars) == len(self.expression)
+        assert 1 <= len(self.expression) <= 4
         assert len(self.idxvars) == len(self.extent)
 
     def as_csl(self) -> str:

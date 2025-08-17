@@ -238,7 +238,7 @@ class StreamExtents:
         self.extents[arg].append(rect)
 
     def is_valid(self, arg: spir.Identifier, rect: Rectangle) -> bool:
-        return arg in self.extents and any(r.is_subset_of(rect) for r in self.extents[arg])
+        return arg in self.extents and any(rect.is_subset_of(r) for r in self.extents[arg])
 
 
 def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Kernel) -> StreamExtents:
