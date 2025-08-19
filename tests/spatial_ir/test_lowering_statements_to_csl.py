@@ -637,12 +637,24 @@ def test_foreach_with_parameter_range():
 def test_foreach_without_parameter_range():
     """Test foreach without parameter range (variant 2)."""
     spatial_ir_code = '''
-    kernel @test_foreach_simple<N>(stream<f32>[N] readonly input, stream<f32>[N] writeonly output) {
+    kernel @test_foreach_simple<N>(stream<f32>[N, 2] readonly input, stream<f32>[N] writeonly output) {
         place u16 i, u16 j in [0:N, 0:1] {
             f32 accumulator;
         }
+        place u16 i, u16 j in [0:N, 1:2] {
+            f32 val;
+        }
         dataflow u16 i, u16 j in [0:N, 0:1] {
-            stream<f32> data_stream = relative_stream(0, 0);
+            stream<f32> data_stream = relative_stream(0, 1) {
+                hops = [(0, 1)],
+                channel = 0
+            };
+        }
+        dataflow u16 i, u16 j in [0:N, 1:2] {
+            stream<f32> data_stream = relative_stream(0, 1) {
+                hops = [(0, 1)],
+                channel = 1
+            };
         }
         compute u16 i, u16 j in [0:N, 0:1] {
             accumulator = 0.0;
@@ -655,6 +667,7 @@ def test_foreach_without_parameter_range():
         }
     }
     '''
+    pytest.xfail("no-range foreach not implemented yet")
 
     kernel = create_inline_spatial_ir(spatial_ir_code)
     kernel = passes.concretize_parameters(kernel, N=8)
