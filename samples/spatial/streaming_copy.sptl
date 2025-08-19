@@ -1,0 +1,13 @@
+/**
+ * Simple matrix copy without any communication (streaming version)
+ **/
+kernel @streaming_copy<N>(stream<f32>[N, N] readonly a,
+                stream<f32>[N, N] writeonly out) {
+    compute u16 i, u16 j in [0:N, 0:N] {
+        // Streaming receive
+        await foreach f32 x in receive(a[i, j]) {
+            // Send the result to the output
+            await send(x, out[i, j]);
+        }
+    }
+}
