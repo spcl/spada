@@ -408,6 +408,7 @@ def _collect_unique_dsds(
     stream_candidates: dict[str, tuple[spir.RelativeStreamDeclaration | spir.KernelArgument,
                                        int | spir.Expression]] = {}
     array_candidates: dict[str, tuple[spir.FieldDeclaration, list[int | spir.Expression]]] = {}
+    stream_args: set[spir.Identifier] = set()
     for df_statement in rect.dataflow.statements:
         if isinstance(df_statement, spir.RelativeStreamDeclaration):
             buffer_size = df_statement.dtype.buffer_size or 1
@@ -430,9 +431,11 @@ def _collect_unique_dsds(
         if isinstance(arg.dtype, spir.StreamType):
             buffer_size = arg.dtype.buffer_size or 1
             stream_candidates[arg.identifier.as_ir()] = (arg, buffer_size)
+            stream_args.add(arg.identifier)
         elif isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType):
             buffer_size = arg.dtype.base_type.buffer_size or 1
             stream_candidates[arg.identifier.as_ir()] = (arg, buffer_size)
+            stream_args.add(arg.identifier)
 
     # Find used DSDs in compute block
     for stmt in rect.compute.statements:
@@ -453,6 +456,25 @@ def _collect_unique_dsds(
                 extents = extents if isinstance(extents, int) else extents.eval()
                 dsd = cslstruct.FabricDSD(dsd_type, f'{name_to_csl(stream_name)}_color', extents)
                 dsds.append((dsd_name, dsd))
+        elif isinstance(stmt, spir.ForeachStatement):
+            # If the foreach statement has a stream generator, it is a DSD
+            # unless only the receive generator is given (streaming, no range provided).
+            stream_name = (
+                stmt.receive_stream.stream_name.array
+                if isinstance(stmt.receive_stream.stream_name, spir.ArraySlice) else stmt.receive_stream.stream_name)
+            if not stmt.parameter_range:
+                if stream_name not in stream_args:
+                    raise SyntaxError(f'Foreach generator "{stream_name.as_ir()}" without a defined '
+                                      f'range must only be used with a kernel argument.\n  In line {stmt.lineinfo}')
+                # A data task will be created instead (handled in _generate_data_task)
+                # TODO: Ensure a data task is created for this stream with a test
+            else:
+                if stream_name.as_ir() in stream_candidates:
+                    dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
+                    extents = stream_candidates[stream_name.as_ir()][1]
+                    extents = extents if isinstance(extents, int) else extents.eval()
+                    dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, f'{name_to_csl(stream_name)}_color', extents)
+                    dsds.append((dsd_name, dsd))
 
         for substmt in stmt.walk():
             # If the destination is an array, we need to create a DSD
@@ -710,15 +732,3 @@ def name_to_csl(name: spir.Identifier) -> str:
         return name.name
     else:
         return f'{name.name}__{name.version}'
-
-
-def generate_memcpys():
-    # Do seprately for h2d and d2h
-    # On the host, memcopied buffers are always internally 3D. Source arrays can be any-dimensional
-    # Step 1: Find bounding box rectangles (think place-interleaved PE equivalence classes)
-    # Step 2: Pad ``place`` storage according to the max in rectangle (usually K)
-    # Step 3: Create internal 3D array B' - shape = PE rectangle shape (even if it's one value, it's a 3D array with
-    #         last dim = 1)
-    # On host: B'[i, j, :] = B[a(i,j),b(i,j),...]; then memcpy_{h2d,d2h}(B')
-    # Memcpy shape ignores shape of src array, always the shape is the shape of ``place``
-    pass
