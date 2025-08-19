@@ -125,11 +125,11 @@ class TestTypeInference(unittest.TestCase):
         # Check that all domains have been inferred (i.e. no unknown domains)
 
         files = [
-            Path(__file__).parent / Path('../samples/spst/laplacian_mat_ext.spst'),
-            Path(__file__).parent / Path('../samples/spst/laplacian_no_mat_ext.spst'),
-            Path(__file__).parent / Path('../samples/spst/if_else_ext.spst'),
-            Path(__file__).parent / Path('../samples/spst/multiple_returns_ext.spst'),
-            Path(__file__).parent / Path('../samples/spst/laplacian_mat_sh_ext.spst')
+            Path(__file__).parent / Path('../../samples/spst/laplacian_mat_ext.spst'),
+            Path(__file__).parent / Path('../../samples/spst/laplacian_no_mat_ext.spst'),
+            Path(__file__).parent / Path('../../samples/spst/if_else_ext.spst'),
+            Path(__file__).parent / Path('../../samples/spst/multiple_returns_ext.spst'),
+            Path(__file__).parent / Path('../../samples/spst/laplacian_mat_sh_ext.spst')
         ]
 
         for file in files:
@@ -139,13 +139,13 @@ class TestTypeInference(unittest.TestCase):
             self.assert_infer_domains(program)
 
     def test_ssa_versioning(self):
-        file1 = Path(__file__).parent / Path('../samples/spst/versioning.spst')
+        file1 = Path(__file__).parent / Path('../../samples/spst/versioning.spst')
         with open(file1, 'r') as f:
             program = parser.parse_file(f)
 
         SSAVisitor().visit(program)
 
-        file2 = Path(__file__).parent / Path('../samples/spst/versioning_ssa.spst')
+        file2 = Path(__file__).parent / Path('../../samples/spst/versioning_ssa.spst')
 
         with open(file2, 'r') as f:
             golden_program = parser.parse_file(f)
@@ -154,13 +154,13 @@ class TestTypeInference(unittest.TestCase):
 
 
     def test_vertical_intervals(self):
-        file1 = Path(__file__).parent / Path('../samples/spst/vertical_intervals.spst')
-        file2 = Path(__file__).parent / Path('../samples/spst/vertical_intervals_ext_dom.spst')
+        file1 = Path(__file__).parent / Path('../../samples/spst/vertical_intervals.spst')
+        file2 = Path(__file__).parent / Path('../../samples/spst/vertical_intervals_ext_dom.spst')
         self._test_program_domains_equal(file1, file2)
 
     def test_vertical_readwrite(self):
-        file1 = Path(__file__).parent / Path('../samples/spst/vertical_readwrite.spst')
-        file2 = Path(__file__).parent / Path('../samples/spst/vertical_readwrite_ext_dom.spst')
+        file1 = Path(__file__).parent / Path('../../samples/spst/vertical_readwrite.spst')
+        file2 = Path(__file__).parent / Path('../../samples/spst/vertical_readwrite_ext_dom.spst')
         self._test_program_domains_equal(file1, file2)
 
     def test_infer_extents_and_domains_is_complete(self):
@@ -169,10 +169,10 @@ class TestTypeInference(unittest.TestCase):
         are left in the program.
         """
         files = [
-            Path(__file__).parent / Path('../samples/spst/hdiff.spst'),
-            Path(__file__).parent / Path('../samples/spst/vadv.spst'),
-            Path(__file__).parent / Path('../samples/spst/hdiffsa.spst'),
-            Path(__file__).parent / Path('../samples/spst/uvbke.spst'),
+            Path(__file__).parent / Path('../../samples/spst/hdiff.spst'),
+            Path(__file__).parent / Path('../../samples/spst/vadv.spst'),
+            Path(__file__).parent / Path('../../samples/spst/hdiffsa.spst'),
+            Path(__file__).parent / Path('../../samples/spst/uvbke.spst'),
         ]
 
         for file in files:
@@ -287,26 +287,26 @@ class TestTypeInference(unittest.TestCase):
 
 
     def test_infer_extent_ifelse(self):
-        file = Path(__file__).parent / Path('../samples/spst/if_else.spst')
-        file2 = Path(__file__).parent / Path('../samples/spst/if_else_ext.spst')
+        file = Path(__file__).parent / Path('../../samples/spst/if_else.spst')
+        file2 = Path(__file__).parent / Path('../../samples/spst/if_else_ext.spst')
 
         self._test_program_extents_equal(file, file2)
 
     def test_multiple_returns(self):
-        file = Path(__file__).parent / Path('../samples/spst/multiple_returns.spst')
-        file2 = Path(__file__).parent / Path('../samples/spst/multiple_returns_ext.spst')
+        file = Path(__file__).parent / Path('../../samples/spst/multiple_returns.spst')
+        file2 = Path(__file__).parent / Path('../../samples/spst/multiple_returns_ext.spst')
 
         self._test_program_extents_equal(file, file2)
 
     def test_infer_extent_materialize(self):
-        file = Path(__file__).parent / Path('../samples/spst/laplacian_mat_sh.spst')
-        file2 = Path(__file__).parent / Path('../samples/spst/laplacian_mat_sh_ext.spst')
+        file = Path(__file__).parent / Path('../../samples/spst/laplacian_mat_sh.spst')
+        file2 = Path(__file__).parent / Path('../../samples/spst/laplacian_mat_sh_ext.spst')
 
         self._test_program_extents_equal(file, file2)
 
     def test_infer_extent_no_materialize(self):
-        file = Path(__file__).parent / Path('../samples/spst/laplacian_no_mat.spst')
-        file2 = Path(__file__).parent / Path('../samples/spst/laplacian_no_mat_ext.spst')
+        file = Path(__file__).parent / Path('../../samples/spst/laplacian_no_mat.spst')
+        file2 = Path(__file__).parent / Path('../../samples/spst/laplacian_no_mat_ext.spst')
 
         self._test_program_extents_equal(file, file2)
 
@@ -326,15 +326,15 @@ class TestTypeInference(unittest.TestCase):
 
     def test_infer_domain_from_extents_3(self):
 
-        file = Path(__file__).parent / Path('../samples/spst/laplacian_mat_sh.spst')
-        file2 = Path(__file__).parent / Path('../samples/spst/laplacian_mat_ext_dom.spst')
+        file = Path(__file__).parent / Path('../../samples/spst/laplacian_mat_sh.spst')
+        file2 = Path(__file__).parent / Path('../../samples/spst/laplacian_mat_ext_dom.spst')
 
         self.assert_extent_and_domain_inference(file, file2)
 
     def test_domain_inference_no_mat(self):
 
-        file = Path(__file__).parent / Path('../samples/spst/laplacian_no_mat.spst')
-        file2 = Path(__file__).parent / Path('../samples/spst/laplacian_no_mat_ext_dom.spst')
+        file = Path(__file__).parent / Path('../../samples/spst/laplacian_no_mat.spst')
+        file2 = Path(__file__).parent / Path('../../samples/spst/laplacian_no_mat_ext_dom.spst')
 
         self.assert_extent_and_domain_inference(file, file2)
 

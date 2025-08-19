@@ -62,11 +62,11 @@ def test_lowering_finishes():
     # This a basic check that the lowering finishes without errors
 
     files = [
-        Path(__file__).parent / Path('../samples/spst/laplacian_3ac.spst'),
-        Path(__file__).parent / Path('../samples/spst/laplacian_mat_ext_dom.spst'),  # ,
-        Path(__file__).parent / Path('../samples/spst/uvbke.spst'),
-        Path(__file__).parent / Path('../samples/spst/multiple_returns_ext.spst'),
-        Path(__file__).parent / Path('../samples/spst/laplacian_mat_sh_ext.spst')
+        Path(__file__).parent / Path('../../samples/spst/laplacian_3ac.spst'),
+        Path(__file__).parent / Path('../../samples/spst/laplacian_mat_ext_dom.spst'),  # ,
+        Path(__file__).parent / Path('../../samples/spst/uvbke.spst'),
+        Path(__file__).parent / Path('../../samples/spst/multiple_returns_ext.spst'),
+        Path(__file__).parent / Path('../../samples/spst/laplacian_mat_sh_ext.spst')
     ]
 
     for file in files:
@@ -139,12 +139,12 @@ def test_horizontal_stencil_transformer():
 
 def test_vertical_stencil_finishes():
     files = [
-        Path(__file__).parent / Path('../samples/spst/vertical_intervals.spst'),
-        Path(__file__).parent / Path('../samples/spst/vertical_simple.spst'),
-        Path(__file__).parent / Path('../samples/spst/vertical_backward_simple.spst'),
-        Path(__file__).parent / Path('../samples/spst/vertical_readwrite.spst'),
-        Path(__file__).parent / Path('../samples/spst/vertical_horizontal_refactored.spst'),
-        Path(__file__).parent / Path('../samples/spst/vertical_horizontal.spst'),
+        Path(__file__).parent / Path('../../samples/spst/vertical_intervals.spst'),
+        Path(__file__).parent / Path('../../samples/spst/vertical_simple.spst'),
+        Path(__file__).parent / Path('../../samples/spst/vertical_backward_simple.spst'),
+        Path(__file__).parent / Path('../../samples/spst/vertical_readwrite.spst'),
+        Path(__file__).parent / Path('../../samples/spst/vertical_horizontal_refactored.spst'),
+        Path(__file__).parent / Path('../../samples/spst/vertical_horizontal.spst'),
     ]
 
     for file in files:
@@ -161,7 +161,7 @@ def test_vertical_stencil_finishes():
 
 def test_scalar_arguments():
     files = [
-        Path(__file__).parent / Path('../samples/spst/scalar_arguments.spst'),
+        Path(__file__).parent / Path('../../samples/spst/scalar_arguments.spst'),
     ]
     for file in files:
         with open(file, 'r') as f:
@@ -181,7 +181,7 @@ def test_scalar_arguments():
 
 def test_vadv():
     files = [
-        Path(__file__).parent / Path('../samples/spst/vadv.spst'),
+        Path(__file__).parent / Path('../../samples/spst/vadv.spst'),
     ]
     for file in files:
         with open(file, 'r') as f:

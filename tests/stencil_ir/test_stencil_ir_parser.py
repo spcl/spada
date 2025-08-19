@@ -95,7 +95,7 @@ class TestStencilIRParser(unittest.TestCase):
         """
         Tests a roundtrip IR->parse->IR->parse->IR for differences.
         """
-        file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spst', 'hdiff.spst')
+        file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spst', 'hdiff.spst')
         program = parser.parse_file(file)
         ir_1 = program.as_ir()
         program2 = parser.parse_string(ir_1)
@@ -106,7 +106,7 @@ class TestStencilIRParser(unittest.TestCase):
         """
         Tests a roundtrip IR->parse->IR->parse->IR for differences.
         """
-        file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spst', 'vadv.spst')
+        file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spst', 'vadv.spst')
         program = parser.parse_file(file)
         ir_1 = program.as_ir()
         program2 = parser.parse_string(ir_1)
@@ -114,9 +114,9 @@ class TestStencilIRParser(unittest.TestCase):
         assert ir_1 == ir_2
 
     def test_shorthand_notation(self):
-        file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spst', 'laplacian_mat_ext.spst')
+        file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spst', 'laplacian_mat_ext.spst')
         program = parser.parse_file(file)
-        file2 = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spst', 'laplacian_mat_sh_ext.spst')
+        file2 = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spst', 'laplacian_mat_sh_ext.spst')
         program2 = parser.parse_file(file2)
         assert program.as_ir() == program2.as_ir()
 
@@ -124,7 +124,7 @@ class TestStencilIRParser(unittest.TestCase):
         """
         Tests the IR node visitor for the stencil IR.
         """
-        file = os.path.join(os.path.dirname(__file__), '..', 'samples', 'spst', 'vadv.spst')
+        file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spst', 'vadv.spst')
         program = parser.parse_file(file)
 
         visitor = IntervalCounter()
