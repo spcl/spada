@@ -258,52 +258,53 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
         var_name_to_position = {var.identifier: i for i, var in enumerate(compute_block.variables)}
         subgrid = compute_block.get_grid_rect()
 
-        for stmt in compute_block.statements:
-            if isinstance(stmt, spir.SendStatement) or isinstance(stmt, spir.ReceiveStatement):
-                stream_name = stmt.stream_name
+        for top_stmt in compute_block.statements:
+            for stmt in top_stmt.walk():
+                if isinstance(stmt, (spir.SendStatement, spir.ReceiveStatement, spir.ReceiveGenerator)):
+                    stream_name = stmt.stream_name
 
-                # Keep track of the position order of indices in the array slice (or none if one stream is used)
-                position_order = []
+                    # Keep track of the position order of indices in the array slice (or none if one stream is used)
+                    position_order = []
 
-                # If array slice, ensure that the indices are valid for the rectangle
-                if isinstance(stream_name, spir.ArraySlice):
-                    if stream_name.array not in stream_extents.argnames:
+                    # If array slice, ensure that the indices are valid for the rectangle
+                    if isinstance(stream_name, spir.ArraySlice):
+                        if stream_name.array not in stream_extents.argnames:
+                            continue
+                        # For 1D rectangle subsets (e.g., ``place i,j in [0:1, 0:N]`` with ``a[j]``),
+                        # we need to check that the used indices correspond to valid compute block variables
+
+                        # Check that each index in the array slice corresponds to a valid compute block variable
+                        for index_expr in stream_name.indices:
+                            index_name = index_expr.value
+                            if not isinstance(index_name, spir.Identifier) or index_name not in var_name_to_position:
+                                raise ValueError(
+                                    f"Array slice {stream_name.as_ir()} uses index '{index_name.as_ir()}', "
+                                    f"but compute block variables are {[var.identifier.as_ir() for var in compute_block.variables]}. "
+                                    f"Index is not available in this compute block.\n  In {stream_name.lineinfo}")
+                            position_order.append(var_name_to_position[index_name])
+                        # If position order is not monotonically increasing, raise an error
+                        if not all(position_order[i] <= position_order[i + 1] for i in range(len(position_order) - 1)):
+                            raise ValueError(
+                                f"Array slice {stream_name.as_ir()} uses an index order that does not match "
+                                f"the compute block variables {[var.identifier.as_ir() for var in compute_block.variables]}"
+                                f".\n  In {stream_name.lineinfo}")
+
+                        stream_name = stream_name.array
+
+                    if stream_name not in stream_extents.argnames:
                         continue
-                    # For 1D rectangle subsets (e.g., ``place i,j in [0:1, 0:N]`` with ``a[j]``),
-                    # we need to check that the used indices correspond to valid compute block variables
 
-                    # Check that each index in the array slice corresponds to a valid compute block variable
-                    for index_expr in stream_name.indices:
-                        index_name = index_expr.value
-                        if not isinstance(index_name, spir.Identifier) or index_name not in var_name_to_position:
-                            raise ValueError(
-                                f"Array slice {stream_name.as_ir()} uses index '{index_name.as_ir()}', "
-                                f"but compute block variables are {[var.identifier.as_ir() for var in compute_block.variables]}. "
-                                f"Index is not available in this compute block.\n  In {stream_name.lineinfo}")
-                        position_order.append(var_name_to_position[index_name])
-                    # If position order is not monotonically increasing, raise an error
-                    if not all(position_order[i] <= position_order[i + 1] for i in range(len(position_order) - 1)):
-                        raise ValueError(
-                            f"Array slice {stream_name.as_ir()} uses an index order that does not match "
-                            f"the compute block variables {[var.identifier.as_ir() for var in compute_block.variables]}"
-                            f".\n  In {stream_name.lineinfo}")
+                    # For every variable name that is not in the position order, ensure the dimension is 1
+                    for i, var in enumerate(compute_block.variables):
+                        if i not in position_order:
+                            if (subgrid[2 * i + 1] - subgrid[2 * i]) != 1:
+                                raise ValueError(
+                                    f"Array slice {stream_name.as_ir()} skips index '{var.identifier.as_ir()}', "
+                                    f"but compute block variable '{var.identifier.as_ir()}' has shape "
+                                    f"{(subgrid[2 * i + 1] - subgrid[2 * i])}. Unused index subgrids must have "
+                                    f"dimension 1.\n  In {stream_name.lineinfo}")
 
-                    stream_name = stream_name.array
-
-                if stream_name not in stream_extents.argnames:
-                    continue
-
-                # For every variable name that is not in the position order, ensure the dimension is 1
-                for i, var in enumerate(compute_block.variables):
-                    if i not in position_order:
-                        if (subgrid[2 * i + 1] - subgrid[2 * i]) != 1:
-                            raise ValueError(
-                                f"Array slice {stream_name.as_ir()} skips index '{var.identifier.as_ir()}', "
-                                f"but compute block variable '{var.identifier.as_ir()}' has shape "
-                                f"{(subgrid[2 * i + 1] - subgrid[2 * i])}. Unused index subgrids must have "
-                                f"dimension 1.\n  In {stream_name.lineinfo}")
-
-                stream_extents.add_extent(stream_name, rect)
+                    stream_extents.add_extent(stream_name, rect)
 
     # Check for disjoint rectangles and validate that each stream argument maps to a contiguous region
     for stream_name, extents in stream_extents.extents.items():
