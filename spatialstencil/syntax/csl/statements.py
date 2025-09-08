@@ -17,7 +17,23 @@ def generate_csl_statement(statement: spir.Statement, dsds: dict[spir.Identifier
     elif isinstance(statement, spir.SendStatement):
         return emit_copy(statement.local_array, statement.stream_name, dsds, dtypes)
     elif isinstance(statement, spir.ForeachStatement):
-        pass
+        dsd_op = get_dsd_op(dtypes, statement)
+        if dsd_op is not None:
+            if isinstance(statement.receive_stream.stream_name, spir.ArraySlice):
+                src = f'{statement.receive_stream.stream_name.array.as_ir()}_in_dsd'
+            else:
+                src = f'{statement.receive_stream.stream_name.as_ir()}_in_dsd'
+            identifiers = [ident for ident in statement.body[0].walk() if isinstance(ident, spir.ArraySlice)]
+            # Check if array slice matches foreach iterate
+            # TODO(later): Multidimensional loops
+            filtered_identifiers = [
+                ident for ident in identifiers if ident.indices[0].value == statement.variables[0].identifier
+            ]
+            args = [f'{arg.array.as_ir()}_dsd' for arg in filtered_identifiers] + [src]
+            return f'{dsd_op}({", ".join(args)});'
+        else:
+            raise ValueError('Operation was supposed to be lowered to a data task.\n'
+                             f'  In line {statement.lineinfo}')
         # return emit_foreach(statement, dsds, dtypes)
     elif isinstance(statement, spir.MapStatement):
         pass

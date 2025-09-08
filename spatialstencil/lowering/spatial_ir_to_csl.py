@@ -47,7 +47,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
 
     # Lower array receives and sends to foreach and for, respectively
     # (maybe unnecessary given that bulk send/receive can be implemented with fabout/fabin)
-    # canonicalization.lower_bulk_communication(rectangles)
+    canonicalization.lower_bulk_communication(rectangles)
 
     # Collect scalar argument types
     scalar_argument_types = []
