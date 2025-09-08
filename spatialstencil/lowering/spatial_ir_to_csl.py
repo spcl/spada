@@ -486,9 +486,11 @@ def _collect_unique_dsds(
             _, shape = array_candidates[substmt.array.as_ir()]
             if len(shape) == 1:
                 dsd_type = cslstruct.DSDType.mem1d
+                DSD_SIZE = 1
                 extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
             else:
                 dsd_type = cslstruct.DSDType.mem4d
+                DSD_SIZE = 4
                 extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape] + ['1'] * (4 - len(shape))
 
             # Find the index in the array
@@ -502,7 +504,7 @@ def _collect_unique_dsds(
                 name_to_csl(substmt.array),
                 extents,
                 [_find_index(ind) for ind in substmt.indices],
-                [ind.as_ir() for ind in substmt.indices] + ['0'] * (4 - len(shape)),
+                [ind.as_ir() for ind in substmt.indices] + ['0'] * (DSD_SIZE - len(shape)),
             )
             dsds.append((f"{name_to_csl(substmt.array)}_dsd", dsd))
 
