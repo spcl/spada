@@ -152,7 +152,7 @@ await_completion : "await" identifier
 for_stmt : "for" typed_vars "in" subgrid_expression compute_body
 map_stmt : prefix "map" typed_vars "in" subgrid_expression compute_body
 foreach_stmt : prefix "foreach" typed_vars "in" generators compute_body
-async_stmt : completion "async" compute_body
+async_stmt : prefix "async" compute_body
 awaitall_stmt : "awaitall"
 
 // Top-level statements that are direct children of `compute` blocks

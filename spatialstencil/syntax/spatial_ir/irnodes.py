@@ -821,17 +821,20 @@ class AsyncBlock(Statement):
     """
     Asynchronous block for executing a computation asynchronously.
     """
-    completion_name: Completion
+    completion_name: Optional[Completion]
     body: list[Statement]
 
     def validate(self) -> None:
-        assert isinstance(self.completion_name, Completion)
+        if self.completion_name is not None:
+            assert isinstance(self.completion_name, Completion)
         assert isinstance(self.body, list)
         assert all(isinstance(stmt, Statement) for stmt in self.body)
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
+        if self.completion_name is None:
+            return f'{indent_str}await async {{\n{body_str}\n{indent_str}}}'
         return f'{indent_str}{self.completion_name.as_ir()} = async {{\n{body_str}\n{indent_str}}}'
 
 

@@ -97,6 +97,8 @@ class TreeToSpatialIR(lark.Transformer):
         # Contract/inline value expressions that only contain another value expression
         if len(args) == 1 and isinstance(args[0], lark.Tree) and args[0].data == 'value_expr':
             return args[0]
+        if len(args) == 1 and isinstance(args[0], (int, bool, float, str)):
+            return irnodes.Expression(irnodes.ConstantLiteral(args[0], ScalarType.UNKNOWN))
         return irnodes.Expression(*args)
 
     # Expressions
