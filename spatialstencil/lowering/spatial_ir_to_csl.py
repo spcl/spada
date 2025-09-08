@@ -650,16 +650,42 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
     assert task.task_type == 'local'
 
     for stmt_id, (next_task, itedge) in zip(task.statements, task.outgoing):
-        # Write op contents
-        stmt = rect.compute.statements[stmt_id]
-        # TODO: if DSD or asynchronous, encode the next task and edge type (activate/unblock)
-        #       into the DSD operation
-        code: str = cslstmt.generate_csl_statement(stmt, dsds, dtypes)
-        lines = code.splitlines()
-        for line in lines:
-            current_code.write(f'    {line}\n')
-        if '@' in code:  # TODO(later): Better check for DSD operations
-            continue  # DSD operation or async call
+        skip_activation = False
+
+        if isinstance(stmt_id, int) and stmt_id >= 0:
+            # Write op contents
+            stmt = rect.compute.statements[stmt_id]
+            # TODO: if DSD or asynchronous, encode the next task and edge type (activate/unblock)
+            #       into the DSD operation
+            code: str = cslstmt.generate_csl_statement(stmt, dsds, dtypes)
+            lines = code.splitlines()
+
+            # DSD operation or async call
+            if isinstance(stmt, spir.ForeachStatement) and tdag.get_dsd_op(dtypes, stmt) is not None:
+                # Asynchronous DSD op. Modify DSD line to activate or unblock next task as necessary
+                num_dsd_ops = sum(1 if line.strip().startswith('@') else 0 for line in lines)
+                assert num_dsd_ops == 1, f'DSD operation generation must generate exactly one DSD operation line.\n  In line {stmt.lineinfo}'
+                line_ind = next(i for i, line in enumerate(lines) if line.strip().startswith('@'))
+
+                # Determine task ID
+                if next_task == -1:
+                    task_id = 'exit_task_id'
+                else:
+                    task_id = f'task_{next_task}_id'
+
+                # Modify DSD line to activate or unblock next task as necessary
+                # TODO: This is a bit hacky
+                if itedge == tdag.InterTaskEdge.ACTIVATE:
+                    lines[line_ind] = lines[line_ind][:-2] + f', .{{ .async = true, .activate = {task_id} }});'
+                elif itedge == tdag.InterTaskEdge.UNBLOCK:
+                    lines[line_ind] = lines[line_ind][:-2] + f', .{{ .async = true, .unblock = {task_id} }});'
+                skip_activation = True
+
+            for line in lines:
+                current_code.write(f'    {line}\n')
+
+        if skip_activation:
+            continue
 
         # If not DSD or asynchronous op, activate/unblock must be called after the generated operation code
         if itedge in (tdag.InterTaskEdge.ACTIVATE, tdag.InterTaskEdge.UNBLOCK):
