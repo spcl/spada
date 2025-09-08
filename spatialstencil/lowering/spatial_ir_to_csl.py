@@ -243,10 +243,14 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         if task.blocked:
             footer.write(f'    @block(task_{task.task_id}_id);\n')
 
+    exit_task_blocked = any(n == -1 and typ == tdag.InterTaskEdge.UNBLOCK for t in tasks for n, typ in t.outgoing)
+    if exit_task_blocked:
+        footer.write('    @block(exit_task_id);\n')
+
     # Write entry point code
     current_code.write(f'''\nfn {kernel.name}({", ".join(scalar_arguments)}) void {{
 ''')
-    non_source_tasks = set(n for t in tasks for n, _ in t.outgoing)
+    non_source_tasks = set(n for t in tasks for n, _ in t.outgoing if n != t.task_id)
     source_tasks = set(t.task_id for t in tasks) - non_source_tasks
     for task in source_tasks:
         current_code.write(f'    @activate(task_{task}_id);\n')
