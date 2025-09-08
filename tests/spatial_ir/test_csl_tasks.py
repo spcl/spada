@@ -196,6 +196,59 @@ kernel @reduce<N>(stream<f32>[N] readonly inp, stream<f32> writeonly out) {{
         assert len(tasks) == 3
 
 
+def test_await_sequence():
+    kernel = parser.parse_string(code=f"""
+kernel @test<N>(stream<f32>[N-2] readonly inp, stream<f32> writeonly out) {{
+    place u16 i, u16 j in [1:N-1, 0:1] {{
+        f32 local
+    }}
+    dataflow u16 i, u16 j in [1:N-1, 0:1] {{
+    }}
+    compute u16 i, u16 j in [1:N-1, 0:1] {{
+        completion c1 = receive(local, inp[i])
+        await c1
+        completion c2 = receive(local, inp[i])
+        await c2
+        completion c3 = send(local, out[i])
+        await c3
+    }}
+}}""")
+    place, dataflow, compute = kernel.body
+    block = PEBlock(place, dataflow, compute)
+    tasks = _create_tasks(block)
+    assert len(tasks) == 3
+
+
+def test_await_sequence_with_async():
+    kernel = parser.parse_string(code="""
+    kernel @test_nested_async<N>(stream<f32, 1>[N] readonly a, stream<f32, 1>[N] readonly b,
+                                 stream<f32, 1>[N] writeonly result) {
+        place u16 i, u16 j in [0:N, 0:1] {
+            f32 val_a;
+            f32 val_b;
+            f32 intermediate;
+            f32 final_result;
+        }
+        dataflow u16 i, u16 j in [0:N, 0:1] {}
+        compute u16 i, u16 j in [0:N, 0:1] {
+            await receive(val_a, a[i]);
+            await receive(val_b, b[i]);
+            
+            completion computation = async {
+                intermediate = fmac(val_a, val_b, 1.0);
+                final_result = intermediate if intermediate > 0.0 else 0.0;
+            };
+            
+            await computation;
+            await send(final_result, result[i]);
+        }
+    }""")
+    place, dataflow, compute = kernel.body
+    block = PEBlock(place, dataflow, compute)
+    tasks = _create_tasks(block)
+    assert len(tasks) == 3
+
+
 if __name__ == '__main__':
     test_dsd_op_detection()
     test_tasks_with_dsd_ops(False)
@@ -203,3 +256,5 @@ if __name__ == '__main__':
     test_wait_tree()
     test_activate_unblock(False)
     test_activate_unblock(True)
+    test_await_sequence()
+    test_await_sequence_with_async()

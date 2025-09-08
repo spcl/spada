@@ -1,22 +1,11 @@
 import pytest
-import os
 from spatialstencil.lowering.spatial_ir_to_csl import lower_spatial_ir_to_csl
 from spatialstencil.syntax.spatial_ir import parser, passes
 
 
 def create_inline_spatial_ir(code: str):
     """Helper function to parse inline Spatial IR code."""
-    # Create a temporary file with the code
-    import tempfile
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.sptl', delete=False) as f:
-        f.write(code)
-        temp_file = f.name
-
-    try:
-        kernel = parser.parse_file(temp_file)
-        return kernel
-    finally:
-        os.unlink(temp_file)
+    return parser.parse_string(code, 'test.sptl')
 
 
 def test_receive_statement_scalar():
@@ -59,7 +48,7 @@ def test_receive_statement_array():
             f32[4] local_array;
         }
         compute u16 i, u16 j in [0:1, 0:N] {
-            await receive(local_array, input[i]);
+            await receive(local_array, input[j]);
         }
     }
     '''
@@ -486,6 +475,55 @@ def test_async_block_with_nested_operations():
     assert ternary_found, "Expected ternary operation in async block not found"
 
 
+def test_async_block_chain():
+    """Test two chained async blocks."""
+    spatial_ir_code = '''
+    kernel @test_async_chain<N>(stream<f32, 1>[N] readonly a, stream<f32, 1>[N] readonly b,
+                                 stream<f32, 1>[N] writeonly result) {
+        place u16 i, u16 j in [0:N, 0:1] {
+            f32 val_a;
+            f32 val_b;
+            f32 intermediate;
+            f32 final_result1;
+            f32 final_result2;
+            f32 final_result3;
+            f32 final_result4;
+        }
+        compute u16 i, u16 j in [0:N, 0:1] {
+            await receive(val_a, a[i]);
+            await receive(val_b, b[i]);
+            
+            completion c1 = async {
+                intermediate = fmac(val_a, val_b, 1.0);
+                final_result1 = intermediate if intermediate > 0.0 else 0.0;
+            };
+            completion c2 = async {
+                final_result2 = val_a + val_b;
+            };
+            final_result3 = val_a * val_b;
+            await c1;
+            await c2;
+            final_result4 = final_result1 + final_result2 + final_result3;
+            await send(final_result4, result[i]);
+        }
+    }
+    '''
+
+    kernel = create_inline_spatial_ir(spatial_ir_code)
+    kernel = passes.concretize_parameters(kernel, N=8)
+    kernel = passes.constexpr_propagation(kernel)
+
+    csl_files = lower_spatial_ir_to_csl(kernel)
+
+    # Check that CSL files were generated
+    assert len(csl_files) > 0
+
+    # Look for async block CSL task structure
+    # TODO: Look for async task in code, ensure the next async block is activated before completing the first. Same
+    #       applies to the computation of final_result3. final_result4 should also be computed in the last CSL task.
+    pytest.xfail("Implement better test")
+
+
 def test_for_statement_basic():
     """Test basic for statement lowering."""
     spatial_ir_code = '''
@@ -602,9 +640,9 @@ def test_map_lifting_to_dsd_op(multidimensional):
 
     # Check for the DSD structure (dimensionality)
     if multidimensional:
-        assert '4d' in f.code
+        assert 'mem4d' in f.code
     else:
-        assert '1d' in f.code
+        assert 'mem1d' in f.code
 
 
 @pytest.mark.parametrize('streaming', [False, True])
@@ -655,7 +693,7 @@ def test_foreach_without_parameter_range():
         compute u16 i, u16 j in [0:N, 0:1] {
             accumulator = 0.0;
             
-            await foreach f32 value in receive(data_stream) {
+            await foreach f32 value in receive(input[i]) {
                 accumulator = accumulator + value;
             }
         }
@@ -708,7 +746,7 @@ def test_foreach_lifting_to_dsd_op(with_binop):
         if with_binop and '@fadds' in f.code:
             dsd_found = True
             break
-        elif not with_binop and '@mov32' in f.code:
+        elif not with_binop and '@fmovs' in f.code:
             dsd_found = True
             break
 
@@ -732,6 +770,7 @@ if __name__ == '__main__':
     test_assignment_with_array_dsd()
     test_async_block_basic_structure()
     test_async_block_with_nested_operations()
+    test_async_block_chain()
     test_for_statement_basic()
     test_map_statement_basic()
     test_map_lifting_to_dsd_op(False)
