@@ -60,21 +60,24 @@ def _get_base_dtype(dtypes: dict[str, spir.IRType],
 
 
 def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
-               stmt: spir.ForeachStatement | spir.MapStatement) -> Optional[str]:
+               stmt: spir.ForeachStatement | spir.MapStatement | spir.AssignmentStatement) -> Optional[str]:
     """
     Returns a DSD op name if a foreach or map statement can be represented by a single DSD operation 
     (@mov, @fadd*, etc.), or None if the body cannot be expressed as a single DSD operation.
     This is used in lowering to CSL to determine whether a DSD operation can be used directly vs. creating
     a data task.
     """
-    if len(stmt.body) == 0:
-        # No-op
-        return ''
-    if len(stmt.body) > 1:
-        return None
-    inner_stmt = stmt.body[0]
-    if not isinstance(inner_stmt, spir.AssignmentStatement):
-        return None
+    if isinstance(stmt, spir.AssignmentStatement):
+        inner_stmt = stmt
+    else:
+        if len(stmt.body) == 0:
+            # No-op
+            return ''
+        if len(stmt.body) > 1:
+            return None
+        inner_stmt = stmt.body[0]
+        if not isinstance(inner_stmt, spir.AssignmentStatement):
+            return None
 
     dst = _get_id(inner_stmt.destination)
     if dst not in dtypes:

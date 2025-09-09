@@ -224,7 +224,7 @@ def test_assignment_binary_expression(dsd, op):
 
 
 @pytest.mark.parametrize('dsd', (False, True))
-@pytest.mark.parametrize('op', ('//', '%', '==', '>='))
+@pytest.mark.parametrize('op', ('%', '==', '>='))
 def test_assignment_binary_expression_dsd_fallback(dsd, op):
     """
     Test assignment with binary expression (DSD op fallback to map).
@@ -235,10 +235,10 @@ def test_assignment_binary_expression_dsd_fallback(dsd, op):
         place u16 i, u16 j in [0:N, 0:1] {{
             f32{arrexp} val_a;
             f32{arrexp} val_b;
-            f32{arrexp} sum;
+            f32{arrexp} out;
         }}
         compute u16 i, u16 j in [0:N, 0:1] {{
-            sum = val_a {op} val_b;
+            out = val_a {op} val_b;
         }}
     }}
     '''

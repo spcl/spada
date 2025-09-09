@@ -200,7 +200,7 @@ class BinaryOperator(SpatialNode):
     right: 'Expression'
 
     def validate(self) -> None:
-        assert self.op in ('+', '-', '*', '/', '//', '%', '==', '!=', '<', '<=', '>', '>=')
+        assert self.op in ('+', '-', '*', '/', '%', '==', '!=', '<', '<=', '>', '>=')
         assert isinstance(self.left, Expression)
         assert isinstance(self.right, Expression)
 

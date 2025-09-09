@@ -36,7 +36,6 @@ class MemoryDSD(DataStructureDescriptor):
         assert self.dsd_type in (DSDType.mem1d, DSDType.mem4d)
         assert 1 <= len(self.extent) <= 4
         assert 1 <= len(self.expression) <= 4
-        assert len(self.idxvars) == len(self.extent)
 
     def as_csl(self) -> str:
         return (f'@get_dsd({self.dsd_type.name}_dsd, .{{ .tensor_access = '

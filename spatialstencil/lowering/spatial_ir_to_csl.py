@@ -2,12 +2,15 @@
 Converts routed Spatial IR code to Cerebras CSL.
 """
 
+from collections import defaultdict
 from io import StringIO
 from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, analysis
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
 from spatialstencil.syntax.csl import constants as csl, preprocessing, tasks as tdag, statements as cslstmt
 from spatialstencil.syntax.csl import structures as cslstruct
 from spatialstencil.syntax.csl.codefile import CodeFile
+
+UniqueDSDDict = dict[str, list[tuple[str, cslstruct.DataStructureDescriptor]]]
 
 
 def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = (0, 0)) -> list[CodeFile]:
@@ -394,11 +397,11 @@ def _collect_unique_dsds(
     header: StringIO,
     dtypes: dict[spir.Identifier, spir.IRType],
     kernel: spir.Kernel,
-) -> list[tuple[str, cslstruct.DataStructureDescriptor]]:
+) -> UniqueDSDDict:
     """
     Returns a list of DSDs and generates them in the header.
     """
-    dsds: list[tuple[str, cslstruct.DataStructureDescriptor]] = []
+    dsds: UniqueDSDDict = defaultdict(list)
 
     # Generate appropriate header code
     header.write('// DSDs\n')
@@ -452,14 +455,38 @@ def _collect_unique_dsds(
                 extents = stream_candidates[stream_name.as_ir()][1]
                 extents = extents if isinstance(extents, int) else extents.eval()
                 dsd = cslstruct.FabricDSD(dsd_type, f'{name_to_csl(stream_name)}_color', extents)
-                dsds.append((dsd_name, dsd))
+                dsds[stream_name.as_ir()].append((dsd_name, dsd))
             elif isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
                 dsd_type = cslstruct.DSDType.fabout
                 dsd_name = f'{name_to_csl(stream_name)}_out_dsd'
                 extents = stream_candidates[stream_name.as_ir()][1]
                 extents = extents if isinstance(extents, int) else extents.eval()
                 dsd = cslstruct.FabricDSD(dsd_type, f'{name_to_csl(stream_name)}_color', extents)
-                dsds.append((dsd_name, dsd))
+                dsds[stream_name.as_ir()].append((dsd_name, dsd))
+                # If the send statement sends from a local array, create another DSD
+                # This case does not apply for receive statements, as they would be lowered to foreach statements
+                if stmt.local_array.as_ir() in array_candidates:
+                    _, shape = array_candidates[stmt.local_array.as_ir()]
+                    if len(shape) == 1:
+                        dsd_type = cslstruct.DSDType.mem1d
+                        DSD_SIZE = 1
+                        extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
+                        indices = ['__index']
+                    else:
+                        dsd_type = cslstruct.DSDType.mem4d
+                        DSD_SIZE = 4
+                        extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape
+                                  ] + ['1'] * (4 - len(shape))
+                        indices = [f'__index_{i}' for i in range(len(shape))]
+
+                    dsd = cslstruct.MemoryDSD(
+                        dsd_type,
+                        name_to_csl(stmt.local_array),
+                        extents,
+                        indices,
+                        indices + ['0'] * (DSD_SIZE - len(shape)),
+                    )
+                    dsds[stmt.local_array.as_ir()].append((f"{name_to_csl(stmt.local_array)}_dsd", dsd))
         elif isinstance(stmt, spir.ForeachStatement):
             # If the foreach statement has a stream generator, it is a DSD
             # unless only the receive generator is given (streaming, no range provided).
@@ -478,18 +505,11 @@ def _collect_unique_dsds(
                     extents = stream_candidates[stream_name.as_ir()][1]
                     extents = extents if isinstance(extents, int) else extents.eval()
                     dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, f'{name_to_csl(stream_name)}_color', extents)
-                    dsds.append((dsd_name, dsd))
-        elif isinstance(stmt, spir.AssignmentStatement):
-            continue
+                    dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
-        for substmt in stmt.walk():
-            # If the destination is an array, we need to create a DSD
-            if not isinstance(substmt, spir.ArraySlice):
-                continue
-            if substmt.array.as_ir() not in array_candidates:
-                continue
-
-            _, shape = array_candidates[substmt.array.as_ir()]
+        def _dsd_from_array(node: spir.Identifier | spir.ArraySlice):
+            ident = node if isinstance(node, spir.Identifier) else node.array
+            _, shape = array_candidates[ident.as_ir()]
             if len(shape) == 1:
                 dsd_type = cslstruct.DSDType.mem1d
                 DSD_SIZE = 1
@@ -505,20 +525,69 @@ def _collect_unique_dsds(
                     if isinstance(n, spir.Identifier):
                         return name_to_csl(n)
 
-            dsd = cslstruct.MemoryDSD(
+            if isinstance(node, spir.ArraySlice):
+                idxvars = [_find_index(ind) for ind in node.indices if _find_index(ind) is not None]
+                indices = [ind.as_ir() for ind in node.indices]
+                name = name_to_csl(node.array)
+            else:
+                idxvars = [f'__index_{i}' for i in range(len(shape))]
+                indices = [f'__index_{i}' for i in range(len(shape))]
+                name = name_to_csl(node)
+
+            return cslstruct.MemoryDSD(
                 dsd_type,
-                name_to_csl(substmt.array),
+                name,
                 extents,
-                [_find_index(ind) for ind in substmt.indices],
-                [ind.as_ir() for ind in substmt.indices] + ['0'] * (DSD_SIZE - len(shape)),
+                idxvars,
+                indices + ['0'] * (DSD_SIZE - len(shape)),
             )
-            dsds.append((f"{name_to_csl(substmt.array)}_dsd", dsd))
+
+        def _visit_dsd(substmt):
+            if (isinstance(substmt, spir.Identifier) and substmt.as_ir() in array_candidates and
+                    substmt.as_ir() not in dsds):
+                dsds[substmt.as_ir()].append((f"{name_to_csl(substmt)}_dsd", _dsd_from_array(substmt)))
+                return
+
+            # If the destination is an array, we need to create a DSD
+            if not isinstance(substmt, spir.ArraySlice):
+                return
+            if substmt.array.as_ir() not in array_candidates:
+                return
+
+            dsd = _dsd_from_array(substmt)
+            dsds[substmt.array.as_ir()].append((f"{name_to_csl(substmt.array)}_dsd", dsd))
+
+        DSDVisitor(_visit_dsd).visit(stmt)
 
     # Write DSDs to header
-    for name, dsd in dsds:
-        header.write(f'const {name} = {dsd.as_csl()};\n')
+    for dsd_value in dsds.values():
+        for name, dsd in dsd_value:
+            header.write(f'const {name} = {dsd.as_csl()};\n')
 
     return dsds
+
+
+class DSDVisitor(spir.NodeVisitor):
+
+    def __init__(self, callback):
+        self.callback = callback
+        super().__init__()
+
+    def visit_Identifier(self, node: spir.Identifier):
+        self.callback(node)
+        return
+
+    def visit_ArraySlice(self, node: spir.ArraySlice):
+        self.callback(node)
+        # Do not visit internal identifier
+        return
+
+    def visit_AssignmentStatement(self, node: spir.AssignmentStatement):
+        if isinstance(node.destination, spir.ArraySlice):
+            self.generic_visit(node.source)  # Do not visit assignment to array slice
+        else:
+            self.generic_visit(node)
+        return
 
 
 def _route_dir(dx: int, dy: int):
@@ -667,7 +736,9 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
             lines = code.splitlines()
 
             # DSD operation or async call
-            if isinstance(stmt, spir.ForeachStatement) and tdag.get_dsd_op(dtypes, stmt) is not None:
+            # if isinstance(stmt, spir.ForeachStatement) and tdag.get_dsd_op(dtypes, stmt) is not None: # Doesn't work for sends
+            # TODO(later): Can be implemented nicer than a string check
+            if any(dsdop in line for line in lines for dsdop in cslstmt.DSD_ASSIGNMENT_MAPPING):
                 # Asynchronous DSD op. Modify DSD line to activate or unblock next task as necessary
                 num_dsd_ops = sum(1 if line.strip().startswith('@') else 0 for line in lines)
                 assert num_dsd_ops == 1, f'DSD operation generation must generate exactly one DSD operation line.\n  In line {stmt.lineinfo}'
