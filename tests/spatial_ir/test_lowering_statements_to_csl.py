@@ -105,6 +105,42 @@ def test_send_statement_scalar():
     assert code_found, "Expected send operation not found in generated CSL"
 
 
+def test_send_statement_array():
+    """Test send statement with array types."""
+    spatial_ir_code = '''
+    kernel @test_send_array<N>(stream<f32, 4>[N] readonly input, stream<f32, 4>[N] writeonly output) {
+        place u16 i, u16 j in [0:N, 0:1] {
+            f32[4] local_array;
+        }
+        compute u16 i, u16 j in [0:N, 0:1] {
+            local_array[0] = 1.0;
+            local_array[1] = 2.0;
+            local_array[2] = 3.0;
+            local_array[3] = 4.0;
+            await send(local_array, output[i]);
+        }
+    }
+    '''
+
+    kernel = create_inline_spatial_ir(spatial_ir_code)
+    kernel = passes.concretize_parameters(kernel, N=8)
+    kernel = passes.constexpr_propagation(kernel)
+
+    csl_files = lower_spatial_ir_to_csl(kernel)
+
+    # Check that CSL files were generated
+    assert len(csl_files) > 0
+
+    # Look for send operations in the generated CSL
+    code_found = False
+    for f in csl_files:
+        if '@fmovs' in f.code:
+            code_found = True
+            break
+
+    assert code_found, "Expected send operation not found in generated CSL"
+
+
 def test_send_statement_with_different_types():
     """Test send statement with different scalar types."""
     spatial_ir_code = '''
@@ -757,6 +793,7 @@ if __name__ == '__main__':
     test_receive_statement_scalar()
     test_receive_statement_array()
     test_send_statement_scalar()
+    test_send_statement_array()
     test_send_statement_with_different_types()
     test_assignment_binary_expression(dsd=False, op='+')
     test_assignment_binary_expression(dsd=True, op='+')

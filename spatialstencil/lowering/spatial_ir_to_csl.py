@@ -479,6 +479,8 @@ def _collect_unique_dsds(
                     extents = extents if isinstance(extents, int) else extents.eval()
                     dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, f'{name_to_csl(stream_name)}_color', extents)
                     dsds.append((dsd_name, dsd))
+        elif isinstance(stmt, spir.AssignmentStatement):
+            continue
 
         for substmt in stmt.walk():
             # If the destination is an array, we need to create a DSD

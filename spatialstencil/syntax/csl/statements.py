@@ -154,13 +154,15 @@ def emit_assignment(statement: spir.AssignmentStatement, dsds: dict[spir.Identif
 
     if isinstance(statement.destination, spir.ArraySlice):
         dst_identifier = statement.destination.array
+        indices = [idx.eval() for idx in statement.destination.indices]
     else:
         dst_identifier = statement.destination
+        indices = [0]
 
     # One element assignment
     if dst_identifier.name not in dsds:
         if isinstance(dtypes[dst_identifier], spir.ArrayType):
-            dst_expr = dst_identifier.as_ir() + '[0]'
+            dst_expr = dst_identifier.as_ir() + f'[{", ".join(map(str, indices))}]'
         else:
             dst_expr = dst_identifier.as_ir()
         return f"{dst_expr} = {statement.source.as_ir()};"
