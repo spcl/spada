@@ -642,6 +642,7 @@ def test_map_lifting_to_dsd_op(multidimensional):
     """
     arrdims = '[2, 2]' if multidimensional else '[4]'
     map_expr = 'map u16 x, u16 y in [0:2, 0:2]' if multidimensional else 'map u16 x in [0:4]'
+    outind = 'x, y' if multidimensional else 'x'
     spatial_ir_code = f'''
     kernel @test_map_lifting<N>() {{
         place u16 i, u16 j in [0:N, 0:N] {{
@@ -650,7 +651,7 @@ def test_map_lifting_to_dsd_op(multidimensional):
         }}
         compute u16 i, u16 j in [0:N, 0:N] {{
             await {map_expr} {{
-                output[x, y] = local_val * 1.1;
+                output[{outind}] = local_val * 1.1;
             }};
         }}
     }}
