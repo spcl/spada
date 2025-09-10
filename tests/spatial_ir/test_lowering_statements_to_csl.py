@@ -710,14 +710,14 @@ def test_foreach_with_parameter_range(streaming):
     # Check that CSL files were generated
     assert len(csl_files) > 0
 
-    # Look for foreach operations
-    foreach_found = False
+    # Look for data task operations
+    data_task_found = False
     for f in csl_files:
-        if '@fmovs' in f.code and '+' in f.code:
-            foreach_found = True
+        if 'data_task' in f.code and 'accumulator + value' in f.code and '4' in f.code:
+            data_task_found = True
             break
 
-    assert foreach_found, "Expected foreach operations not found in generated CSL"
+    assert data_task_found, "Expected data task operations not found in generated CSL"
 
 
 def test_foreach_without_parameter_range():
@@ -745,8 +745,14 @@ def test_foreach_without_parameter_range():
     # Check that CSL files were generated
     assert len(csl_files) > 0
 
-    # TODO: Look for data task
-    pytest.xfail("test for data task")
+    # Look for data task operations
+    data_task_found = False
+    for f in csl_files:
+        if 'data_task' in f.code and 'accumulator + value' in f.code:
+            data_task_found = True
+            break
+
+    assert data_task_found, "Expected data task operations not found in generated CSL"
 
 
 @pytest.mark.parametrize('with_binop', [False, True])

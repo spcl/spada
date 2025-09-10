@@ -190,6 +190,34 @@ def test_await_sequence_with_async():
     assert len(tasks) == 3
 
 
+def test_data_local_task_combo():
+    kernel = parser.parse_string(code=f'''
+    kernel @test_foreach_range<N>(stream<f32, 4>[N] readonly input) {{
+        place u16 i, u16 j in [0:N, 0:1] {{
+            f32 accumulator;
+        }}
+        dataflow u16 i, u16 j in [0:N, 0:1] {{
+        }}
+        compute u16 i, u16 j in [0:N, 0:1] {{
+            accumulator = 0.0;
+
+            await foreach u16 k, f32 value in [0:4], receive(input[i]) {{
+                accumulator = accumulator + value;
+            }};
+        }}
+    }}
+    ''')
+    place, dataflow, compute = kernel.body
+    block = PEBlock(place, dataflow, compute)
+    tasks = _create_tasks(block)
+    assert len(tasks) == 2
+    # TODO: Ensure that task_0_id is not defined twice in the CSL code
+    assert tasks[0].task_type == 'local'
+    assert tasks[1].task_type == 'data'
+    assert len(tasks[0].statements) == 1  # Initialization
+    assert tasks[0].outgoing[0][1] == tdag.InterTaskEdge.ACTIVATE
+
+
 if __name__ == '__main__':
     test_tasks_with_dsd_ops(False)
     test_tasks_with_dsd_ops(True)
@@ -198,3 +226,4 @@ if __name__ == '__main__':
     test_activate_unblock(True)
     test_await_sequence()
     test_await_sequence_with_async()
+    test_data_local_task_combo()
