@@ -304,6 +304,8 @@ def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
     if dst not in dtypes:
         raise NameError(f'"{dst.as_ir()}" not in recognized data types')
     dtype = _get_base_dtype(dtypes, dst)
+    if not isinstance(dtypes[dst], (spir.ArrayType, spir.StreamType)):
+        return None
 
     inner_stmt = inner_stmt.source.value
 
