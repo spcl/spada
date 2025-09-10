@@ -1,5 +1,6 @@
+from typing import Optional
 from spatialstencil.syntax.csl.structures import DataStructureDescriptor
-from spatialstencil.syntax.csl.tasks import get_dsd_op
+from spatialstencil.syntax.csl import dsd_ops
 from spatialstencil.syntax.spatial_ir import irnodes as spir
 from spatialstencil.syntax.common.types import BIT_WIDTH
 
@@ -124,45 +125,6 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice, destination: spir.Ident
     return f"{op}({dsds[dst_identifier.as_ir()][0][0]}, {dsds[src_identifier.as_ir()][0][0]});"
 
 
-# Dictionary mapping DSD operations to their corresponding argument conversion functions
-# These functions are used to convert the source argument to the appropriate type for the DSD operation
-_NAME = lambda dsds, x: f"{dsds[x.as_ir()][0][0]}"
-_UNOP = lambda dsds, x: f"{_NAME(dsds, x.value)}"
-_BINOP = lambda dsds, x: f"{_NAME(dsds, x.left)}, {_NAME(dsds, x.right)}"
-_FMAOP = lambda dsds, x: f"{_NAME(dsds, x.a)}, {_NAME(dsds, x.b)}, {_NAME(dsds, x.c)}"
-DSD_ASSIGNMENT_MAPPING = {
-    # Unary operations
-    '@fnegh': _UNOP,
-    '@fnegs': _UNOP,
-    # Binary operations
-    '@faddh': _BINOP,
-    '@fadds': _BINOP,
-    '@faddhs': _BINOP,
-    '@add16': _BINOP,
-    '@fsubh': _BINOP,
-    '@fsubs': _BINOP,
-    '@sub16': _BINOP,
-    '@fmulh': _BINOP,
-    '@fmuls': _BINOP,
-    # Fused multiply-add operations
-    '@fmach': _FMAOP,
-    '@fmachs': _FMAOP,
-    '@fmacs': _FMAOP,
-    # Copy operations
-    '@mov16': _UNOP,
-    '@mov32': _UNOP,
-    '@fmovh': _UNOP,
-    '@fmovs': _UNOP,
-    # Other operations
-    '@fs2h': _UNOP,
-    '@fh2s': _UNOP,
-    '@xp162fh': _UNOP,
-    '@xp162fs': _UNOP,
-    '@fh2xp16': _UNOP,
-    '@fs2xp16': _UNOP,
-}
-
-
 def emit_assignment(statement: spir.AssignmentStatement, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier,
                                                                                            spir.IRType]) -> str:
     """
@@ -189,7 +151,7 @@ def emit_assignment(statement: spir.AssignmentStatement, dsds: UniqueDSDDict, dt
         return f"{dst_expr} = {statement.source.as_ir()};"
 
     # DSD assignment
-    dsd_op = get_dsd_op(dtypes, statement)
+    dsd_op = dsd_ops.get_dsd_op(dtypes, statement)
     if dsd_op is None:
         # TODO(later): Use a map / for loop?
         raise NotImplementedError(f"Assignment operation for {statement.source.as_ir()} is not implemented as a DSD op."

@@ -1,0 +1,68 @@
+import pytest
+from spatialstencil.lowering import spatial_ir_to_csl as s2c
+from spatialstencil.syntax.spatial_ir import parser
+from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock
+from spatialstencil.syntax.csl import dsd_ops
+
+
+def test_dsd_op_detection():
+    kernel = parser.parse_string(code=f"""
+kernel @two_phase<K> (stream<f32>[4] readonly in,
+                          stream<f32> readonly out ) {{
+
+    place i16 i, i16 j in [0, 0] {{
+        f32[K] a32
+        f16[K] a16
+        f32 localval32
+        f16 localval16
+    }}
+    dataflow i32 i, i32 j in [0, 0] {{
+        stream<f32> stream = relative_stream(-1, 0) {{
+            hops = [(-1, 0)],
+            channel = 0
+        }}
+    }}
+    compute i32 i, i32 j in [0, 0] {{
+        // Test foreach
+        await foreach i32 k, f32 x in [0:K], receive(stream) {{
+            a32[k] = a32[k] + x
+        }}
+        await foreach i32 k#1, f16 x#1 in [0:K], receive(stream) {{
+            a32[k#1] = a32[k#1] + x#1
+        }}
+        await foreach i32 k#2, i32 x#2 in [0:K], receive(stream) {{
+            a16[k#2] = x#2
+        }}
+        await foreach i32 k#3, f32 x#3 in [0:K], receive(stream) {{
+            a32[k#3] = x#3
+        }}
+        await foreach i32 k#4, f32 x#4 in [0:K], receive(stream) {{
+            a32[k#4] = fmac(a32[k#4], x#4, localval32)
+        }}
+        await foreach i32 k#5, f16 x#5 in [0:K], receive(stream) {{
+            a32[k#5] = fmac(a32[k#5], x#5, localval32)
+        }}
+        await foreach i32 k#6, f32 x#6 in [0:K], receive(stream) {{
+            a32[k#6] = fmac(a32[k#6], x#6, localval16)
+        }}
+        // Test map
+        await map i32 m in [0:K] {{
+            a32[m] = a32[m] + a16[m]
+        }}
+    }}
+}}""")
+    place, dataflow, compute = kernel.body
+    dtypes = s2c._collect_identifier_types(PEBlock(place, dataflow, compute), [])
+    assert len(compute.statements) == 8
+    assert dsd_ops.get_dsd_op(dtypes, compute.statements[0]) == "@fadds"
+    assert dsd_ops.get_dsd_op(dtypes, compute.statements[1]) == "@faddhs"
+    assert dsd_ops.get_dsd_op(dtypes, compute.statements[2]) is None
+    assert dsd_ops.get_dsd_op(dtypes, compute.statements[3]) == "@fmovs"
+    assert dsd_ops.get_dsd_op(dtypes, compute.statements[4]) == "@fmacs"
+    assert dsd_ops.get_dsd_op(dtypes, compute.statements[5]) is None
+    assert dsd_ops.get_dsd_op(dtypes, compute.statements[6]) == "@fmachs"
+    assert dsd_ops.get_dsd_op(dtypes, compute.statements[7]) == "@faddhs"
+
+
+if __name__ == '__main__':
+    test_dsd_op_detection()
