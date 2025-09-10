@@ -1,6 +1,7 @@
 """
 Parses DSD operations from IR nodes.
 """
+import copy
 from dataclasses import dataclass
 from typing import Literal, Optional
 from spatialstencil.syntax.spatial_ir import irnodes as spir
@@ -29,6 +30,14 @@ class DSDOp:
                dsds: UniqueDSDDict,
                async_target: Optional[AsyncTarget] = None) -> str:
         """ Returns the CSL representation of the DSD operation, including asynchronous activation if requested. """
+        if isinstance(statement, spir.ForeachStatement):
+            # Add generator to DSDs
+            dsds = copy.copy(dsds)
+            dsds[statement.stream_variable.identifier.as_ir()] = dsds[_ident(
+                statement.receive_stream.stream_name).as_ir()]
+            statement = statement.body[0]
+        elif hasattr(statement, 'body'):
+            statement = statement.body[0]
         return self._append_async_suffix(self._as_csl(statement, dtypes, dsds), async_target)
 
     def _as_csl(self, statement: spir.Statement, dtypes: dict[spir.Identifier, spir.IRType],
@@ -168,12 +177,17 @@ class FMADSDOp(DSDOp):
 
 class CopyDSDOp(DSDOp):
 
-    def _as_csl(self, statement: spir.AssignmentStatement, dtypes: dict[spir.Identifier, spir.IRType],
-                dsds: UniqueDSDDict) -> str:
-        assert isinstance(statement.source.value, (spir.ArraySlice, spir.Identifier, spir.ConstantLiteral))
-        a = _ident_or_const(statement.source.value)
-        dest = _ident(statement.destination)
-        src_dtype = _get_base_dtype(dtypes, a)
+    def _as_csl(self, statement: spir.AssignmentStatement | spir.SendStatement,
+                dtypes: dict[spir.Identifier, spir.IRType], dsds: UniqueDSDDict) -> str:
+        if isinstance(statement, spir.SendStatement):
+            src = _ident(statement.local_array)
+            dest = _ident(statement.stream_name)
+        else:
+            assert isinstance(statement.source.value, (spir.ArraySlice, spir.Identifier, spir.ConstantLiteral))
+            src = _ident_or_const(statement.source.value)
+            dest = _ident(statement.destination)
+
+        src_dtype = _get_base_dtype(dtypes, src)
         dtype = _get_base_dtype(dtypes, dest)
         if src_dtype == dtype:
             if dtype in (spir.ScalarType.i16, spir.ScalarType.u16):
@@ -201,10 +215,10 @@ class CopyDSDOp(DSDOp):
                 op = '@fs2xp16'
             else:
                 raise TypeError(f"Unsupported types for cast operation: {src_dtype}, {dtype}")
-        return f'{op}({_dsd(dsds, dest)}, {_dsd(dsds, a)});'
+        return f'{op}({_dsd(dsds, dest)}, {_dsd(dsds, src)});'
 
 
-DSD_ASSIGNMENT_MAPPING = {
+DSD_ASSIGNMENT_MAPPING: dict[str, type[DSDOp]] = {
     # Unary operations
     '@fnegh': NegDSDOp,
     '@fnegs': NegDSDOp,
@@ -261,7 +275,9 @@ def _get_base_dtype(dtypes: dict[str, spir.IRType],
     dtype = _get_dtype(dtypes, value)
     if dtype is None:
         return dtype
-    return dtype.element_type
+    while not isinstance(dtype, spir.ScalarType):
+        dtype = dtype.element_type
+    return dtype
 
 
 def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],

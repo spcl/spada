@@ -7,55 +7,65 @@ from spatialstencil.syntax.common.types import BIT_WIDTH
 UniqueDSDDict = dict[str, list[tuple[str, DataStructureDescriptor]]]
 
 
-def generate_csl_statement(statement: spir.Statement, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier,
-                                                                                        spir.IRType]) -> str:
+def generate_csl_statement(statement: spir.Statement, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType],
+                           async_target: Optional[dsd_ops.AsyncTarget]) -> str:
     """
     Generates a CSL statement from a Spatial IR statement.
 
     :param statement: The Spatial IR statement to convert.
     :return: The generated CSL statement.
     """
+    op: str | dsd_ops.DSDOp | None = None
     if isinstance(statement, spir.ReceiveStatement):
-        return emit_copy(statement.stream_name, statement.local_array, dsds, dtypes)
+        op = emit_copy(statement.stream_name, statement.local_array, dsds, dtypes)
     elif isinstance(statement, spir.SendStatement):
-        return emit_copy(statement.local_array, statement.stream_name, dsds, dtypes)
+        op = emit_copy(statement.local_array, statement.stream_name, dsds, dtypes)
     elif isinstance(statement, spir.ForeachStatement):
-        dsd_op = get_dsd_op(dtypes, statement)
-        if dsd_op is not None:
-            if isinstance(statement.receive_stream.stream_name, spir.ArraySlice):
-                src = f'{statement.receive_stream.stream_name.array.as_ir()}_in_dsd'
-            else:
-                src = f'{statement.receive_stream.stream_name.as_ir()}_in_dsd'
-            identifiers = [ident for ident in statement.body[0].walk() if isinstance(ident, spir.ArraySlice)]
-            # Check if array slice matches foreach iterate
-            # TODO(later): Multidimensional loops
-            filtered_identifiers = [
-                ident for ident in identifiers if ident.indices[0].value == statement.variables[0].identifier
-            ]
-            args = [f'{arg.array.as_ir()}_dsd' for arg in filtered_identifiers] + [src]
-            return f'{dsd_op}({", ".join(args)});'
-        else:
+        op = _try_emit_dsd_op(statement, dsds, dtypes)
+        if op is None:
             raise ValueError('Operation was supposed to be lowered to a data task.\n'
                              f'  In line {statement.lineinfo}')
-        # return emit_foreach(statement, dsds, dtypes)
     elif isinstance(statement, spir.MapStatement):
-        pass
-        # return emit_map(statement, dsds, dtypes)
+        op = _try_emit_dsd_op(statement, dsds, dtypes)
+        if op is None:
+            op = emit_map(statement, dsds, dtypes)
     elif isinstance(statement, spir.ForStatement):
         pass
-        # return emit_for(statement, dsds, dtypes)
+        # op = emit_for(statement, dsds, dtypes)
     elif isinstance(statement, spir.AsyncBlock):
         # In the beginning, activate the next sequential-dependency task
         # In the end, unblock the completion waiters
+        # op = emit_async_block(statement, dsds, dtypes)
         pass
-        # return emit_async_block(statement, dsds, dtypes)
     elif isinstance(statement, spir.AssignmentStatement):
-        return emit_assignment(statement, dsds, dtypes)
-    return f'// TODO: Convert {statement} to CSL'
+        op = emit_assignment(statement, dsds, dtypes)
+
+    if op is None:
+        return f'// TODO: Convert {statement} to CSL'
+
+    return op.as_csl(statement, dtypes, dsds, async_target) if isinstance(op, dsd_ops.DSDOp) else op
+
+
+def _try_emit_dsd_op(statement: spir.MapStatement | spir.ForeachStatement, dsds: UniqueDSDDict,
+                     dtypes: dict[spir.Identifier, spir.IRType]) -> dsd_ops.DSDOp | None:
+    """
+    Tries to emit a DSD operation for the given statement, or return None if not applicable.
+
+    :param statement: The Spatial IR statement to convert.
+    :param dsds: A dictionary of DSDs for the statement.
+    :param dtypes: A dictionary of data types for the statement.
+    :return: The generated DSD operation or None if not applicable.
+    """
+    dsd_op = dsd_ops.get_dsd_op(dtypes, statement)
+    if dsd_op is None:
+        return None
+
+    dsd_op = dsd_ops.DSD_ASSIGNMENT_MAPPING[dsd_op]()
+    return dsd_op
 
 
 def emit_copy(source: spir.Identifier | spir.ArraySlice, destination: spir.Identifier | spir.ArraySlice,
-              dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType]) -> str:
+              dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType]) -> str | dsd_ops.CopyDSDOp:
     """
     Generates a CSL copy statement from source to destination.
 
@@ -110,19 +120,9 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice, destination: spir.Ident
     if src_dtype[0] != dst_dtype[0]:
         raise ValueError(
             f"Source and destination types do not match: {dtypes[src_identifier]} != {dtypes[dst_identifier]}")
-    if src_dtype[0] in (spir.ScalarType.i16, spir.ScalarType.u16):
-        op = '@mov16'
-    elif src_dtype[0] in (spir.ScalarType.i32, spir.ScalarType.u32):
-        op = '@mov32'
-    elif src_dtype[0] == spir.ScalarType.f16:
-        op = '@fmovh'
-    elif src_dtype[0] == spir.ScalarType.f32:
-        op = '@fmovs'
-    else:
-        raise ValueError(f"Unsupported source type for copy operation: {src_dtype}")
 
     # If both source and destination are DSDs, use the copy operation
-    return f"{op}({dsds[dst_identifier.as_ir()][0][0]}, {dsds[src_identifier.as_ir()][0][0]});"
+    return dsd_ops.CopyDSDOp()
 
 
 def emit_assignment(statement: spir.AssignmentStatement, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier,
@@ -156,4 +156,4 @@ def emit_assignment(statement: spir.AssignmentStatement, dsds: UniqueDSDDict, dt
         # TODO(later): Use a map / for loop?
         raise NotImplementedError(f"Assignment operation for {statement.source.as_ir()} is not implemented as a DSD op."
                                   f"\n  In line {statement.lineinfo}")
-    return f"{dsd_op}({dsds[dst_identifier.as_ir()][0][0]}, {DSD_ASSIGNMENT_MAPPING[dsd_op](dsds, statement.source.value)});"
+    return dsd_ops.DSD_ASSIGNMENT_MAPPING[dsd_op]()

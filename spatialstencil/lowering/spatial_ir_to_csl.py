@@ -6,7 +6,7 @@ from collections import defaultdict
 from io import StringIO
 from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, analysis
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
-from spatialstencil.syntax.csl import constants as csl, preprocessing, tasks as tdag, statements as cslstmt
+from spatialstencil.syntax.csl import constants as csl, preprocessing, tasks as tdag, statements as cslstmt, dsd_ops
 from spatialstencil.syntax.csl import structures as cslstruct
 from spatialstencil.syntax.csl.codefile import CodeFile
 
@@ -557,7 +557,7 @@ def _collect_unique_dsds(
             dsd = _dsd_from_array(substmt)
             dsds[substmt.array.as_ir()].append((f"{name_to_csl(substmt.array)}_dsd", dsd))
 
-        DSDVisitor(_visit_dsd).visit(stmt)
+        DSDVisitor(_visit_dsd, toplevel=not hasattr(stmt, 'body')).visit(stmt)
 
     # Write DSDs to header
     for dsd_value in dsds.values():
@@ -569,8 +569,9 @@ def _collect_unique_dsds(
 
 class DSDVisitor(spir.NodeVisitor):
 
-    def __init__(self, callback):
+    def __init__(self, callback, toplevel: bool):
         self.callback = callback
+        self.toplevel = toplevel
         super().__init__()
 
     def visit_Identifier(self, node: spir.Identifier):
@@ -583,7 +584,7 @@ class DSDVisitor(spir.NodeVisitor):
         return
 
     def visit_AssignmentStatement(self, node: spir.AssignmentStatement):
-        if isinstance(node.destination, spir.ArraySlice):
+        if self.toplevel and isinstance(node.destination, spir.ArraySlice):
             self.generic_visit(node.source)  # Do not visit assignment to array slice
         else:
             self.generic_visit(node)
@@ -730,32 +731,24 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
         if isinstance(stmt_id, int) and stmt_id >= 0:
             # Write op contents
             stmt = rect.compute.statements[stmt_id]
-            # TODO: if DSD or asynchronous, encode the next task and edge type (activate/unblock)
-            #       into the DSD operation
-            code: str = cslstmt.generate_csl_statement(stmt, dsds, dtypes)
-            lines = code.splitlines()
-
-            # DSD operation or async call
-            # if isinstance(stmt, spir.ForeachStatement) and tdag.get_dsd_op(dtypes, stmt) is not None: # Doesn't work for sends
-            # TODO(later): Can be implemented nicer than a string check
-            if any(dsdop in line for line in lines for dsdop in cslstmt.DSD_ASSIGNMENT_MAPPING):
-                # Asynchronous DSD op. Modify DSD line to activate or unblock next task as necessary
-                num_dsd_ops = sum(1 if line.strip().startswith('@') else 0 for line in lines)
-                assert num_dsd_ops == 1, f'DSD operation generation must generate exactly one DSD operation line.\n  In line {stmt.lineinfo}'
-                line_ind = next(i for i, line in enumerate(lines) if line.strip().startswith('@'))
-
-                # Determine task ID
+            # If DSD is asynchronous, encode the next task and edge type (activate/unblock)
+            # into the DSD operation
+            if itedge in (tdag.InterTaskEdge.ACTIVATE, tdag.InterTaskEdge.UNBLOCK):
                 if next_task == -1:
                     task_id = 'exit_task_id'
                 else:
                     task_id = f'task_{next_task}_id'
 
-                # Modify DSD line to activate or unblock next task as necessary
-                # TODO: This is a bit hacky
-                if itedge == tdag.InterTaskEdge.ACTIVATE:
-                    lines[line_ind] = lines[line_ind][:-2] + f', .{{ .async = true, .activate = {task_id} }});'
-                elif itedge == tdag.InterTaskEdge.UNBLOCK:
-                    lines[line_ind] = lines[line_ind][:-2] + f', .{{ .async = true, .unblock = {task_id} }});'
+                async_target = dsd_ops.AsyncTarget(next_task, itedge.name.lower())
+            else:
+                async_target = None
+
+            code: str = cslstmt.generate_csl_statement(stmt, dsds, dtypes, async_target)
+            lines = code.splitlines()
+
+            # DSD operation or async call
+            if any(dsdop in line for line in lines for dsdop in dsd_ops.DSD_ASSIGNMENT_MAPPING):
+                # Asynchronous DSD op. DSD line already contains activation or unblocking
                 skip_activation = True
 
             for line in lines:
