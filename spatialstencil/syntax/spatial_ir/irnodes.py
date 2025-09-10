@@ -223,8 +223,6 @@ class BinaryOperator(SpatialNode):
                 return left_val * right_val
             elif self.op == '/':
                 return left_val / right_val
-            elif self.op == '//':
-                return left_val // right_val
             elif self.op == '%':
                 return left_val % right_val
             elif self.op == '==':
