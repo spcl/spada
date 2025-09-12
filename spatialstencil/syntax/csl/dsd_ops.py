@@ -72,6 +72,8 @@ def _ident_or_const(expr: spir.SpatialNode) -> spir.Identifier | spir.ConstantLi
 
 def _dsd(dsds: UniqueDSDDict, expr: spir.SpatialNode) -> str:
     if isinstance(expr, spir.Identifier):
+        if expr not in dsds:
+            return expr.as_ir()
         return dsds[expr.as_ir()][0][0]
     elif isinstance(expr, spir.ConstantLiteral):
         return str(expr.value)
@@ -83,7 +85,27 @@ class UnaryDSDOp(DSDOp):
 
 
 class BinaryDSDOp(DSDOp):
-    pass
+
+    def _csl_op(self, a_dtype: spir.ScalarType, b_dtype: spir.ScalarType, dest_dtype: spir.ScalarType) -> str:
+        raise NotImplementedError
+
+    def _as_csl(self, statement: spir.AssignmentStatement, dtypes: dict[spir.Identifier, spir.IRType],
+                dsds: UniqueDSDDict) -> str:
+        assert isinstance(statement.source.value, spir.BinaryOperator)
+        a = _ident_or_const(statement.source.value.left.value)
+        b = _ident_or_const(statement.source.value.right.value)
+        dest = _ident(statement.destination)
+
+        a_dtype = _get_base_dtype(dtypes, a)
+        b_dtype = _get_base_dtype(dtypes, b)
+        dest_dtype = _get_base_dtype(dtypes, dest)
+        if a_dtype == spir.ScalarType.UNKNOWN:
+            a_dtype = b_dtype
+        if b_dtype == spir.ScalarType.UNKNOWN:
+            b_dtype = a_dtype
+
+        op = self._csl_op(a_dtype, b_dtype, dest_dtype)
+        return f"{op}({_dsd(dsds, dest)}, {_dsd(dsds, a)}, {_dsd(dsds, b)});"
 
 
 class NegDSDOp(UnaryDSDOp):
@@ -101,57 +123,38 @@ class NegDSDOp(UnaryDSDOp):
 
 class AddDSDOp(BinaryDSDOp):
 
-    def _as_csl(self, statement: spir.AssignmentStatement, dtypes: dict[spir.Identifier, spir.IRType],
-                dsds: UniqueDSDDict) -> str:
-        assert isinstance(statement.source.value, spir.BinaryOperator)
-        a = _ident_or_const(statement.source.value.left.value)
-        b = _ident_or_const(statement.source.value.right.value)
-        dest = _ident(statement.destination)
-
-        if _get_base_dtype(dtypes, a) == spir.ScalarType.f16 and _get_base_dtype(dtypes, b) == spir.ScalarType.f16:
-            return f'@faddh({_dsd(dsds, dest)}, {_dsd(dsds, a)}, {_dsd(dsds, b)});'
-        elif _get_base_dtype(dtypes, a) == spir.ScalarType.f32 and _get_base_dtype(dtypes, b) == spir.ScalarType.f32:
-            return f'@fadds({_dsd(dsds, dest)}, {_dsd(dsds, a)}, {_dsd(dsds, b)});'
-        elif _get_base_dtype(dtypes, a) == spir.ScalarType.f16 and _get_base_dtype(dtypes, b) == spir.ScalarType.f32:
-            return f'@faddhs({_dsd(dsds, dest)}, {_dsd(dsds, a)}, {_dsd(dsds, b)});'
-        elif _get_base_dtype(dtypes, a) == spir.ScalarType.f32 and _get_base_dtype(dtypes, b) == spir.ScalarType.f16:
-            return f'@faddhs({_dsd(dsds, dest)}, {_dsd(dsds, a)}, {_dsd(dsds, b)});'
+    def _csl_op(self, a_dtype: spir.ScalarType, b_dtype: spir.ScalarType, dest_dtype: spir.ScalarType) -> str:
+        if a_dtype == spir.ScalarType.f16 and b_dtype == spir.ScalarType.f16:
+            return '@faddh'
+        elif a_dtype == spir.ScalarType.f32 and b_dtype == spir.ScalarType.f32:
+            return '@fadds'
+        elif a_dtype == spir.ScalarType.f16 and b_dtype == spir.ScalarType.f32:
+            return '@faddhs'
+        elif a_dtype == spir.ScalarType.f32 and b_dtype == spir.ScalarType.f16:
+            return '@faddhs'
         else:
-            return f'@add16({_dsd(dsds, dest)}, {_dsd(dsds, a)}, {_dsd(dsds, b)});'
+            return '@add16'
 
 
 class SubDSDOp(BinaryDSDOp):
 
-    def _as_csl(self, statement: spir.AssignmentStatement, dtypes: dict[spir.Identifier, spir.IRType],
-                dsds: UniqueDSDDict) -> str:
-        assert isinstance(statement.source.value, spir.BinaryOperator)
-        a = _ident_or_const(statement.source.value.left.value)
-        b = _ident_or_const(statement.source.value.right.value)
-        dest = _ident(statement.destination)
-
-        if _get_base_dtype(dtypes, a) == spir.ScalarType.f16 and _get_base_dtype(dtypes, b) == spir.ScalarType.f16:
-            return f'@fsubh({_dsd(dsds, dest)}, {_dsd(dsds, a)}, {_dsd(dsds, b)});'
-        elif _get_base_dtype(dtypes, a) == spir.ScalarType.f32 and _get_base_dtype(dtypes, b) == spir.ScalarType.f32:
-            return f'@fsubs({_dsd(dsds, dest)}, {_dsd(dsds, a)}, {_dsd(dsds, b)});'
+    def _csl_op(self, a_dtype: spir.ScalarType, b_dtype: spir.ScalarType, dest_dtype: spir.ScalarType) -> str:
+        if a_dtype == spir.ScalarType.f16 and b_dtype == spir.ScalarType.f16:
+            return '@fsubh'
+        elif a_dtype == spir.ScalarType.f32 and b_dtype == spir.ScalarType.f32:
+            return '@fsubs'
         else:
-            return f'@sub16({_dsd(dsds, dest)}, {_dsd(dsds, a)}, {_dsd(dsds, b)});'
+            return '@sub16'
 
 
 class MulDSDOp(BinaryDSDOp):
 
-    def _as_csl(self, statement: spir.AssignmentStatement, dtypes: dict[spir.Identifier, spir.IRType],
-                dsds: UniqueDSDDict) -> str:
-        assert isinstance(statement.source.value, spir.BinaryOperator)
-        a = _ident_or_const(statement.source.value.left.value)
-        b = _ident_or_const(statement.source.value.right.value)
-        dest = _ident(statement.destination)
-
-        if _get_base_dtype(dtypes, a) == spir.ScalarType.f16 and _get_base_dtype(dtypes, b) == spir.ScalarType.f16:
-            return f'@fmulh({_dsd(dsds, dest)}, {_dsd(dsds, a)}, {_dsd(dsds, b)});'
-        elif _get_base_dtype(dtypes, a) == spir.ScalarType.f32 and _get_base_dtype(dtypes, b) == spir.ScalarType.f32:
-            return f'@fmuls({_dsd(dsds, dest)}, {_dsd(dsds, a)}, {_dsd(dsds, b)});'
-        raise TypeError(
-            f"Unsupported types for multiplication: {_get_base_dtype(dtypes, a)}, {_get_base_dtype(dtypes, b)}")
+    def _csl_op(self, a_dtype: spir.ScalarType, b_dtype: spir.ScalarType, dest_dtype: spir.ScalarType) -> str:
+        if a_dtype == spir.ScalarType.f16 and b_dtype == spir.ScalarType.f16:
+            return '@fmulh'
+        elif a_dtype == spir.ScalarType.f32 and b_dtype == spir.ScalarType.f32:
+            return '@fmuls'
+        raise TypeError(f"Unsupported types for multiplication: {a_dtype}, {b_dtype}")
 
 
 class FMADSDOp(DSDOp):
@@ -166,6 +169,9 @@ class FMADSDOp(DSDOp):
         a_dtype = _get_base_dtype(dtypes, a)
         b_dtype = _get_base_dtype(dtypes, b)
         c_dtype = _get_base_dtype(dtypes, c)
+        if c_dtype == spir.ScalarType.UNKNOWN:
+            c_dtype = a_dtype
+
         if a_dtype == b_dtype and a_dtype == spir.ScalarType.f16 and c_dtype == spir.ScalarType.f16:
             return f'@fmach({_dsd(dsds, dest)}, {_dsd(dsds, a)}, {_dsd(dsds, b)}, {_dsd(dsds, c)});'
         if a_dtype == b_dtype and a_dtype == spir.ScalarType.f32 and c_dtype == spir.ScalarType.f16:
@@ -319,6 +325,11 @@ def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
     elif isinstance(inner_stmt, spir.BinaryOperator):
         # @add*, @fadd*, @fmul*, @sub*, @fsub*
         source_types = (_get_base_dtype(dtypes, inner_stmt.left), _get_base_dtype(dtypes, inner_stmt.right))
+        if source_types[0] == spir.ScalarType.UNKNOWN:
+            source_types = (source_types[1], source_types[1])
+        if source_types[1] == spir.ScalarType.UNKNOWN:
+            source_types = (source_types[0], source_types[0])
+
         if inner_stmt.op == '+':
             if (dtype == spir.ScalarType.f16 and source_types[0] == spir.ScalarType.f16 and
                     source_types[1] == spir.ScalarType.f16):
@@ -363,6 +374,8 @@ def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
             return None
         a_dtype, b_dtype, c_dtype = (_get_base_dtype(dtypes, inner_stmt.a), _get_base_dtype(dtypes, inner_stmt.b),
                                      _get_base_dtype(dtypes, inner_stmt.c))
+        if c_dtype == spir.ScalarType.UNKNOWN:
+            c_dtype = a_dtype
         if dtype != a_dtype or dtype != b_dtype:
             # NOTE: Destination type semantics are unclear, supporting only same src/dst dtype for now
             return None

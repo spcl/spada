@@ -102,7 +102,8 @@ def create_csl_tasks(completion_dag: nx.DiGraph, block: spir.ComputeBlock, dtype
         node = block.statements[cnode.statement_id]
 
         # Figure out whether this task type is a local task or a data task
-        if isinstance(node, spir.ForeachStatement) and dsd_ops.get_dsd_op(dtypes, node) is None and cnode.optype == 'post':
+        if (isinstance(node, spir.ForeachStatement) and dsd_ops.get_dsd_op(dtypes, node) is None and
+                cnode.optype == 'post'):
             # Only if it is a complex task (i.e., not a DSD operation)
             this_task_type = 'data'
         else:
