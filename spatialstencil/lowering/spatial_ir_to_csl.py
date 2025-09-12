@@ -48,9 +48,9 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     # Detect stream argument extents (mapping e.g., `stream<f32>[N]` to an `Nx1` rectangle, or `stream<f32>` to one PE)
     stream_rects = analysis.detect_stream_argument_extents(rectangles, kernel)
 
-    # Lower array receives and sends to foreach and for, respectively
-    # (maybe unnecessary given that bulk send/receive can be implemented with fabout/fabin)
+    # Lower array operations to foreach/map iterators as necessary
     canonicalization.lower_bulk_communication(rectangles)
+    canonicalization.lower_array_assignment(rectangles)
 
     # Collect scalar argument types
     scalar_argument_types = []

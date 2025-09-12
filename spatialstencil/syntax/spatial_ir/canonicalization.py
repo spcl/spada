@@ -237,3 +237,63 @@ def lower_bulk_communication(rectangles: list[Rectangle[PEBlock]]) -> None:
     """
     for rect in rectangles:
         rect.metadata.compute = _BulkCommunicationLowerer(rect.metadata.place).visit(rect.metadata.compute)
+
+class _MakeArraySlices(spir.NodeTransformer):
+
+    def __init__(self, index: list[spir.Identifier], identifier_sizes: dict[spir.Identifier, list[int]]):
+        super().__init__()
+        self.index = index
+        self.identifier_sizes = identifier_sizes
+
+    def visit_Identifier(self, node: spir.Identifier):
+        if self.identifier_sizes[node]:
+            return spir.ArraySlice(
+                node,
+                [spir.Expression(v) for v in self.index]
+            )
+        return self.generic_visit(node)
+
+class _ArrayAssignmentLowerer(spir.NodeTransformer):
+
+    def __init__(self, place: spir.PlaceBlock):
+        super().__init__()
+        self.identifier_sizes = analysis.get_identifier_sizes(place)
+        self.identifier_dtypes = analysis.get_identifier_types(place)
+
+    def visit_AssignmentStatement(self, node: spir.AssignmentStatement):
+        if not isinstance(node.destination, spir.Identifier):
+            return self.generic_visit(node)
+
+        if not self.identifier_sizes[node.destination]:  # Skip scalar assignments
+            return self.generic_visit(node)
+
+        sz = self.identifier_sizes[node.destination]
+
+        typed_variables = [spir.TypedIdentifier(spir.ScalarType.u16, spir.Identifier(f'__k{i}', 0)) for i in range(len(sz))]
+        variables = [spir.Identifier(f'__k{i}', 0) for i in range(len(sz))]
+        slicemaker = _MakeArraySlices(variables, self.identifier_sizes)
+        new_assignment = slicemaker.visit(node)
+
+        # Array assignment, make a map node
+        new_node = spir.MapStatement(
+            typed_variables,
+            [
+                # ``0:size`` for every dimension
+                spir.RangeExpression(
+                    spir.Expression(spir.ConstantLiteral(0, spir.ScalarType.u16)),
+                    spir.Expression(spir.ConstantLiteral(s, spir.ScalarType.u16))) for s in sz
+            ],
+            body=[
+                # ``arr[__k0, ...] = a[__k0, ...] + b[__k0, ...]``
+                new_assignment
+            ])
+
+        return new_node
+
+def lower_array_assignment(rectangles: list[Rectangle[PEBlock]]) -> None:
+    """
+    Lowers array assignments into ``@map`` operations.
+    :param rectangles: A list of PE block rectangles to lower computations within.
+    """
+    for rect in rectangles:
+        rect.metadata.compute = _ArrayAssignmentLowerer(rect.metadata.place).visit(rect.metadata.compute)
