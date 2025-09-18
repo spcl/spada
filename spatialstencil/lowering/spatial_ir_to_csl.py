@@ -254,10 +254,11 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     # Write entry point code
     current_code.write(f'''\nfn {kernel.name}({", ".join(scalar_arguments)}) void {{
 ''')
-    non_source_tasks = set(n for t in tasks for n, _ in t.outgoing if n != t.task_id)
-    source_tasks = set(t.task_id for t in tasks) - non_source_tasks
+    non_source_tasks = set(n for i, t in enumerate(tasks) for n, _ in t.outgoing if n != i)
+    source_tasks = [t for i, t in enumerate(tasks) if i not in non_source_tasks]
     for task in source_tasks:
-        current_code.write(f'    @activate({prefix}task_{task}_id);\n')
+        prefix = "d" if task.task_type == 'data' else ""
+        current_code.write(f'    @activate({prefix}task_{task.task_id}_id);\n')
     current_code.write('}\n')
 
     current_code.write(f'''
