@@ -211,7 +211,6 @@ def test_data_local_task_combo():
     block = PEBlock(place, dataflow, compute)
     tasks = _create_tasks(block)
     assert len(tasks) == 2
-    # TODO: Ensure that task_0_id is not defined twice in the CSL code
     assert tasks[0].task_type == 'local'
     assert tasks[1].task_type == 'data'
     assert len(tasks[0].statements) == 1  # Initialization

@@ -219,11 +219,12 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
     # Generate each task
     for task in tasks:
-        current_code.write(f'const task_{task.task_id}_id = @get_{task.task_type}_task_id({task.task_id});\n')
+        prefix = "d" if task.task_type == 'data' else ""
+        current_code.write(f'const {prefix}task_{task.task_id}_id = @get_{task.task_type}_task_id({task.task_id});\n')
         if task.task_type == 'local':
             current_code.write(f'task task_{task.task_id}() void {{\n')
             try:
-                _generate_task_code(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map)
+                _generate_task_code(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map, tasks)
             except KeyError as e:
                 # If a KeyError occurs with an identifier, it means that it is not defined in the current scope
                 identifier = e.args[0]
@@ -238,13 +239,13 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
                     raise
             current_code.write(f'}}\n')
         elif task.task_type == 'data':
-            _generate_data_task(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map)
+            _generate_data_task(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map, tasks)
 
-        footer.write(f'    @bind_{task.task_type}_task(task_{task.task_id}, task_{task.task_id}_id);\n')
+        footer.write(f'    @bind_{task.task_type}_task({prefix}task_{task.task_id}, {prefix}task_{task.task_id}_id);\n')
 
         # Make sure to block tasks
         if task.blocked:
-            footer.write(f'    @block(task_{task.task_id}_id);\n')
+            footer.write(f'    @block({prefix}task_{task.task_id}_id);\n')
 
     exit_task_blocked = any(n == -1 and typ == tdag.InterTaskEdge.UNBLOCK for t in tasks for n, typ in t.outgoing)
     if exit_task_blocked:
@@ -256,7 +257,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     non_source_tasks = set(n for t in tasks for n, _ in t.outgoing if n != t.task_id)
     source_tasks = set(t.task_id for t in tasks) - non_source_tasks
     for task in source_tasks:
-        current_code.write(f'    @activate(task_{task}_id);\n')
+        current_code.write(f'    @activate({prefix}task_{task}_id);\n')
     current_code.write('}\n')
 
     current_code.write(f'''
@@ -675,9 +676,17 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]]) -> dict[tuple[int, int
     return result
 
 
-def _generate_data_task(rect: PEBlock, task: tdag.CSLTask, current_code: StringIO, header: StringIO, footer: StringIO,
-                        dsds: list[tuple[str, cslstruct.DataStructureDescriptor]],
-                        dtypes: dict[spir.Identifier, spir.IRType], color_map: dict[str, int]):
+def _generate_data_task(
+    rect: PEBlock,
+    task: tdag.CSLTask,
+    current_code: StringIO,
+    header: StringIO,
+    footer: StringIO,
+    dsds: list[tuple[str, cslstruct.DataStructureDescriptor]],
+    dtypes: dict[spir.Identifier, spir.IRType],
+    color_map: dict[str, int],
+    tasks: list[tdag.CSLTask],
+):
     """
     Generates a data task from a foreach loop.
 
@@ -689,20 +698,67 @@ def _generate_data_task(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
     :param dsds: A dictionary mapping names to unique data structure descriptor objects.
     :param dtypes: A dictionary mapping identifiers to their defined types.
     :param color_map: Dictionary mapping each stream to its respective color id ({name}_color also works).
+    :param tasks: A list of all tasks in the kernel.
     """
     #   * If index is requested: before unblocking task, set k; inc at end of task
     #   * Wavelet-triggered task as fallback
     assert task.task_type == 'data'
     assert len(task.statements) == 1
 
-    stmt = task.statements[0]
+    stmt_id = task.statements[0]
+    if isinstance(stmt_id, int) and stmt_id >= 0:
+        stmt: spir.ForeachStatement = rect.compute.statements[stmt_id]
+    else:
+        return
     next_task, itedge = task.outgoing[0]
-    # print(task)
+    next_task_type = tasks[next_task].task_type if next_task != -1 else 'local'
+    itedge_code = 'unblock' if itedge == tdag.InterTaskEdge.UNBLOCK else 'activate'
+
+    # If a range was specified, write counter and add code to execute next task
+    if stmt.parameter_range:
+        assert len(stmt.parameter_range) == 1, 'Only one-dimensional foreach loops are supported in data tasks'
+        if next_task == -1:
+            next_task_code = f'@{itedge_code}(exit_task_id);'
+        else:
+            prefix = "d" if next_task_type == 'data' else ""
+            next_task_code = f'@{itedge_code}({prefix}task_{next_task}_id);'
+
+        var_dtype_csl = dtype_as_csl(stmt.variables[0].dtype)
+        param_range = stmt.parameter_range[0]
+        current_code.write(f"var __num_dtask_{task.task_id}: {var_dtype_csl} = {param_range.start.as_ir()};\n")
+
+        next_task_code = f"""
+    __num_dtask_{task.task_id} += {1 if param_range.step is None else param_range.step.as_ir()};
+    if (__num_dtask_{task.task_id} == {param_range.stop.as_ir()}) {{
+        {next_task_code}
+    }}"""
+    else:
+        next_task_code = ""
+
+    # Write frame for data task
+    argtype_csl = dtype_as_csl(stmt.stream_variable.dtype)
+    argname = name_to_csl(stmt.stream_variable.identifier)
+    current_code.write(f"task dtask_{task.task_id}({argname}: {argtype_csl}) void {{\n")
+    if stmt.variables:
+        current_code.write(
+            f'    var {name_to_csl(stmt.variables[0].identifier)}: {var_dtype_csl} = __num_dtask_{task.task_id};\n')
+
+    # Write op contents
+    for substmt in stmt.body:
+        code: str = cslstmt.generate_csl_statement(substmt, dsds, dtypes, None)
+
+        for line in code.splitlines():
+            current_code.write(f'    {line}\n')
+
+    # Write footer
+    current_code.write(next_task_code)
+    current_code.write(f"\n}}\n")
 
 
 def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringIO, header: StringIO, footer: StringIO,
                         dsds: list[tuple[str, cslstruct.DataStructureDescriptor]],
-                        dtypes: dict[spir.Identifier, spir.IRType], color_map: dict[str, int]):
+                        dtypes: dict[spir.Identifier, spir.IRType], color_map: dict[str,
+                                                                                    int], tasks: list[tdag.CSLTask]):
     """
     Generates a local task from a CSL task.
     This function converts statements to DSD operations or generates appropriate code.
@@ -715,6 +771,7 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
     :param dsds: A dictionary mapping names to unique data structure descriptor objects.
     :param dtypes: A dictionary mapping identifiers to their defined types.
     :param color_map: Dictionary mapping each stream to its respective color id ({name}_color also works).
+    :param tasks: A list of all tasks in the kernel.
     """
     # Convert task contents:
     # Convert receives/sends from/to arguments to memcpy
@@ -737,9 +794,10 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
                 if next_task == -1:
                     task_id = 'exit_task_id'
                 else:
-                    task_id = f'task_{next_task}_id'
+                    prefix = "d" if tasks[next_task].task_type == 'data' else ""
+                    task_id = f'{prefix}task_{next_task}_id'
 
-                async_target = dsd_ops.AsyncTarget(next_task, itedge.name.lower())
+                async_target = dsd_ops.AsyncTarget(task_id, itedge.name.lower())
             else:
                 async_target = None
 
@@ -763,7 +821,8 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
             if next_task == -1:
                 task_id = 'exit_task_id'
             else:
-                task_id = f'task_{next_task}_id'
+                prefix = "d" if tasks[next_task].task_type == 'data' else ""
+                task_id = f'{prefix}task_{next_task}_id'
             if itedge == tdag.InterTaskEdge.ACTIVATE:
                 current_code.write(f'    @activate({task_id});\n')
             elif itedge == tdag.InterTaskEdge.UNBLOCK:
