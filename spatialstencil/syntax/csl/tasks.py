@@ -187,17 +187,6 @@ def create_csl_tasks(completion_dag: nx.DiGraph, block: spir.ComputeBlock, dtype
             # Find outgoing index within task
             ind = next(i for i, s in enumerate(result[stmt_task].statements) if s == cnode.statement_id)
 
-            # Successor lives within same task, make sequence
-            if stmt_task == succ_task:
-                etype = InterTaskEdge.SEQUENCE
-            else:
-                # Check if task already has an activate edge
-                if succ_task in task_has_activate:
-                    etype = InterTaskEdge.UNBLOCK
-                else:
-                    etype = InterTaskEdge.ACTIVATE
-                    task_has_activate.add(succ_task)
-            result[stmt_task].outgoing[ind] = (succ_task, etype)
         elif cnode.optype == 'wait':  # Set the next task after the await to begin sequentially
             ind = next((i for i, s in enumerate(result[stmt_task].statements) if s == cnode.statement_id), None)
             if ind is None:  # Wait already omitted from task
@@ -207,12 +196,25 @@ def create_csl_tasks(completion_dag: nx.DiGraph, block: spir.ComputeBlock, dtype
             if num_successors == 1:
                 succ_task = next(succ for succ in completion_dag.successors(cnode))
                 succ_task = cnode_to_task_id[succ_task]
-
-                result[stmt_task].outgoing[ind] = (succ_task, InterTaskEdge.SEQUENCE)
             elif num_successors > 1:
                 node = block.statements[cnode.statement_id]
                 raise ValueError('Multiple successors for a wait task should not appear after canonicalization.\n  In '
                                  f'line {node.lineinfo}')
+            else:  # No successors
+                continue
+
+        # Determine edge type and assign outgoing edge
+        # Successor lives within same task, make sequence
+        if stmt_task == succ_task:
+            etype = InterTaskEdge.SEQUENCE
+        else:
+            # Check if task already has an activate edge
+            if succ_task in task_has_activate:
+                etype = InterTaskEdge.UNBLOCK
+            else:
+                etype = InterTaskEdge.ACTIVATE
+                task_has_activate.add(succ_task)
+        result[stmt_task].outgoing[ind] = (succ_task, etype)
 
     # If the last task is local and empty, we can contract it with our exit task
     if len(result) > 0 and not result[-1].statements:
@@ -274,20 +276,25 @@ def create_csl_tasks(completion_dag: nx.DiGraph, block: spir.ComputeBlock, dtype
                 task.outgoing[i] = (-1, e)
                 continue
 
-            if result[target].task_type == 'local':
-                target_id = constants.LOCAL_TASK_IDS[task_id_to_local_id[target]]
-            else:
-                target_id = constants.DATA_TASK_IDS[task_id_to_data_id[target]]
-            task.outgoing[i] = (target_id, e)
+            # Do not modify outgoing task IDs
+            # if result[target].task_type == 'local':
+            #     target_id = constants.LOCAL_TASK_IDS[task_id_to_local_id[target]]
+            # else:
+            #     target_id = constants.DATA_TASK_IDS[task_id_to_data_id[target]]
+            # task.outgoing[i] = (target_id, e)
 
     # Add explicit terminator statements for tasks that have no successors
-    sink_tasks = [t for t in result if not any(n != t.task_id for n, _ in t.outgoing)]
+    sink_tasks = [
+        t for i, t in enumerate(result) if not any(n != i for n, _ in t.outgoing) or -1 in set(n for n, _ in t.outgoing)
+    ]
     if len(sink_tasks) > 2:
         raise ValueError('Too many sink tasks')
     for i, task in enumerate(sink_tasks):
-        if task.statements[-1] != "TERMINATOR":
+        if task.statements[-1] != "TERMINATOR" and task.outgoing[-1][0] != -1:
             task.statements.append("TERMINATOR")
             task.outgoing.append((-1, InterTaskEdge.ACTIVATE if i == 0 else InterTaskEdge.UNBLOCK))
+        elif task.outgoing[-1][0] == -1 and i != 0:  # Modify existing UNBLOCK edge if there is more than one sink
+            task.outgoing[-1] = (-1, InterTaskEdge.UNBLOCK)
 
     return result
 
