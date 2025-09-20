@@ -18,7 +18,7 @@ np.save('b.npy', b)
 EOF
 
 # Run the compiled program with the Python runtime and the simulator
-cs_python "$SCRIPT_DIR/../spatialstencil/runtime/runtime.py" add_sptl a.npy b.npy
+cs_python "$SCRIPT_DIR/../../spatialstencil/runtime/runtime.py" add_sptl a.npy b.npy
 
 # Check if the output file matches the expected output
 python <<EOF

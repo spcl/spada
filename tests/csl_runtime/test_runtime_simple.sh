@@ -16,7 +16,7 @@ np.save('a.npy', a)
 EOF
 
 # Run the compiled program with the Python runtime and the simulator
-cs_python "$SCRIPT_DIR/../spatialstencil/runtime/runtime.py" copy_sptl a.npy
+cs_python "$SCRIPT_DIR/../../spatialstencil/runtime/runtime.py" copy_sptl a.npy
 
 # Check if the output file matches the expected output
 python <<EOF
