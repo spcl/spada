@@ -218,9 +218,9 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     # TODO: Collect all scalar types for foreach receivers. Every sequential foreach can recycle index var
 
     # Generate each task
-    for task in tasks:
+    for i, task in enumerate(tasks):
         prefix = "d" if task.task_type == 'data' else ""
-        current_code.write(f'const {prefix}task_{task.task_id}_id = @get_{task.task_type}_task_id({task.task_id});\n')
+        current_code.write(f'const {prefix}task_{i}_id = @get_{task.task_type}_task_id({task.task_id});\n')
         if task.task_type == 'local':
             current_code.write(f'task task_{task.task_id}() void {{\n')
             try:
@@ -241,7 +241,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         elif task.task_type == 'data':
             _generate_data_task(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map, tasks)
 
-        footer.write(f'    @bind_{task.task_type}_task({prefix}task_{task.task_id}, {prefix}task_{task.task_id}_id);\n')
+        footer.write(f'    @bind_{task.task_type}_task({prefix}task_{task.task_id}, {prefix}task_{i}_id);\n')
 
         # Make sure to block tasks
         if task.blocked:
