@@ -9,6 +9,7 @@ from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
 from spatialstencil.syntax.csl import constants as csl, preprocessing, tasks as tdag, statements as cslstmt, dsd_ops
 from spatialstencil.syntax.csl import structures as cslstruct
 from spatialstencil.syntax.csl.codefile import CodeFile
+from spatialstencil.syntax.csl.statements import name_to_csl, dtype_as_csl
 
 UniqueDSDDict = dict[str, list[tuple[str, cslstruct.DataStructureDescriptor]]]
 
@@ -856,37 +857,3 @@ def _collect_identifier_types(rect: PEBlock,
                 result[value.identifier] = value.dtype
 
     return result
-
-
-def dtype_as_csl(dtype: spir.ScalarType | spir.StreamType | spir.ArrayType, export: bool = False) -> str:
-    """
-    Returns a CSL syntactic equivalent to a Spatial IR data type.
-
-    :param dtype: Spatial IR data type.
-    :param export: If True, the type is exported as a symbol.
-    :return: CSL string representing the given data type.
-    """
-    if isinstance(dtype, spir.ScalarType):
-        return dtype.as_ir()
-    if isinstance(dtype, spir.StreamType):
-        return dtype.element_type.as_ir()
-    if isinstance(dtype, spir.ArrayType):
-        if export:
-            shape = '[*]'
-        else:
-            shape = f'[{", ".join(str(s) if isinstance(s, int) else s.as_ir() for s in dtype.shape)}]' if len(
-                dtype.shape) > 0 else ''
-        return shape + dtype_as_csl(dtype.base_type, export=export)
-
-
-def name_to_csl(name: spir.Identifier) -> str:
-    """
-    Returns a CSL syntactic equivalent to a Spatial IR identifier.
-
-    :param name: Spatial IR identifier.
-    :return: Compilable CSL string representing the identifier.
-    """
-    if name.version == 0:
-        return name.name
-    else:
-        return f'{name.name}__{name.version}'

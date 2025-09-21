@@ -30,8 +30,7 @@ def generate_csl_statement(statement: spir.Statement, dsds: UniqueDSDDict, dtype
         if op is None:
             op = emit_map(statement, dsds, dtypes)
     elif isinstance(statement, spir.ForStatement):
-        pass
-        # op = emit_for(statement, dsds, dtypes)
+        op = emit_for(statement, dsds, dtypes)
     elif isinstance(statement, spir.AsyncBlock):
         # In the beginning, activate the next sequential-dependency task
         # In the end, unblock the completion waiters
@@ -157,3 +156,77 @@ def emit_assignment(statement: spir.AssignmentStatement, dsds: UniqueDSDDict, dt
         raise NotImplementedError(f"Assignment operation for {statement.source.as_ir()} is not implemented as a DSD op."
                                   f"\n  In line {statement.lineinfo}")
     return dsd_ops.DSD_ASSIGNMENT_MAPPING[dsd_op]()
+
+
+def emit_for(statement: spir.ForStatement, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType]) -> str:
+    """
+    Generates a CSL for loop statement from a Spatial IR for loop statement.
+
+    :param statement: The Spatial IR for loop statement to convert.
+    :return: The generated CSL for loop statement.
+    """
+    ranges = statement.range_expression
+    vars_ = statement.variables
+
+    result = ""
+    # Open nested loops
+    for depth, (rng, var) in enumerate(zip(ranges, vars_)):
+        # Expect rng to have start, end and optionally step
+        start = rng.start.eval() if rng.start is not None else 0
+        end = rng.stop.eval() if rng.stop is not None else 0
+        step = rng.step.eval() if rng.step is not None else 1
+
+        var_name = name_to_csl(var.identifier)
+        var_type = dtype_as_csl(var.dtype)
+        indent = "    " * depth
+        result += f"{indent}for (@range({var_type}, {start}, {end}, {step})) |{var_name}| {{\n"
+
+    # Body (indent one level deeper than the deepest loop)
+    body_indent = "    " * len(ranges)
+    for stmt in statement.body:
+        sub_op = generate_csl_statement(stmt, dsds, dtypes, None)
+        # If the generated sub_op already contains newlines, indent each line
+        sub_lines = str(sub_op).splitlines()
+        for line in sub_lines:
+            result += f"{body_indent}{line}\n"
+
+    # Close nested loops
+    for depth in range(len(ranges) - 1, -1, -1):
+        indent = "    " * depth
+        result += f"{indent}}}\n"
+
+    return result
+
+
+def name_to_csl(name: spir.Identifier) -> str:
+    """
+    Returns a CSL syntactic equivalent to a Spatial IR identifier.
+
+    :param name: Spatial IR identifier.
+    :return: Compilable CSL string representing the identifier.
+    """
+    if name.version == 0:
+        return name.name
+    else:
+        return f'{name.name}__{name.version}'
+
+
+def dtype_as_csl(dtype: spir.ScalarType | spir.StreamType | spir.ArrayType, export: bool = False) -> str:
+    """
+    Returns a CSL syntactic equivalent to a Spatial IR data type.
+
+    :param dtype: Spatial IR data type.
+    :param export: If True, the type is exported as a symbol.
+    :return: CSL string representing the given data type.
+    """
+    if isinstance(dtype, spir.ScalarType):
+        return dtype.as_ir()
+    if isinstance(dtype, spir.StreamType):
+        return dtype.element_type.as_ir()
+    if isinstance(dtype, spir.ArrayType):
+        if export:
+            shape = '[*]'
+        else:
+            shape = f'[{", ".join(str(s) if isinstance(s, int) else s.as_ir() for s in dtype.shape)}]' if len(
+                dtype.shape) > 0 else ''
+        return shape + dtype_as_csl(dtype.base_type, export=export)
