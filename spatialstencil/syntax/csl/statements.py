@@ -170,12 +170,13 @@ def emit_assignment(statement: spir.AssignmentStatement, dsds: UniqueDSDDict, dt
     if isinstance(statement.destination, spir.ArraySlice):
         dst_identifier = statement.destination.array
         indices = [idx.eval() for idx in statement.destination.indices]
+        indices = [name_to_csl(idx) if isinstance(idx, spir.Identifier) else str(idx) for idx in indices]
     else:
         dst_identifier = statement.destination
         indices = [0]
 
     # One element assignment
-    if isinstance(statement.destination, spir.ArraySlice) or dst_identifier.name not in dsds:
+    if isinstance(statement.destination, spir.ArraySlice) or dst_identifier.as_ir() not in dsds:
         if isinstance(dtypes[dst_identifier], spir.ArrayType):
             dst_expr = dst_identifier.as_ir() + f'[{", ".join(map(str, indices))}]'
         else:
