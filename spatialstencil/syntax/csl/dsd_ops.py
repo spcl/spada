@@ -254,6 +254,10 @@ DSD_ASSIGNMENT_MAPPING: dict[str, type[DSDOp]] = {
     '@xp162fs': CopyDSDOp,
     '@fh2xp16': CopyDSDOp,
     '@fs2xp16': CopyDSDOp,
+
+    # HACK: Skip activation if these statements are found in the code
+    '@activate': None,
+    '@unblock': None,
 }
 
 

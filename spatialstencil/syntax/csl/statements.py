@@ -34,8 +34,7 @@ def generate_csl_statement(statement: spir.Statement, dsds: UniqueDSDDict, dtype
     elif isinstance(statement, spir.AsyncBlock):
         # In the beginning, activate the next sequential-dependency task
         # In the end, unblock the completion waiters
-        # op = emit_async_block(statement, dsds, dtypes)
-        pass
+        op = emit_async_block(statement, dsds, dtypes, async_target)
     elif isinstance(statement, spir.AssignmentStatement):
         op = emit_assignment(statement, dsds, dtypes)
 
@@ -195,6 +194,34 @@ def emit_for(statement: spir.ForStatement, dsds: UniqueDSDDict, dtypes: dict[spi
         indent = "    " * depth
         result += f"{indent}}}\n"
 
+    return result
+
+
+def emit_async_block(statement: spir.AsyncBlock,
+                     dsds: UniqueDSDDict,
+                     dtypes: dict[spir.Identifier, spir.IRType],
+                     async_target: Optional[dsd_ops.AsyncTarget] = None) -> str:
+    """
+    Generates a CSL async block statement from a Spatial IR async block statement.
+
+    :param statement: The Spatial IR async block statement to convert.
+    :return: The generated CSL async block statement.
+    """
+    result = "{\n"
+
+    # If async target exists, activate it first
+    if async_target:
+        result += f"    @{async_target.inter_task_edge}({async_target.target_task});\n"
+
+    # Generate the rest of the body
+    for stmt in statement.body:
+        sub_op = generate_csl_statement(stmt, dsds, dtypes, None)
+        # If the generated sub_op already contains newlines, indent each line
+        sub_lines = sub_op.splitlines()
+        for line in sub_lines:
+            result += f"    {line}\n"
+
+    result += "}\n"
     return result
 
 
