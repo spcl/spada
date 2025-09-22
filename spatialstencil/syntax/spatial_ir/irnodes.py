@@ -246,8 +246,8 @@ class TernaryOperator(SpatialNode):
     """
     A ternary operator (``x ? y : z`` in C or ``y if x else z`` in Python).
     """
-    cond: 'Expression'
     if_true: 'Expression'
+    cond: 'Expression'
     if_false: 'Expression'
 
     def validate(self) -> None:
