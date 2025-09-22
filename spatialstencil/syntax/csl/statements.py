@@ -1,3 +1,4 @@
+from io import StringIO
 from typing import Optional
 from spatialstencil.syntax.csl.structures import DataStructureDescriptor
 from spatialstencil.syntax.csl import dsd_ops
@@ -8,11 +9,15 @@ UniqueDSDDict = dict[str, list[tuple[str, DataStructureDescriptor]]]
 
 
 def generate_csl_statement(statement: spir.Statement, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType],
-                           async_target: Optional[dsd_ops.AsyncTarget]) -> str:
+                           async_target: Optional[dsd_ops.AsyncTarget], header_code: StringIO) -> str:
     """
     Generates a CSL statement from a Spatial IR statement.
 
     :param statement: The Spatial IR statement to convert.
+    :param dsds: A dictionary of data structure descriptors.
+    :param dtypes: A dictionary of data types.
+    :param async_target: The asynchronous target for the statement, or None if synchronous.
+    :param header_code: The header code to include in the generated statement.
     :return: The generated CSL statement.
     """
     op: str | dsd_ops.DSDOp | None = None
@@ -28,18 +33,18 @@ def generate_csl_statement(statement: spir.Statement, dsds: UniqueDSDDict, dtype
     elif isinstance(statement, spir.MapStatement):
         op = _try_emit_dsd_op(statement, dsds, dtypes)
         if op is None:
-            op = emit_map(statement, dsds, dtypes)
+            op = emit_map(statement, dsds, dtypes, header_code)
     elif isinstance(statement, spir.ForStatement):
-        op = emit_for(statement, dsds, dtypes)
+        op = emit_for(statement, dsds, dtypes, header_code)
     elif isinstance(statement, spir.AsyncBlock):
         # In the beginning, activate the next sequential-dependency task
         # In the end, unblock the completion waiters
-        op = emit_async_block(statement, dsds, dtypes, async_target)
+        op = emit_async_block(statement, dsds, dtypes, async_target, header_code)
     elif isinstance(statement, spir.AssignmentStatement):
         op = emit_assignment(statement, dsds, dtypes)
     elif isinstance(statement, (spir.AwaitCompletionStatement, spir.AwaitAllStatement)):
         # Skip (taken care of when tasks are defined)
-        return ''
+        return ""
 
     if op is None:
         return f'// TODO: Convert {statement} to CSL'
@@ -88,7 +93,7 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice, destination: spir.Ident
         dst_identifier = destination
 
     # One element copy
-    if src_identifier.name not in dsds or dst_identifier.name not in dsds:
+    if src_identifier.as_ir() not in dsds or dst_identifier.as_ir() not in dsds:
         if isinstance(dtypes[src_identifier], spir.ArrayType):
             src_expr = src_identifier.as_ir() + '[0]'
         else:
@@ -186,11 +191,15 @@ def emit_assignment(statement: spir.AssignmentStatement, dsds: UniqueDSDDict, dt
     return dsd_ops.DSD_ASSIGNMENT_MAPPING[dsd_op]()
 
 
-def emit_for(statement: spir.ForStatement, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType]) -> str:
+def emit_for(statement: spir.ForStatement, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType],
+             header_code: StringIO) -> str:
     """
     Generates a CSL for loop statement from a Spatial IR for loop statement.
 
     :param statement: The Spatial IR for loop statement to convert.
+    :param dsds: The unique DSD dictionary.
+    :param dtypes: The data types dictionary.
+    :param header_code: The header code to include.
     :return: The generated CSL for loop statement.
     """
     ranges = statement.range_expression
@@ -212,7 +221,7 @@ def emit_for(statement: spir.ForStatement, dsds: UniqueDSDDict, dtypes: dict[spi
     # Body (indent one level deeper than the deepest loop)
     body_indent = "    " * len(ranges)
     for stmt in statement.body:
-        sub_op = generate_csl_statement(stmt, dsds, dtypes, None)
+        sub_op = generate_csl_statement(stmt, dsds, dtypes, None, header_code)
         # If the generated sub_op already contains newlines, indent each line
         sub_lines = str(sub_op).splitlines()
         for line in sub_lines:
@@ -226,10 +235,8 @@ def emit_for(statement: spir.ForStatement, dsds: UniqueDSDDict, dtypes: dict[spi
     return result
 
 
-def emit_async_block(statement: spir.AsyncBlock,
-                     dsds: UniqueDSDDict,
-                     dtypes: dict[spir.Identifier, spir.IRType],
-                     async_target: Optional[dsd_ops.AsyncTarget] = None) -> str:
+def emit_async_block(statement: spir.AsyncBlock, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType],
+                     async_target: Optional[dsd_ops.AsyncTarget], header_code: StringIO) -> str:
     """
     Generates a CSL async block statement from a Spatial IR async block statement.
 
@@ -244,7 +251,8 @@ def emit_async_block(statement: spir.AsyncBlock,
 
     # Generate the rest of the body
     for stmt in statement.body:
-        sub_op = generate_csl_statement(stmt, dsds, dtypes, None)
+        # The async block body is not asynchronous
+        sub_op = generate_csl_statement(stmt, dsds, dtypes, None, header_code)
         # If the generated sub_op already contains newlines, indent each line
         sub_lines = sub_op.splitlines()
         for line in sub_lines:

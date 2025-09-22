@@ -747,7 +747,7 @@ def _generate_data_task(
 
     # Write op contents
     for substmt in stmt.body:
-        code: str = cslstmt.generate_csl_statement(substmt, dsds, dtypes, None)
+        code = cslstmt.generate_csl_statement(substmt, dsds, dtypes, None, header)
 
         for line in code.splitlines():
             current_code.write(f'    {line}\n')
@@ -803,7 +803,7 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
             else:
                 async_target = None
 
-            code: str = cslstmt.generate_csl_statement(stmt, dsds, dtypes, async_target)
+            code = cslstmt.generate_csl_statement(stmt, dsds, dtypes, async_target, header)
             lines = code.splitlines()
 
             # DSD operation or async call
