@@ -37,6 +37,9 @@ def generate_csl_statement(statement: spir.Statement, dsds: UniqueDSDDict, dtype
         op = emit_async_block(statement, dsds, dtypes, async_target)
     elif isinstance(statement, spir.AssignmentStatement):
         op = emit_assignment(statement, dsds, dtypes)
+    elif isinstance(statement, (spir.AwaitCompletionStatement, spir.AwaitAllStatement)):
+        # Skip (taken care of when tasks are defined)
+        return ''
 
     if op is None:
         return f'// TODO: Convert {statement} to CSL'
@@ -123,6 +126,32 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice, destination: spir.Ident
     return dsd_ops.CopyDSDOp()
 
 
+def emit_expression(expr: spir.Expression, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType]) -> str:
+    """
+    Generates a CSL expression from a Spatial IR expression.
+
+    :param expr: The Spatial IR expression to convert.
+    :return: The generated CSL expression.
+    """
+    val = expr.value
+    if isinstance(val, spir.BinaryOperator):
+        return f"({emit_expression(val.left, dsds, dtypes)} {val.op} {emit_expression(val.right, dsds, dtypes)})"
+    elif isinstance(val, spir.UnaryOperator):
+        return f"({val.op}{emit_expression(val.value, dsds, dtypes)})"
+    elif isinstance(val, spir.TernaryOperator):
+        return f"(if ({emit_expression(val.cond, dsds, dtypes)}) {emit_expression(val.if_true, dsds, dtypes)} else {emit_expression(val.if_false, dsds, dtypes)})"
+    elif isinstance(val, spir.MultiplyAccumulateOperator):
+        return f"({emit_expression(val.a, dsds, dtypes)} + {emit_expression(val.b, dsds, dtypes)} * {emit_expression(val.c, dsds, dtypes)})"
+    elif isinstance(val, spir.Identifier):
+        return name_to_csl(val)
+    elif isinstance(val, spir.ConstantLiteral):
+        return str(val.value)
+    elif isinstance(val, spir.ArraySlice):
+        return f"{name_to_csl(val.array)}[{', '.join(map(str, val.indices))}]"
+    else:
+        raise NotImplementedError(f"Expression type {type(val)} is not implemented.")
+
+
 def emit_assignment(statement: spir.AssignmentStatement, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier,
                                                                                            spir.IRType]) -> str:
     """
@@ -146,7 +175,7 @@ def emit_assignment(statement: spir.AssignmentStatement, dsds: UniqueDSDDict, dt
             dst_expr = dst_identifier.as_ir() + f'[{", ".join(map(str, indices))}]'
         else:
             dst_expr = dst_identifier.as_ir()
-        return f"{dst_expr} = {statement.source.as_ir()};"
+        return f"{dst_expr} = {emit_expression(statement.source, dsds, dtypes)};"
 
     # DSD assignment
     dsd_op = dsd_ops.get_dsd_op(dtypes, statement)

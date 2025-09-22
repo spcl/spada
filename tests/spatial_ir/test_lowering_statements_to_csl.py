@@ -523,8 +523,8 @@ def test_async_block_with_nested_operations():
     async_block_code = "\n".join(csl_lines[start_line:end_line])
 
     # Look for async task in code, find name and only search for fma and ternary in its contents
-    # assert 'intermediate = val_a + val_b * 1.0' in async_block_code
-    # assert 'if (intermediate > 0.0) intermediate else 0.0' in async_block_code
+    assert 'val_a + val_b * 1.0' in async_block_code
+    assert 'if ((intermediate > 0.0)) intermediate else 0.0' in async_block_code
     assert '@activate' not in async_block_code
     assert '@unblock' not in async_block_code
 
@@ -587,8 +587,8 @@ def test_async_block_chain():
             assert csl_lines[i + 1].startswith(
                 '@activate'), f"Expected @activate after '{{' at line {i}, but got: {csl_lines[i + 1]}"
 
-    # assert 'intermediate = val_a + val_b * 1.0' in csl_code
-    # assert 'if (intermediate > 0.0) intermediate else 0.0' in csl_code
+    assert 'val_a + val_b * 1.0' in csl_code
+    assert 'if ((intermediate > 0.0)) intermediate else 0.0' in csl_code
 
     # Look for async block CSL task structure
     assert 'task_4' in csl_code
