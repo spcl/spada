@@ -197,6 +197,7 @@ class _BulkCommunicationLowerer(spir.NodeTransformer):
                     spir.Expression(spir.Identifier(f'__x', 0))),
             ],
             node.completion_name)
+        new_node.lineinfo = node.lineinfo
 
         return new_node
 
@@ -247,10 +248,12 @@ class _MakeArraySlices(spir.NodeTransformer):
 
     def visit_Identifier(self, node: spir.Identifier):
         if self.identifier_sizes[node]:
-            return spir.ArraySlice(
+            new_node = spir.ArraySlice(
                 node,
                 [spir.Expression(v) for v in self.index]
             )
+            new_node.lineinfo = node.lineinfo
+            return new_node
         return self.generic_visit(node)
 
 class _ArrayAssignmentLowerer(spir.NodeTransformer):
@@ -271,6 +274,9 @@ class _ArrayAssignmentLowerer(spir.NodeTransformer):
 
         typed_variables = [spir.TypedIdentifier(spir.ScalarType.u16, spir.Identifier(f'__k{i}', 0)) for i in range(len(sz))]
         variables = [spir.Identifier(f'__k{i}', 0) for i in range(len(sz))]
+        for i in range(len(sz)):
+            variables[i].lineinfo = node.lineinfo
+            typed_variables[i].lineinfo = node.lineinfo
         slicemaker = _MakeArraySlices(variables, self.identifier_sizes)
         new_assignment = slicemaker.visit(node)
 
@@ -287,6 +293,7 @@ class _ArrayAssignmentLowerer(spir.NodeTransformer):
                 # ``arr[__k0, ...] = a[__k0, ...] + b[__k0, ...]``
                 new_assignment
             ])
+        new_node.lineinfo = node.lineinfo
 
         return new_node
 
