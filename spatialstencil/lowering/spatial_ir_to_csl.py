@@ -220,8 +220,6 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     tasks = tdag.create_csl_tasks(completion_dag, rect.metadata.compute, dtypes)
     dsds = _collect_unique_dsds(tasks, rect.metadata, header, dtypes, kernel)
 
-    # TODO: Collect all scalar types for foreach receivers. Every sequential foreach can recycle index var
-
     # Generate each task
     for i, task in enumerate(tasks):
         prefix = "d" if task.task_type == 'data' else ""
@@ -570,6 +568,13 @@ def _collect_unique_dsds(
     for dsd_value in dsds.values():
         for name, dsd in dsd_value:
             header.write(f'const {name} = {dsd.as_csl()};\n')
+
+    # TODO(later): This function assumes that DSDs are tied to identifiers. This is a limitation
+    # of the dictionary keys, which cannot use arbitrary Spatial IR nodes. This can lead to issues
+    # where an identifier is accessed in multiple contexts (e.g., x[i] and x[i+1]).
+    # An ideal solution would tie the DSDs to IR nodes (e.g., foreach) and then run a post-processing
+    # pass to eliminate duplicates.
+    assert all(len(v) == 1 for v in dsds.values())
 
     return dsds
 

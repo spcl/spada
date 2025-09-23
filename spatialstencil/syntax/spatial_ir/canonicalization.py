@@ -299,7 +299,7 @@ class _ArrayAssignmentLowerer(spir.NodeTransformer):
 
 def lower_array_assignment(rectangles: list[Rectangle[PEBlock]]) -> None:
     """
-    Lowers array assignments into ``@map`` operations.
+    Lowers array assignments into ``map`` operations.
     :param rectangles: A list of PE block rectangles to lower computations within.
     """
     for rect in rectangles:
