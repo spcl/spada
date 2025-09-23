@@ -9,7 +9,7 @@ from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
 from spatialstencil.syntax.csl import constants as csl, preprocessing, tasks as tdag, statements as cslstmt, dsd_ops
 from spatialstencil.syntax.csl import structures as cslstruct
 from spatialstencil.syntax.csl.codefile import CodeFile
-from spatialstencil.syntax.csl.statements import name_to_csl, dtype_as_csl
+from spatialstencil.syntax.csl.statements import name_to_csl, dtype_as_csl, expr_to_csl
 
 UniqueDSDDict = dict[str, list[tuple[str, cslstruct.DataStructureDescriptor]]]
 
@@ -534,7 +534,7 @@ def _collect_unique_dsds(
 
             if isinstance(node, spir.ArraySlice):
                 idxvars = [_find_index(ind) for ind in node.indices if _find_index(ind) is not None]
-                indices = [name_to_csl(ind) for ind in node.indices]
+                indices = [expr_to_csl(ind) for ind in node.indices]
                 name = name_to_csl(node.array)
             else:
                 idxvars = [f'__index_{i}' for i in range(len(shape))]

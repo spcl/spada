@@ -60,10 +60,14 @@ def _ident(expr: spir.Identifier | spir.ArraySlice | spir.TypedIdentifier) -> sp
         return expr.array
     elif isinstance(expr, spir.TypedIdentifier):
         return expr.identifier
+    elif isinstance(expr, spir.Expression):
+        return _ident(expr.value)
     raise TypeError(f"Unsupported expression type: {type(expr)}")
 
 
 def _ident_or_const(expr: spir.SpatialNode) -> spir.Identifier | spir.ConstantLiteral:
+    if isinstance(expr, spir.Expression):
+        return _ident_or_const(expr.value)
     if isinstance(expr, spir.ConstantLiteral):
         return expr
     else:

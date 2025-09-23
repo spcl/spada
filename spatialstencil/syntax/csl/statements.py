@@ -151,7 +151,7 @@ def emit_expression(expr: spir.Expression, dsds: UniqueDSDDict, dtypes: dict[spi
     elif isinstance(val, spir.ConstantLiteral):
         return str(val.value)
     elif isinstance(val, spir.ArraySlice):
-        return f"{name_to_csl(val.array)}[{', '.join(map(str, val.indices))}]"
+        return f"{name_to_csl(val.array)}[{', '.join(map(lambda x: emit_expression(x, dsds, dtypes), val.indices))}]"
     else:
         raise NotImplementedError(f"Expression type {type(val)} is not implemented.")
 
@@ -269,12 +269,40 @@ def name_to_csl(name: spir.Identifier) -> str:
     :param name: Spatial IR identifier.
     :return: Compilable CSL string representing the identifier.
     """
-    if isinstance(name, spir.Expression):
-        return name_to_csl(name.value)
     if name.version == 0:
         return name.name
     else:
         return f'{name.name}__{name.version}'
+
+
+def expr_to_csl(expr: spir.Expression) -> str:
+    """
+    Returns a CSL syntactic equivalent to a Spatial IR expression.
+
+    :param expr: Spatial IR expression.
+    :return: Compilable CSL string representing the expression.
+    """
+    expr = expr.value
+    if isinstance(expr, spir.Identifier):
+        return name_to_csl(expr)
+    elif isinstance(expr, spir.ConstantLiteral):
+        return str(expr.value)
+    elif isinstance(expr, spir.BinaryOperator):
+        left = expr_to_csl(expr.left)
+        right = expr_to_csl(expr.right)
+        return f"({left} {expr.op} {right})"
+    elif isinstance(expr, spir.UnaryOperator):
+        operand = expr_to_csl(expr.value)
+        return f"({expr.op}{operand})"
+    elif isinstance(expr, spir.TernaryOperator):
+        condition = expr_to_csl(expr.condition)
+        true_case = expr_to_csl(expr.true_case)
+        false_case = expr_to_csl(expr.false_case)
+        return f"(if ({condition}) {true_case} else {false_case})"
+    elif isinstance(expr, spir.MultiplyAccumulateOperator):
+        return f"({expr_to_csl(expr.a)} + {expr_to_csl(expr.b)} * {expr_to_csl(expr.c)})"
+    else:
+        raise NotImplementedError(f"Unsupported expression type: {type(expr)}")
 
 
 def dtype_as_csl(dtype: spir.ScalarType | spir.StreamType | spir.ArrayType, export: bool = False) -> str:
