@@ -663,11 +663,122 @@ def test_map_statement_basic():
     # Look for map operations or unrolled code
     map_found = False
     for f in csl_files:
+        if '@map' in f.code and 'arg0' in f.code and 'arg0 * 1.1' in f.code:
+            map_found = True
+            break
+
+    assert map_found, "Expected map operations with arg0 parameter substitution not found in generated CSL"
+
+
+def test_map_statement_with_multiple_inputs():
+    """Test map statement with multiple input variables to verify arg0, arg1, etc. usage."""
+    spatial_ir_code = '''
+    kernel @test_map_multi<N>() {
+        place u16 i, u16 j in [0:N, 0:N] {
+            f32[2, 2] val_a;
+            f32[2, 2] val_b;
+            f32[2, 2] output;
+        }
+        compute u16 i, u16 j in [0:N, 0:N] {
+            await map u16 x, u16 y in [0:2, 0:2] {
+                output[x, y] = val_a[x, y] * val_b[x, y] + x + y * 10.0;
+            };
+        }
+    }
+    '''
+
+    kernel = create_inline_spatial_ir(spatial_ir_code)
+    kernel = passes.concretize_parameters(kernel, N=4)
+    kernel = passes.constexpr_propagation(kernel)
+
+    csl_files = lower_spatial_ir_to_csl(kernel)
+
+    # Check that CSL files were generated
+    assert len(csl_files) > 0
+
+    # Look for map operations with multiple arguments
+    map_found = False
+    for f in csl_files:
+        if ('@map' in f.code and 'arg0' in f.code and 'arg1' in f.code and 'arg0 * arg1' in f.code):
+            map_found = True
+            break
+
+    assert map_found, "Expected map operations with arg0, arg1 parameter substitution not found in generated CSL"
+
+
+def test_map_statement_with_loop():
+    """Test basic map statement lowering."""
+    spatial_ir_code = '''
+    kernel @test_map<N>() {
+        place u16 i, u16 j in [0:N, 0:N] {
+            f32[2, 2] local_val;
+            f32[2, 2] output;
+        }
+        compute u16 i, u16 j in [0:N, 0:N] {
+            await map u16 x, u16 y in [0:2, 0:2] {
+                for u16 k in [0:4] {
+                    local_val[x, y] = local_val[x, y] + 1.0;
+                }
+                output[x, y] = local_val[x, y] * 1.1 + x + y * 10.0;
+            };
+        }
+    }
+    '''
+
+    kernel = create_inline_spatial_ir(spatial_ir_code)
+    kernel = passes.concretize_parameters(kernel, N=4)
+    kernel = passes.constexpr_propagation(kernel)
+
+    csl_files = lower_spatial_ir_to_csl(kernel)
+
+    # Check that CSL files were generated
+    assert len(csl_files) > 0
+
+    # Look for map operations or unrolled code
+    map_found = False
+    for f in csl_files:
         if '@map' in f.code and 'local_val * 1.1' in f.code:
             map_found = True
             break
 
     assert map_found, "Expected map operations not found in generated CSL"
+
+
+def test_map_statement_with_nonmap_loop():
+    """Test basic map statement lowering, where a CSL ``@map`` cannot work."""
+    spatial_ir_code = '''
+    kernel @test_map<N>() {
+        place u16 i, u16 j in [0:N, 0:N] {
+            f32[2, 2] local_val;
+            f32[2, 2] output;
+        }
+        compute u16 i, u16 j in [0:N, 0:N] {
+            await map u16 x, u16 y in [0:2, 0:2] {
+                for u16 k in [0:4] {
+                    output[x, y] = local_val * 1.1 + x + y * 10.0;
+                }
+            };
+        }
+    }
+    '''
+
+    kernel = create_inline_spatial_ir(spatial_ir_code)
+    kernel = passes.concretize_parameters(kernel, N=4)
+    kernel = passes.constexpr_propagation(kernel)
+
+    csl_files = lower_spatial_ir_to_csl(kernel)
+
+    # Check that CSL files were generated
+    assert len(csl_files) > 0
+
+    # Look for map operations or unrolled code
+    loop_found = False
+    for f in csl_files:
+        if f.code.count('for ') == 3 and 'local_val * 1.1' in f.code:
+            loop_found = True
+            break
+
+    assert loop_found, "Expected loop operations not found in generated CSL"
 
 
 @pytest.mark.parametrize('multidimensional', [False, True])
@@ -715,6 +826,53 @@ def test_map_lifting_to_dsd_op(multidimensional):
         assert 'mem4d' in f.code
     else:
         assert 'mem1d' in f.code
+
+
+@pytest.mark.parametrize('multidimensional', [False, True])
+def test_map_lowering_to_for_loop(multidimensional):
+    """
+    Tests map lowering to for loop.
+    """
+    arrdims = '[2, 2]' if multidimensional else '[4]'
+    map_expr = 'map u16 x, u16 y in [0:2, 0:2]' if multidimensional else 'map u16 x in [0:4]'
+    outind = 'x, y' if multidimensional else 'x'
+    spatial_ir_code = f'''
+    kernel @test_map_lowering<N>() {{
+        place u16 i, u16 j in [0:N, 0:N] {{
+            f32 local_val;
+            f32{arrdims} output1;
+            f32{arrdims} output2;
+        }}
+        compute u16 i, u16 j in [0:N, 0:N] {{
+            await {map_expr} {{
+                output1[{outind}] = local_val * 1.1 + x + y * 10.0;
+                output2[{outind}] = local_val * 1.2 + x + y * 11.0;
+            }};
+        }}
+    }}
+    '''
+
+    kernel = create_inline_spatial_ir(spatial_ir_code)
+    kernel = passes.concretize_parameters(kernel, N=4)
+    kernel = passes.constexpr_propagation(kernel)
+
+    csl_files = lower_spatial_ir_to_csl(kernel)
+
+    # Check that CSL files were generated
+    assert len(csl_files) > 0
+    code = csl_files[0].code
+
+    # Check for loop structure
+    if multidimensional:
+        assert code.count('for') == 2
+        assert '@range(u16, 0, 2, 1)' in code
+        assert 'output1[x, y]' in code
+        assert 'output2[x, y]' in code
+    else:
+        assert code.count('for') == 1
+        assert '@range(u16, 0, 4, 1)' in code
+        assert 'output1[x]' in code
+        assert 'output2[x]' in code
 
 
 @pytest.mark.parametrize('streaming', [False, True])
@@ -852,8 +1010,13 @@ if __name__ == '__main__':
     test_async_block_chain()
     test_for_statement_basic()
     test_map_statement_basic()
+    test_map_statement_with_multiple_inputs()
+    test_map_statement_with_loop()
+    test_map_statement_with_nonmap_loop()
     test_map_lifting_to_dsd_op(False)
     test_map_lifting_to_dsd_op(True)
+    test_map_lowering_to_for_loop(False)
+    test_map_lowering_to_for_loop(True)
     test_foreach_with_parameter_range(False)
     test_foreach_with_parameter_range(True)
     test_foreach_without_parameter_range()
