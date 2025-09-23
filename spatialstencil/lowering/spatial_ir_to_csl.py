@@ -572,7 +572,7 @@ def _collect_unique_dsds(
                 indices + ['0'] * (DSD_SIZE - len(shape)),
             )
 
-        def _visit_dsd(substmt):
+        def _visit_dsd(substmt, in_foreach_or_map):
             if (isinstance(substmt, spir.Identifier) and substmt.as_ir() in array_candidates and
                     substmt.as_ir() not in dsds):
                 dsds[substmt.as_ir()].append((f"{name_to_csl(substmt)}_dsd", _dsd_from_array(substmt)))
@@ -582,6 +582,8 @@ def _collect_unique_dsds(
             if not isinstance(substmt, spir.ArraySlice):
                 return
             if substmt.array.as_ir() not in array_candidates:
+                return
+            if not in_foreach_or_map:
                 return
 
             dsd = _dsd_from_array(substmt)
@@ -623,14 +625,26 @@ class DSDVisitor(spir.NodeVisitor):
     def __init__(self, callback, toplevel: bool):
         self.callback = callback
         self.toplevel = toplevel
+        self.in_foreach = False
+        self.in_map = False
         super().__init__()
 
+    def visit_ForeachStatement(self, node: spir.ForeachStatement):
+        self.in_foreach = True
+        self.generic_visit(node)
+        self.in_foreach = False
+
+    def visit_MapStatement(self, node: spir.MapStatement):
+        self.in_map = True
+        self.generic_visit(node)
+        self.in_map = False
+
     def visit_Identifier(self, node: spir.Identifier):
-        self.callback(node)
+        self.callback(node, self.in_foreach or self.in_map)
         return
 
     def visit_ArraySlice(self, node: spir.ArraySlice):
-        self.callback(node)
+        self.callback(node, self.in_foreach or self.in_map)
         # Do not visit internal identifier
         return
 
