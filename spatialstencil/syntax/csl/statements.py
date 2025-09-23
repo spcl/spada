@@ -262,6 +262,313 @@ def emit_async_block(statement: spir.AsyncBlock, dsds: UniqueDSDDict, dtypes: di
     return result
 
 
+def _is_map_compatible(statement: spir.MapStatement, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier,
+                                                                                       spir.IRType]) -> bool:
+    """
+    Checks if a Spatial IR map statement is compatible with CSL ``@map`` semantics.
+
+    :param statement: The Spatial IR map statement to check.
+    :param dsds: The unique DSD dictionary.
+    :param dtypes: The data types dictionary.
+    :return: True if the statement is compatible, False otherwise.
+    """
+
+    def collect_dsd_writes_from_body(body: list[spir.Statement], in_loop: bool = False) -> dict[str, list[bool]]:
+        """
+        Collects all DSD writes from the body and tracks whether they occur in loops.
+        Returns a dict mapping DSD names to lists of booleans indicating if writes are in loops.
+        """
+        dsd_writes = {}
+
+        for stmt in body:
+            if isinstance(stmt, spir.AssignmentStatement):
+                # Check if the destination is a DSD
+                dest_identifier = None
+                if isinstance(stmt.destination, spir.ArraySlice):
+                    dest_identifier = stmt.destination.array
+                elif isinstance(stmt.destination, spir.Identifier):
+                    dest_identifier = stmt.destination
+
+                if dest_identifier and dest_identifier.as_ir() in dsds:
+                    if dest_identifier.as_ir() not in dsd_writes:
+                        dsd_writes[dest_identifier.as_ir()] = []
+                    dsd_writes[dest_identifier.as_ir()].append(in_loop)
+
+            elif isinstance(stmt, spir.ForStatement):
+                # Recursively check for loop body with in_loop=True
+                loop_writes = collect_dsd_writes_from_body(stmt.body, in_loop=True)
+                for dsd_name, writes in loop_writes.items():
+                    if dsd_name not in dsd_writes:
+                        dsd_writes[dsd_name] = []
+                    dsd_writes[dsd_name].extend(writes)
+
+            elif isinstance(stmt, spir.ForeachStatement):
+                # Recursively check foreach body with in_loop=True
+                loop_writes = collect_dsd_writes_from_body(stmt.body, in_loop=True)
+                for dsd_name, writes in loop_writes.items():
+                    if dsd_name not in dsd_writes:
+                        dsd_writes[dsd_name] = []
+                    dsd_writes[dsd_name].extend(writes)
+
+            elif isinstance(stmt, spir.MapStatement):
+                # Recursively check nested map body
+                nested_writes = collect_dsd_writes_from_body(stmt.body, in_loop)
+                for dsd_name, writes in nested_writes.items():
+                    if dsd_name not in dsd_writes:
+                        dsd_writes[dsd_name] = []
+                    dsd_writes[dsd_name].extend(writes)
+
+        return dsd_writes
+
+    # Collect all DSD variables referenced in the map statement variables and body
+    referenced_dsds = set()
+
+    # Check variables (these could be inputs)
+    for var in statement.variables:
+        if var.identifier.as_ir() in dsds:
+            referenced_dsds.add(var.identifier.as_ir())
+
+    # Collect writes from body to find outputs
+    dsd_writes = collect_dsd_writes_from_body(statement.body)
+
+    # Add written DSDs to referenced DSDs
+    referenced_dsds.update(dsd_writes.keys())
+
+    # At least one DSD must be referenced (input or output)
+    if not referenced_dsds:
+        return False
+
+    # Check output constraints: at most one DSD can be written to, and it must be written exactly once outside loops
+    output_dsds = []
+    for dsd_name, writes in dsd_writes.items():
+        # Count non-loop writes
+        non_loop_writes = [w for w in writes if not w]
+        loop_writes = [w for w in writes if w]
+
+        # For CSL @map compatibility:
+        # - There should be exactly one write outside of loops
+        # - Loop writes are allowed for accumulation, but there must be one final write outside loops
+        if len(non_loop_writes) == 1:
+            output_dsds.append(dsd_name)
+        elif len(non_loop_writes) > 1:
+            # Multiple writes outside loops - not compatible
+            return False
+        elif len(non_loop_writes) == 0 and len(loop_writes) > 0:
+            # Only loop writes, no final write outside - not compatible for @map
+            return False
+
+    # At most one output DSD is allowed
+    if len(output_dsds) > 1:
+        return False
+
+    # Check that index variables are not used within body (except for DSD array slices)
+    class _FindNonArrayIndexVars(spir.NodeVisitor):
+
+        def __init__(self):
+            super().__init__()
+            self.non_array_index_vars = set()
+
+        def visit_ArraySlice(self, node: spir.ArraySlice):
+            # Do not track array slices
+            return
+
+        def visit_Identifier(self, node: spir.Identifier):
+            self.non_array_index_vars.add(node)
+            return self.generic_visit(node)
+
+    finder = _FindNonArrayIndexVars()
+    for substmt in statement.body:
+        finder.visit(substmt)
+    if finder.non_array_index_vars & set(v.identifier for v in statement.variables):
+        return False
+
+    return True
+
+
+def emit_map(statement: spir.MapStatement, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType],
+             header_code: StringIO) -> str:
+    """
+    Generates a CSL map statement from a Spatial IR map statement.
+
+    :param statement: The Spatial IR map statement to convert.
+    :return: The generated CSL map statement.
+    """
+
+    # The semantics of a CSL @map statement are as follows:
+    # 1. A callback function is called with one or more DSD arguments. Other arguments may be variables.
+    # 2. The last argument to the @map statement is the output DSD (if any)
+    # 3. The @map statement may only be used with DSDs and variables of compatible types.
+    # 4. The callback function does not have a notion of an index
+    # Therefore, the following restrictions on a Spatial IR map statement apply:
+    # 1. At least one DSD must be referenced (input or output)
+    # 2. At most one DSD can be written to, and it must be written exactly once outside loops
+    # 3. Index variables must not be used within the body (except for DSD array slices)
+    # In other cases, the Spatial IR map becomes a CSL for loop
+
+    global_code = ""  # Code that will appear outside the existing task (for the map callback)
+    local_code = ""
+
+    header_code.write(f"\n// Map from {statement.lineinfo}\n")
+
+    # Generate a unique callback function name
+    callback_name = f"map_callback_{id(statement)}"
+
+    # Check if compatible with the ``@map`` semantics (see above). If not, emit for loop instead
+    if not _is_map_compatible(statement, dsds, dtypes):
+        return emit_for(statement, dsds, dtypes, header_code)
+
+    # Collect all variables from expressions recursively
+    used_identifiers: list[spir.Identifier] = []
+    output_variables: list[spir.Identifier] = []
+    index_identifiers = set(v.identifier for v in statement.variables)
+    for substmt in statement.body:
+        for node in substmt.walk():
+            if isinstance(node, spir.Identifier) and node not in used_identifiers and node not in index_identifiers:
+                used_identifiers.append(node)
+                continue
+            elif isinstance(node, spir.AssignmentStatement):
+                if isinstance(node.destination, spir.ArraySlice):
+                    dest_identifier = node.destination.array
+                elif isinstance(node.destination, spir.Identifier):
+                    dest_identifier = node.destination
+                else:
+                    dest_identifier = None
+                if dest_identifier and dest_identifier.as_ir() in dsds:
+                    output_variables.append(dest_identifier)
+
+    assert len(output_variables) <= 1, "At most one output DSD is allowed in a CSL @map statement."
+
+    # Create a mapping from input variables to parameter names for substitution
+    var_to_param = {}
+    input_params = []
+    param_counter = 0
+
+    # Add parameters for input variables (excluding loop variables, they come from @map iteration)
+    for input_var in used_identifiers:
+        if input_var in output_variables:
+            continue
+        # Get the type from the variable
+        var_dtype = dtypes[input_var]
+        if isinstance(var_dtype, spir.ArrayType):
+            element_type = var_dtype.element_type
+        else:
+            element_type = var_dtype
+        if isinstance(element_type, spir.StreamType):
+            element_type = element_type.element_type
+
+        param_type = dtype_as_csl(element_type)
+        param_name = f"arg{param_counter}"
+        input_params.append(f"{param_name}: {param_type}")
+        var_to_param[input_var] = param_name
+        param_counter += 1
+
+    # Check if there is a return value (output)
+    has_output = len(output_variables) > 0
+    return_type = "void"
+    if has_output:
+        # Use the first output variable's element type as return type
+        output_var = output_variables[0]
+        output_dtype = dtypes[output_var]
+        if isinstance(output_dtype, spir.ArrayType):
+            element_type = output_dtype.element_type
+        else:
+            element_type = output_dtype
+        if isinstance(element_type, spir.StreamType):
+            element_type = element_type.element_type
+        return_type = dtype_as_csl(element_type)
+
+    # Transform the map body: convert assignment to return statement, array slices to identifiers
+    class _ParameterSubstitutionTransformer(spir.NodeTransformer):
+
+        def visit_Identifier(self, node: spir.Identifier):
+            if node in var_to_param:
+                # Create a new identifier with the parameter name
+                param_name = var_to_param[node]
+                new_node = spir.Identifier(name=param_name, version=0)
+                new_node.lineinfo = node.lineinfo
+                return new_node
+            return self.generic_visit(node)
+
+        def visit_ArraySlice(self, node: spir.ArraySlice):
+            if node.array in var_to_param:
+                # Create a new array slice with the parameter name
+                param_name = var_to_param[node.array]
+                new_node = spir.Identifier(name=param_name, version=0)
+                new_node.lineinfo = node.lineinfo
+                return new_node
+            return self.generic_visit(node)
+
+        def visit_AssignmentStatement(self, node: spir.AssignmentStatement):
+            if not output_variables:
+                return self.generic_visit(node)
+            if not isinstance(node.destination, spir.ArraySlice) or node.destination.array != output_variables[0]:
+                return self.generic_visit(node)
+
+            # This is an assignment to output - convert to return statement
+            # Transform the source expression with parameter substitution
+            transformed_source = self.visit(node.source)
+            return f"return {emit_expression(transformed_source, dsds, dtypes)};"
+
+    transformer = _ParameterSubstitutionTransformer()
+    transformed_body = []
+
+    for stmt in statement.body:
+        transformed_stmt = transformer.visit(stmt)
+        transformed_body.append(transformed_stmt)
+
+    # Generate the callback function signature
+    global_code = f"fn {callback_name}({', '.join(input_params)}) {return_type} {{\n"
+
+    for stmt in transformed_body:
+        if isinstance(stmt, str):
+            # Direct CSL code (e.g., return statement)
+            global_code += f"    {stmt}\n"
+        else:
+            # Spatial IR statement - convert to CSL
+            sub_op = generate_csl_statement(stmt, dsds, dtypes, None, header_code)
+            sub_lines = sub_op.splitlines()
+            for line in sub_lines:
+                global_code += f"    {line}\n"
+
+    global_code += "}\n"
+
+    # Generate the @map call arguments
+    map_args = [callback_name]
+
+    # Add input arguments (DSDs for arrays, variables for scalars)
+    for input_var in used_identifiers:
+        if input_var in output_variables:
+            continue
+        var_key = input_var.as_ir()
+        if var_key in dsds:
+            # Use DSD for arrays
+            dsd_list = dsds[var_key]
+            if dsd_list:
+                map_args.append(dsd_list[0][0])  # Use the first DSD name
+        else:
+            # Use variable name for scalars
+            map_args.append(name_to_csl(input_var))
+
+    # Add output DSD if present
+    if has_output:
+        output_var = output_variables[0]
+        var_key = output_var.as_ir()
+        if var_key in dsds:
+            dsd_list = dsds[var_key]
+            if dsd_list:
+                map_args.append(dsd_list[0][0])  # Use the first DSD name
+        else:
+            map_args.append(name_to_csl(output_var))
+
+    # Write the callback function to the header
+    header_code.write(global_code)
+
+    # Generate the @map call
+    local_code = f"@map({', '.join(map_args)});"
+
+    return local_code
+
+
 def name_to_csl(name: spir.Identifier) -> str:
     """
     Returns a CSL syntactic equivalent to a Spatial IR identifier.
