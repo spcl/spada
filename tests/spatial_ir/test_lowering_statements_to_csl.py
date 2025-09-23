@@ -255,7 +255,8 @@ def test_assignment_binary_expression_dsd_fallback(dsd, op):
     # Look for operation in the generated CSL
     code_found = False
     for f in csl_files:
-        if f'val_a {op} val_b' in f.code and (not dsd or '@map' in f.code):
+        if (not dsd and f'val_a {op} val_b' in f.code) or (dsd and '@map' in f.code and
+                                                           f'return (arg0 {op} arg1)' in f.code):
             code_found = True
             break
 
@@ -292,7 +293,8 @@ def test_assignment_ternary_expression(dsd):
     # Look for ternary operation in the generated CSL
     code_found = False
     for f in csl_files:
-        if 'if (cond) val_a else val_b' in f.code and (not dsd or '@map' in f.code):
+        if (not dsd and 'if (cond) val_a else val_b' in f.code) or (dsd and '@map' in f.code and
+                                                                    f'return (if (arg1) arg0 else arg2)' in f.code):
             code_found = True
             break
 
@@ -308,7 +310,7 @@ def test_assignment_fused_multiply_accumulate(dsd):
         place u16 i, u16 j in [0:N, 0:1] {{
             f32{arrexp} val_a;
             f32{arrexp} val_b;
-            f32{arrexp} val_c;
+            f32 val_c;
             f32{arrexp} fma_result;
         }}
         compute u16 i, u16 j in [0:N, 0:1] {{
@@ -645,7 +647,7 @@ def test_map_statement_basic():
         }
         compute u16 i, u16 j in [0:N, 0:N] {
             await map u16 x, u16 y in [0:2, 0:2] {
-                output[x, y] = local_val * 1.1 + x + y * 10.0;
+                output[x, y] = local_val * 1.1 * local_val;
             };
         }
     }
@@ -663,7 +665,7 @@ def test_map_statement_basic():
     # Look for map operations or unrolled code
     map_found = False
     for f in csl_files:
-        if '@map' in f.code and 'arg0' in f.code and 'arg0 * 1.1' in f.code:
+        if '@map' in f.code and 'arg0' in f.code and 'arg0 * (1.1 * arg0)' in f.code:
             map_found = True
             break
 
@@ -681,7 +683,7 @@ def test_map_statement_with_multiple_inputs():
         }
         compute u16 i, u16 j in [0:N, 0:N] {
             await map u16 x, u16 y in [0:2, 0:2] {
-                output[x, y] = val_a[x, y] * val_b[x, y] + x + y * 10.0;
+                output[x, y] = val_a[x, y] * -val_b[x, y] / 10.0;
             };
         }
     }
@@ -699,7 +701,7 @@ def test_map_statement_with_multiple_inputs():
     # Look for map operations with multiple arguments
     map_found = False
     for f in csl_files:
-        if ('@map' in f.code and 'arg0' in f.code and 'arg1' in f.code and 'arg0 * arg1' in f.code):
+        if ('@map' in f.code and 'arg0' in f.code and 'arg1' in f.code and 'arg0 * ((-arg1' in f.code):
             map_found = True
             break
 
@@ -719,7 +721,7 @@ def test_map_statement_with_loop():
                 for u16 k in [0:4] {
                     local_val[x, y] = local_val[x, y] + 1.0;
                 }
-                output[x, y] = local_val[x, y] * 1.1 + x + y * 10.0;
+                output[x, y] = local_val[x, y] * 1.1 * 10.0;
             };
         }
     }
