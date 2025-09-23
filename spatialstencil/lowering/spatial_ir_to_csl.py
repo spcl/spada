@@ -50,8 +50,12 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     stream_rects = analysis.detect_stream_argument_extents(rectangles, kernel)
 
     # Lower array operations to foreach/map iterators as necessary
-    canonicalization.lower_bulk_communication(rectangles)
-    canonicalization.lower_array_assignment(rectangles)
+    try:
+        canonicalization.lower_bulk_communication(rectangles)
+        canonicalization.lower_array_assignment(rectangles)
+    except KeyError as e:
+        if e.args and isinstance(e.args[0], spir.Identifier):
+            raise ValueError(f"Error in {e.args[0].lineinfo}. Undefined identifier \"{e.args[0].as_ir()}\".")
 
     # Collect scalar argument types
     scalar_argument_types = []
