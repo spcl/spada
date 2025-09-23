@@ -42,6 +42,9 @@ class MemoryDSD(DataStructureDescriptor):
                 f'|{",".join(self.idxvars)}|{{{",".join(self.extent)}}} '
                 f'-> {self.array}[{", ".join(self.expression)}] }})')
 
+    def __hash__(self):
+        return hash(("MemoryDSD", self.as_csl()))
+
 
 @dataclass
 class FabricDSD(DataStructureDescriptor):
@@ -57,3 +60,6 @@ class FabricDSD(DataStructureDescriptor):
 
     def as_csl(self) -> str:
         return f'@get_dsd({self.dsd_type.name}_dsd, .{{ .extent = {self.extent}, .fabric_color = {self.color}}})'
+
+    def __hash__(self):
+        return hash(("FabricDSD", self.as_csl()))

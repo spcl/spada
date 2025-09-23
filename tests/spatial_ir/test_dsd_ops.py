@@ -49,11 +49,17 @@ kernel @tester<K> (stream<f32>[4] readonly in,
         await map i32 m in [0:K] {{
             a32[m] = a32[m] + a16[m]
         }}
+        await map i32 k#7 in [0:K] {{
+            a32[k#7] = a32[k#7]
+        }}
+        await map i32 k#8 in [0:K] {{
+            a32[k#8] = localval16
+        }}
     }}
 }}""")
     place, dataflow, compute = kernel.body
     dtypes = s2c._collect_identifier_types(PEBlock(place, dataflow, compute), [])
-    assert len(compute.statements) == 8
+    assert len(compute.statements) == 10
     assert dsd_ops.get_dsd_op(dtypes, compute.statements[0]) == "@fadds"
     assert dsd_ops.get_dsd_op(dtypes, compute.statements[1]) == "@faddhs"
     assert dsd_ops.get_dsd_op(dtypes, compute.statements[2]) is None
@@ -62,6 +68,8 @@ kernel @tester<K> (stream<f32>[4] readonly in,
     assert dsd_ops.get_dsd_op(dtypes, compute.statements[5]) is None
     assert dsd_ops.get_dsd_op(dtypes, compute.statements[6]) == "@fmachs"
     assert dsd_ops.get_dsd_op(dtypes, compute.statements[7]) == "@faddhs"
+    assert dsd_ops.get_dsd_op(dtypes, compute.statements[8]) == "@fmovs"
+    assert dsd_ops.get_dsd_op(dtypes, compute.statements[9]) == "@fh2s"
 
 
 def test_dsd_op_detection_constant_folding():

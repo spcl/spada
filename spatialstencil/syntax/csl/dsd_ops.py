@@ -395,7 +395,7 @@ def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
         if a_dtype == b_dtype and a_dtype == spir.ScalarType.f32 and c_dtype == spir.ScalarType.f32:
             return '@fmacs'
 
-    elif isinstance(inner_stmt, (spir.Identifier, spir.ConstantLiteral)):  # @fmov*, @mov*
+    elif isinstance(inner_stmt, (spir.Identifier, spir.ConstantLiteral, spir.ArraySlice)):  # @fmov*, @mov*
         src_dtype = _get_base_dtype(dtypes, inner_stmt)
         # Move statements are valid for operands of the same type
         if src_dtype == dtype:

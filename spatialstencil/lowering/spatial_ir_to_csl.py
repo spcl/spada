@@ -3,8 +3,9 @@ Converts routed Spatial IR code to Cerebras CSL.
 """
 
 from collections import defaultdict
+import copy
 from io import StringIO
-from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, analysis
+from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, analysis, passes
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
 from spatialstencil.syntax.csl import constants as csl, preprocessing, tasks as tdag, statements as cslstmt, dsd_ops
 from spatialstencil.syntax.csl import structures as cslstruct
@@ -525,18 +526,42 @@ def _collect_unique_dsds(
                 extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape] + ['1'] * (4 - len(shape))
 
             # Find the index in the array
-            def _find_index(ind: spir.Expression) -> str:
+            def _find_index(ind: spir.Expression) -> spir.Identifier:
+                candidates = []
                 for n in ind.walk():
                     if isinstance(n, spir.Identifier):
-                        return name_to_csl(n)
+                        candidates.append(n)
+                if len(candidates) > 1:
+                    raise SyntaxError(
+                        f'Expected one index variable in array access, got {candidates}.\n  In line {ind.lineinfo}')
+                return candidates[0] if candidates else None
+
+            use_index = len(shape) == 1
 
             if isinstance(node, spir.ArraySlice):
+                # Find and replace index with __index
                 idxvars = [_find_index(ind) for ind in node.indices if _find_index(ind) is not None]
-                indices = [expr_to_csl(ind) for ind in node.indices]
+                if use_index:
+                    assert len(
+                        idxvars
+                    ) == 1, f'Expected one index variable for 1D array, got {idxvars}.\n  In line {node.lineinfo}'
+                    far = passes.FindAndReplace({idxvars[0]: spir.Identifier('__index', 0)})
+                else:
+                    far = passes.FindAndReplace({
+                        old: new
+                        for old, new in zip(idxvars, [spir.Identifier(f'__index_{i}', 0) for i in range(len(idxvars))])
+                    })
+                idxvars = ['__index' if use_index else f'__index_{i}' for i in range(len(idxvars))]
+                indices = [expr_to_csl(far.visit(copy.deepcopy(ind))) for ind in node.indices]
                 name = name_to_csl(node.array)
             else:
-                idxvars = [f'__index_{i}' for i in range(len(shape))]
-                indices = [f'__index_{i}' for i in range(len(shape))]
+                # Use __index if 1d
+                if use_index:
+                    idxvars = ['__index']
+                    indices = ['__index']
+                else:
+                    idxvars = [f'__index_{i}' for i in range(len(shape))]
+                    indices = [f'__index_{i}' for i in range(len(shape))]
                 name = name_to_csl(node)
 
             return cslstruct.MemoryDSD(
@@ -564,6 +589,14 @@ def _collect_unique_dsds(
 
         DSDVisitor(_visit_dsd, toplevel=not hasattr(stmt, 'body')).visit(stmt)
 
+    # Make DSD values in the dictionary unique if equivalent
+    for key, dsd_list in dsds.items():
+        unique_dsds = {}
+        for name, dsd in dsd_list:
+            if dsd not in unique_dsds:
+                unique_dsds[dsd] = name
+        dsds[key] = [(v, k) for k, v in unique_dsds.items()]
+
     # Write DSDs to header
     for dsd_value in dsds.values():
         for name, dsd in dsd_value:
@@ -574,7 +607,13 @@ def _collect_unique_dsds(
     # where an identifier is accessed in multiple contexts (e.g., x[i] and x[i+1]).
     # An ideal solution would tie the DSDs to IR nodes (e.g., foreach) and then run a post-processing
     # pass to eliminate duplicates.
-    assert all(len(v) == 1 for v in dsds.values())
+    for key, dsd_list in dsds.items():
+        if len(dsd_list) > 1:
+            if isinstance(dsd_list[0][1], cslstruct.MemoryDSD):
+                raise SyntaxError(f"Multiple Memory DSDs for variable {key}, got {[name for name, _ in dsd_list]}.")
+            assert (isinstance(dsd_list[0][1], cslstruct.FabricDSD) and isinstance(dsd_list[1][1], cslstruct.FabricDSD),
+                    f"Expected FabricDSD for key {key}, got {[type(dsd) for _, dsd in dsd_list]}.")
+            assert len(dsd_list) == 2, f"Expected up to two DSDs for key {key}, got {[name for name, _ in dsd_list]}."
 
     return dsds
 
