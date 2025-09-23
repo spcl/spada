@@ -65,11 +65,13 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     # For each rectangle, collect metadata and generate code
     csl_codes: list[CodeFile] = []
     routing_instructions: list[str] = []
+    color_maps = []
     for rect in rectangles:
         # Create a unique CSL code file based on rectangle offset
         csl_name = f'code_{rect.x_range[0]}_{rect.y_range[0]}.csl'
-        rect_code = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode,
-                                       stream_rects)
+        rect_code, color_map = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode,
+                                                  stream_rects)
+        color_maps.append(color_map)
         csl_codes.append(CodeFile(csl_name, rect_code))
 
     # Prepare outputs
@@ -81,7 +83,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     rect_size = grid_rect[1] - grid_rect[0], grid_rect[3] - grid_rect[2]
 
     # Collect unique routes for all rectangles
-    routes_per_rectangle = _collect_routes(rectangles)
+    routes_per_rectangle = _collect_routes(rectangles, color_maps)
 
     if use_memcpy_mode:
         layout_code.write(f'''
@@ -180,7 +182,7 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
 
 def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_instructions: list[str],
                        scalar_arguments: list[str], use_memcpy_mode: bool,
-                       stream_extents: analysis.StreamExtents) -> str:
+                       stream_extents: analysis.StreamExtents) -> tuple[str, dict[str, int]]:
     # Code generation carets
     header = StringIO()
     current_code = StringIO()
@@ -278,7 +280,7 @@ task exit_task() void {{
 }}\n''')
 
     # Finalize code generation by concatenating carets
-    return header.getvalue() + '\n' + current_code.getvalue() + '\n' + footer.getvalue()
+    return header.getvalue() + '\n' + current_code.getvalue() + '\n' + footer.getvalue(), color_map
 
 
 def _collect_and_allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Kernel, use_memcpy_mode: bool,
@@ -671,7 +673,7 @@ def _route_dir(dx: int, dy: int):
         return ('NORTH', 'SOUTH')
 
 
-def _collect_routes(rectangles: list[Rectangle[PEBlock]]) -> dict[tuple[int, int], str]:
+def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[str, int]]) -> dict[tuple[int, int], str]:
     """
     Creates a parametric version of the Routing Graph (see the Spatial IR specification for more information) and
     returns a dictionary of code segements to add to the layout CSL file based on the streams.
@@ -684,7 +686,7 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]]) -> dict[tuple[int, int
 
     # TODO: Make routing instructions unique
     # Create a routing graph
-    for rect in rectangles:
+    for rect, color_map in zip(rectangles, color_maps):
         # Test whether a receive/send statement are called for creating inbound/outbound routes
         sends_recvs = analysis.sends_and_receives(rect.metadata.compute)
         inst = ''
@@ -693,7 +695,7 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]]) -> dict[tuple[int, int
         for stream in rect.metadata.dataflow.statements:
             if stream.stream_name not in sends_recvs:  # Skip unused streams
                 continue
-            color_name = name_to_csl(stream.stream_name) + '_color'
+            color_name = f'@get_color({color_map[name_to_csl(stream.stream_name)]})'
 
             if len(stream.routing.hops) == 1:  # Inbound and outbound generated together
                 route = _route_dir(*stream.routing.hops[0].offset)
