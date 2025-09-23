@@ -295,10 +295,10 @@ def _collect_and_allocate_colors(rect: Rectangle[PEBlock], header: StringIO, ker
     """
     result: dict[str, int] = {}
     wrote_header: bool = False
+    arg_offset = 0
 
     # Collect colors from kernel arguments if in streaming mode
     if not use_memcpy_mode:
-        arg_offset = 0
         input_args = []
         output_args = []
         for arg in kernel.arguments:

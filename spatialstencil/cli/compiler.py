@@ -97,6 +97,9 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         yend += 1 * 3
 
     # Generate metadata.json file
+    kernel = canonicalization.canonicalize_phases(kernel)
+    kernel = canonicalization.reduce_streams(kernel)
+    kernel = canonicalization.inline_phases(kernel)
     input_args, output_args = analysis.get_kernel_stream_arguments(kernel)
     rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
     stream_extents = analysis.detect_stream_argument_extents(rectangles, kernel)
