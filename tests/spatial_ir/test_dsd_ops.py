@@ -1,13 +1,13 @@
 import pytest
 from spatialstencil.lowering import spatial_ir_to_csl as s2c
-from spatialstencil.syntax.spatial_ir import parser
+from spatialstencil.syntax.spatial_ir import parser, passes
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock
 from spatialstencil.syntax.csl import dsd_ops
 
 
 def test_dsd_op_detection():
     kernel = parser.parse_string(code=f"""
-kernel @two_phase<K> (stream<f32>[4] readonly in,
+kernel @tester<K> (stream<f32>[4] readonly in,
                           stream<f32> readonly out ) {{
 
     place i16 i, i16 j in [0, 0] {{
@@ -64,5 +64,31 @@ kernel @two_phase<K> (stream<f32>[4] readonly in,
     assert dsd_ops.get_dsd_op(dtypes, compute.statements[7]) == "@faddhs"
 
 
+def test_dsd_op_detection_constant_folding():
+    kernel = parser.parse_string(code=f"""
+kernel @tester<K> () {{
+
+    place i16 i, i16 j in [0, 0] {{
+        f32[K] a32
+    }}
+    dataflow i16 i, i16 j in [0, 0] {{
+    }}
+    compute i32 i, i32 j in [0, 0] {{
+        await map i32 k#7 in [0:80] {{
+            a32[k#7] = (-4.0 * a32[k#7])
+        }}
+    }}
+}}""")
+    kernel = passes.concretize_parameters(kernel, K=80)
+    place, dataflow, compute = kernel.body
+    dtypes = s2c._collect_identifier_types(PEBlock(place, dataflow, compute), [])
+    assert dsd_ops.get_dsd_op(dtypes, compute.statements[0]) is None
+
+    dtypes = s2c._collect_identifier_types(PEBlock(place, dataflow, compute), [])
+    kernel = passes.constexpr_propagation(kernel)
+    assert dsd_ops.get_dsd_op(dtypes, compute.statements[0]) == "@fmuls"
+
+
 if __name__ == '__main__':
     test_dsd_op_detection()
+    test_dsd_op_detection_constant_folding()

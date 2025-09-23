@@ -71,9 +71,10 @@ def _ident_or_const(expr: spir.SpatialNode) -> spir.Identifier | spir.ConstantLi
 
 
 def _dsd(dsds: UniqueDSDDict, expr: spir.SpatialNode) -> str:
+    from spatialstencil.syntax.csl.statements import name_to_csl
     if isinstance(expr, spir.Identifier):
-        if expr not in dsds:
-            return expr.as_ir()
+        if expr.as_ir() not in dsds:
+            return name_to_csl(expr)
         return dsds[expr.as_ir()][0][0]
     elif isinstance(expr, spir.ConstantLiteral):
         return str(expr.value)

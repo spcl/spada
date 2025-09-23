@@ -530,7 +530,7 @@ def _collect_unique_dsds(
 
             if isinstance(node, spir.ArraySlice):
                 idxvars = [_find_index(ind) for ind in node.indices if _find_index(ind) is not None]
-                indices = [ind.as_ir() for ind in node.indices]
+                indices = [name_to_csl(ind) for ind in node.indices]
                 name = name_to_csl(node.array)
             else:
                 idxvars = [f'__index_{i}' for i in range(len(shape))]

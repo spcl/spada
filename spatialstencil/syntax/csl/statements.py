@@ -3,7 +3,6 @@ from typing import Optional
 from spatialstencil.syntax.csl.structures import DataStructureDescriptor
 from spatialstencil.syntax.csl import dsd_ops
 from spatialstencil.syntax.spatial_ir import irnodes as spir
-from spatialstencil.syntax.common.types import BIT_WIDTH
 
 UniqueDSDDict = dict[str, list[tuple[str, DataStructureDescriptor]]]
 
@@ -270,6 +269,8 @@ def name_to_csl(name: spir.Identifier) -> str:
     :param name: Spatial IR identifier.
     :return: Compilable CSL string representing the identifier.
     """
+    if isinstance(name, spir.Expression):
+        return name_to_csl(name.value)
     if name.version == 0:
         return name.name
     else:
