@@ -55,6 +55,7 @@ def test_two_phase_split():
 def test_laplacian():
     file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'laplacian_routed.sptl')
     kernel = parser.parse_file(file)
+    kernel = passes.constexpr_propagation(kernel)
     print(kernel.as_ir())
     csl_files = lower_spatial_ir_to_csl(kernel)
     for f in csl_files:
@@ -72,6 +73,7 @@ def test_forward_sum():
     print(kernel.as_ir())
     csl_files = lower_spatial_ir_to_csl(kernel)
     for f in csl_files:
+        
         print('=============')
         print(f.filename, ':')
         print(f.code)

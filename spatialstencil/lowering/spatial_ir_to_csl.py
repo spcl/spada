@@ -611,8 +611,8 @@ def _collect_unique_dsds(
         if len(dsd_list) > 1:
             if isinstance(dsd_list[0][1], cslstruct.MemoryDSD):
                 raise SyntaxError(f"Multiple Memory DSDs for variable {key}, got {[name for name, _ in dsd_list]}.")
-            assert (isinstance(dsd_list[0][1], cslstruct.FabricDSD) and isinstance(dsd_list[1][1], cslstruct.FabricDSD),
-                    f"Expected FabricDSD for key {key}, got {[type(dsd) for _, dsd in dsd_list]}.")
+            assert isinstance(dsd_list[0][1], cslstruct.FabricDSD) and isinstance(dsd_list[1][1], cslstruct.FabricDSD), \
+                f"Expected FabricDSD for key {key}, got {[type(dsd) for _, dsd in dsd_list]}."
             assert len(dsd_list) == 2, f"Expected up to two DSDs for key {key}, got {[name for name, _ in dsd_list]}."
 
     return dsds

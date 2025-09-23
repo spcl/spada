@@ -74,11 +74,16 @@ def _ident_or_const(expr: spir.SpatialNode) -> spir.Identifier | spir.ConstantLi
         return _ident(expr)
 
 
-def _dsd(dsds: UniqueDSDDict, expr: spir.SpatialNode) -> str:
+def _dsd(dsds: UniqueDSDDict, expr: spir.SpatialNode, output: bool = False) -> str:
     from spatialstencil.syntax.csl.statements import name_to_csl
     if isinstance(expr, spir.Identifier):
         if expr.as_ir() not in dsds:
             return name_to_csl(expr)
+        if output:
+            # Find fabout DSD, if exists
+            for dsd in dsds[expr.as_ir()]:
+                if isinstance(dsd[1], cslstruct.FabricDSD) and dsd[1].dsd_type == cslstruct.DSDType.fabout:
+                    return dsd[0]
         return dsds[expr.as_ir()][0][0]
     elif isinstance(expr, spir.ConstantLiteral):
         return str(expr.value)
@@ -110,7 +115,7 @@ class BinaryDSDOp(DSDOp):
             b_dtype = a_dtype
 
         op = self._csl_op(a_dtype, b_dtype, dest_dtype)
-        return f"{op}({_dsd(dsds, dest)}, {_dsd(dsds, a)}, {_dsd(dsds, b)});"
+        return f"{op}({_dsd(dsds, dest, output=True)}, {_dsd(dsds, a)}, {_dsd(dsds, b)});"
 
 
 class NegDSDOp(UnaryDSDOp):
@@ -122,8 +127,8 @@ class NegDSDOp(UnaryDSDOp):
         dest = _ident(statement.destination)
 
         if _get_base_dtype(dtypes, arg) == spir.ScalarType.f32:
-            return f'@fnegs({_dsd(dsds, dest)}, {_dsd(dsds, arg)});'
-        return f'@fnegh({_dsd(dsds, dest)}, {_dsd(dsds, arg)});'
+            return f'@fnegs({_dsd(dsds, dest, output=True)}, {_dsd(dsds, arg)});'
+        return f'@fnegh({_dsd(dsds, dest, output=True)}, {_dsd(dsds, arg)});'
 
 
 class AddDSDOp(BinaryDSDOp):
@@ -178,11 +183,11 @@ class FMADSDOp(DSDOp):
             c_dtype = a_dtype
 
         if a_dtype == b_dtype and a_dtype == spir.ScalarType.f16 and c_dtype == spir.ScalarType.f16:
-            return f'@fmach({_dsd(dsds, dest)}, {_dsd(dsds, a)}, {_dsd(dsds, b)}, {_dsd(dsds, c)});'
+            return f'@fmach({_dsd(dsds, dest, output=True)}, {_dsd(dsds, a)}, {_dsd(dsds, b)}, {_dsd(dsds, c)});'
         if a_dtype == b_dtype and a_dtype == spir.ScalarType.f32 and c_dtype == spir.ScalarType.f16:
-            return f'@fmachs({_dsd(dsds, dest)}, {_dsd(dsds, a)}, {_dsd(dsds, b)}, {_dsd(dsds, c)});'  # 16-bit multiplication, 32-bit addition
+            return f'@fmachs({_dsd(dsds, dest, output=True)}, {_dsd(dsds, a)}, {_dsd(dsds, b)}, {_dsd(dsds, c)});'  # 16-bit multiplication, 32-bit addition
         if a_dtype == b_dtype and a_dtype == spir.ScalarType.f32 and c_dtype == spir.ScalarType.f32:
-            return f'@fmacs({_dsd(dsds, dest)}, {_dsd(dsds, a)}, {_dsd(dsds, b)}, {_dsd(dsds, c)});'
+            return f'@fmacs({_dsd(dsds, dest, output=True)}, {_dsd(dsds, a)}, {_dsd(dsds, b)}, {_dsd(dsds, c)});'
         raise TypeError(f"Unsupported types for FMA: {a_dtype}, {b_dtype}, {c_dtype}")
 
 
@@ -226,7 +231,7 @@ class CopyDSDOp(DSDOp):
                 op = '@fs2xp16'
             else:
                 raise TypeError(f"Unsupported types for cast operation: {src_dtype}, {dtype}")
-        return f'{op}({_dsd(dsds, dest)}, {_dsd(dsds, src)});'
+        return f'{op}({_dsd(dsds, dest, output=True)}, {_dsd(dsds, src)});'
 
 
 DSD_ASSIGNMENT_MAPPING: dict[str, type[DSDOp]] = {
