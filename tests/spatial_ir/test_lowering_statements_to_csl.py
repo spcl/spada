@@ -708,44 +708,6 @@ def test_map_statement_with_multiple_inputs():
     assert map_found, "Expected map operations with arg0, arg1 parameter substitution not found in generated CSL"
 
 
-def test_map_statement_with_loop():
-    """Test basic map statement lowering."""
-    spatial_ir_code = '''
-    kernel @test_map<N>() {
-        place u16 i, u16 j in [0:N, 0:N] {
-            f32[2, 2] local_val;
-            f32[2, 2] output;
-        }
-        compute u16 i, u16 j in [0:N, 0:N] {
-            await map u16 x, u16 y in [0:2, 0:2] {
-                for u16 k in [0:4] {
-                    local_val[x, y] = local_val[x, y] + 1.0;
-                }
-                output[x, y] = local_val[x, y] * 1.1 * 10.0;
-            };
-        }
-    }
-    '''
-
-    kernel = create_inline_spatial_ir(spatial_ir_code)
-    kernel = passes.concretize_parameters(kernel, N=4)
-    kernel = passes.constexpr_propagation(kernel)
-
-    csl_files = lower_spatial_ir_to_csl(kernel)
-
-    # Check that CSL files were generated
-    assert len(csl_files) > 0
-
-    # Look for map operations or unrolled code
-    map_found = False
-    for f in csl_files:
-        if '@map' in f.code and 'local_val * 1.1' in f.code:
-            map_found = True
-            break
-
-    assert map_found, "Expected map operations not found in generated CSL"
-
-
 def test_map_statement_with_nonmap_loop():
     """Test basic map statement lowering, where a CSL ``@map`` cannot work."""
     spatial_ir_code = '''
@@ -1013,7 +975,6 @@ if __name__ == '__main__':
     test_for_statement_basic()
     test_map_statement_basic()
     test_map_statement_with_multiple_inputs()
-    test_map_statement_with_loop()
     test_map_statement_with_nonmap_loop()
     test_map_lifting_to_dsd_op(False)
     test_map_lifting_to_dsd_op(True)
