@@ -297,7 +297,7 @@ def _collect_and_allocate_colors(rect: Rectangle[PEBlock], header: StringIO, ker
     """
     result: dict[str, int] = {}
     wrote_header: bool = False
-    arg_offset = 0
+    color_offset: int = 0
 
     # Collect colors from kernel arguments if in streaming mode
     if not use_memcpy_mode:
@@ -328,34 +328,67 @@ def _collect_and_allocate_colors(rect: Rectangle[PEBlock], header: StringIO, ker
                 # If the argument is a stream, allocate a color for h2d and d2h transfers
                 name = name_to_csl(arg.identifier)
                 if not is_output:
-                    result[name + "_H2D"] = csl.COLORS[arg_offset]
-                    arg_offset += 1
+                    result[name + "_H2D"] = csl.COLORS[color_offset]
+                    color_offset += 1
                     header.write(f'const {name}_H2D_color: color = @get_color({result[name + "_H2D"]});\n')
                 else:
-                    result[name + "_D2H"] = csl.COLORS[arg_offset]
-                    arg_offset += 1
+                    result[name + "_D2H"] = csl.COLORS[color_offset]
+                    color_offset += 1
                     header.write(f'const {name}_D2H_color: color = @get_color({result[name + "_D2H"]});\n')
 
     if rect.metadata.dataflow.statements:
         header.write('\n// Colors\n')
 
+    channel_to_in_color: dict[int, int] = {}
+    channel_to_out_color: dict[int, int] = {}
+    sends_recvs = analysis.sends_and_receives(rect.metadata.compute)
     # Collect colors from streams in dataflow
     for stream_decl in rect.metadata.dataflow.statements:
         name = name_to_csl(stream_decl.stream_name)
+        if stream_decl.stream_name not in sends_recvs:
+            continue  # Unused stream
+        outbound, inbound = sends_recvs[stream_decl.stream_name]
         if stream_decl.routing is None:
             raise SyntaxError(f'Non-routed stream "{name}". When generating CSL, Spatial IR code must have all streams '
                               'routed.')
         if stream_decl.routing.channel == 'auto':
             raise SyntaxError(f'"auto" stream channel found in stream "{name}". All streams must be concretized prior '
                               'to lowering to CSL')
-        if stream_decl.routing.channel not in csl.COLORS:
-            raise SyntaxError(f'Too many communication channels allocated for CSL: stream {name} has channel '
-                              f'{stream_decl.routing.channel}')
 
-        # Add to mapping
-        result[name] = csl.COLORS[stream_decl.routing.channel + arg_offset]
-        # Declare color
-        header.write(f'const {name}_color: color = @get_color({result[name]});\n')
+        if inbound:
+            # Register or lookup channel in color map
+            if stream_decl.routing.channel in channel_to_in_color:
+                this_color = channel_to_in_color[stream_decl.routing.channel]
+            else:
+                this_color = color_offset
+                color_offset += 1
+                channel_to_in_color[stream_decl.routing.channel] = this_color
+
+            if this_color not in csl.COLORS:
+                raise SyntaxError(f'Too many communication channels allocated for CSL: stream {name} has channel '
+                                  f'{stream_decl.routing.channel} (inbound)')
+
+            # Add to mapping
+            result[name + "_IN"] = csl.COLORS[this_color]
+            # Declare color
+            header.write(f'const {name}_color_in: color = @get_color({result[name + "_IN"]});\n')
+
+        if outbound:
+            # Register or lookup channel in color map
+            if stream_decl.routing.channel in channel_to_out_color:
+                this_color = channel_to_out_color[stream_decl.routing.channel]
+            else:
+                this_color = color_offset
+                color_offset += 1
+                channel_to_out_color[stream_decl.routing.channel] = this_color
+
+            if this_color not in csl.COLORS:
+                raise SyntaxError(f'Too many communication channels allocated for CSL: stream {name} has channel '
+                                  f'{stream_decl.routing.channel} (outbound)')
+            # Add to mapping
+            result[name + "_OUT"] = csl.COLORS[this_color]
+            # Declare color
+            header.write(f'const {name}_color_out: color = @get_color({result[name + "_OUT"]});\n')
 
     if result:
         header.write('\n')
@@ -453,6 +486,7 @@ def _collect_unique_dsds(
             stream_args.add(arg.identifier)
 
     # Find used DSDs in compute block
+    # TODO: Infer input/output queue ID based on concurrency
     for stmt in rect.compute.statements:
         # Find out if compute block uses this stream for receive/send
         if isinstance(stmt, (spir.ReceiveStatement, spir.SendStatement)):
@@ -462,14 +496,16 @@ def _collect_unique_dsds(
                 dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
                 extents = stream_candidates[stream_name.as_ir()][1]
                 extents = extents if isinstance(extents, int) else extents.eval()
-                dsd = cslstruct.FabricDSD(dsd_type, f'{name_to_csl(stream_name)}_color', extents)
+                fabric_color = f'{name_to_csl(stream_name)}_color'
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, 0)
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
             elif isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
                 dsd_type = cslstruct.DSDType.fabout
                 dsd_name = f'{name_to_csl(stream_name)}_out_dsd'
                 extents = stream_candidates[stream_name.as_ir()][1]
                 extents = extents if isinstance(extents, int) else extents.eval()
-                dsd = cslstruct.FabricDSD(dsd_type, f'{name_to_csl(stream_name)}_color', extents)
+                fabric_color = f'{name_to_csl(stream_name)}_color'
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, 0)
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
                 # If the send statement sends from a local array, create another DSD
                 # This case does not apply for receive statements, as they would be lowered to foreach statements
@@ -477,14 +513,11 @@ def _collect_unique_dsds(
                     _, shape = array_candidates[stmt.local_array.as_ir()]
                     if len(shape) == 1:
                         dsd_type = cslstruct.DSDType.mem1d
-                        DSD_SIZE = 1
                         extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
                         indices = ['__index']
                     else:
                         dsd_type = cslstruct.DSDType.mem4d
-                        DSD_SIZE = 4
-                        extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape
-                                  ] + ['1'] * (4 - len(shape))
+                        extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
                         indices = [f'__index_{i}' for i in range(len(shape))]
 
                     dsd = cslstruct.MemoryDSD(
@@ -492,7 +525,7 @@ def _collect_unique_dsds(
                         name_to_csl(stmt.local_array),
                         extents,
                         indices,
-                        indices + ['0'] * (DSD_SIZE - len(shape)),
+                        indices,
                     )
                     dsds[stmt.local_array.as_ir()].append((f"{name_to_csl(stmt.local_array)}_dsd", dsd))
         elif isinstance(stmt, spir.ForeachStatement):
@@ -506,13 +539,13 @@ def _collect_unique_dsds(
                     raise SyntaxError(f'Foreach generator "{stream_name.as_ir()}" without a defined '
                                       f'range must only be used with a kernel argument.\n  In line {stmt.lineinfo}')
                 # A data task will be created instead (handled in _generate_data_task)
-                # TODO: Ensure a data task is created for this stream with a test
             else:
                 if stream_name.as_ir() in stream_candidates:
                     dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
                     extents = stream_candidates[stream_name.as_ir()][1]
                     extents = extents if isinstance(extents, int) else extents.eval()
-                    dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, f'{name_to_csl(stream_name)}_color', extents)
+                    fabric_color = f'{name_to_csl(stream_name)}_color'
+                    dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents, 0)
                     dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
         def _dsd_from_array(node: spir.Identifier | spir.ArraySlice):
@@ -520,12 +553,10 @@ def _collect_unique_dsds(
             _, shape = array_candidates[ident.as_ir()]
             if len(shape) == 1:
                 dsd_type = cslstruct.DSDType.mem1d
-                DSD_SIZE = 1
                 extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
             else:
                 dsd_type = cslstruct.DSDType.mem4d
-                DSD_SIZE = 4
-                extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape] + ['1'] * (4 - len(shape))
+                extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
 
             # Find the index in the array
             def _find_index(ind: spir.Expression) -> spir.Identifier:
@@ -571,7 +602,7 @@ def _collect_unique_dsds(
                 name,
                 extents,
                 idxvars,
-                indices + ['0'] * (DSD_SIZE - len(shape)),
+                indices,
             )
 
         def _visit_dsd(substmt, in_foreach_or_map):
@@ -673,7 +704,8 @@ def _route_dir(dx: int, dy: int):
         return ('NORTH', 'SOUTH')
 
 
-def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[str, int]]) -> dict[tuple[int, int], str]:
+def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[str,
+                                                                                int]]) -> dict[tuple[int, int], str]:
     """
     Creates a parametric version of the Routing Graph (see the Spatial IR specification for more information) and
     returns a dictionary of code segements to add to the layout CSL file based on the streams.
@@ -684,56 +716,78 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
     INDENT = 12 * ' '
     result = {}
 
-    # TODO: Make routing instructions unique
     # Create a routing graph
     for rect, color_map in zip(rectangles, color_maps):
         # Test whether a receive/send statement are called for creating inbound/outbound routes
         sends_recvs = analysis.sends_and_receives(rect.metadata.compute)
         inst = ''
 
+        # Make routing instructions unique
+        routing_instructions: set[str] = set()
+
         # For each hop, make a color WEST-EAST/NORTH-SOUTH pair. For the first and last hop, pair with RAMP
         for stream in rect.metadata.dataflow.statements:
             if stream.stream_name not in sends_recvs:  # Skip unused streams
                 continue
-            color_name = f'@get_color({color_map[name_to_csl(stream.stream_name)]})'
+            sent, received = sends_recvs[stream.stream_name]
+            if received:
+                color_name_inbound = f'@get_color({color_map[name_to_csl(stream.stream_name) + "_IN"]})'
+            if sent:
+                color_name_outbound = f'@get_color({color_map[name_to_csl(stream.stream_name) + "_OUT"]})'
 
             if len(stream.routing.hops) == 1:  # Inbound and outbound generated together
                 route = _route_dir(*stream.routing.hops[0].offset)
-                sent, received = sends_recvs[stream.stream_name]
                 if sent:
-                    inst += INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                        color_name, 'RAMP', route[1])
+                    routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                        color_name_outbound, 'RAMP', route[1])
+                    if routing_inst not in routing_instructions:
+                        inst += routing_inst
+                        routing_instructions.add(routing_inst)
                 if received:
-                    inst += INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                        color_name, route[0], 'RAMP')
+                    routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                        color_name_inbound, route[0], 'RAMP')
+                    if routing_inst not in routing_instructions:
+                        inst += routing_inst
+                        routing_instructions.add(routing_inst)
             else:  # Multi-hop
-                sent, received = sends_recvs[stream.stream_name]
                 if sent:
                     first_hop = stream.routing.hops[0]
                     route = ('RAMP', _route_dir(*first_hop.offset)[1])
-                    inst += INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                        color_name, route[0], route[1])
+                    routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                        color_name_outbound, route[0], route[1])
+                    if routing_inst not in routing_instructions:
+                        inst += routing_inst
+                        routing_instructions.add(routing_inst)
                     cur_offx = 0
                     cur_offy = 0
                     for hop in stream.routing.hops[1:]:
                         route = _route_dir(*hop.offset)
                         cur_offx += hop.offset[0]
                         cur_offy += hop.offset[1]
-                        inst += INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                            cur_offx, cur_offy, color_name, route[0], route[1])
+                        routing_inst = INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                            cur_offx, cur_offy, color_name_outbound, route[0], route[1])
+                        if routing_inst not in routing_instructions:
+                            inst += routing_inst
+                            routing_instructions.add(routing_inst)
                 if received:
                     cur_offx = 0
                     cur_offy = 0
                     last_hop = stream.routing.hops[-1]
                     route = (_route_dir(*last_hop.offset)[0], 'RAMP')
-                    inst += INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                        cur_offx, cur_offy, color_name, route[0], route[1])
+                    routing_inst = INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                        cur_offx, cur_offy, color_name_inbound, route[0], route[1])
+                    if routing_inst not in routing_instructions:
+                        inst += routing_inst
+                        routing_instructions.add(routing_inst)
                     cur_offx += last_hop.offset[0]
                     cur_offy += last_hop.offset[1]
                     for hop in reversed(stream.routing.hops[:-1]):
                         route = _route_dir(*hop.offset)
-                        inst += INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                            cur_offx, cur_offy, color_name, route[0], route[1])
+                        routing_inst = INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                            cur_offx, cur_offy, color_name_inbound, route[0], route[1])
+                        if routing_inst not in routing_instructions:
+                            inst += routing_inst
+                            routing_instructions.add(routing_inst)
                         cur_offx += hop.offset[0]
                         cur_offy += hop.offset[1]
 

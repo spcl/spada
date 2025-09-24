@@ -54,12 +54,16 @@ class FabricDSD(DataStructureDescriptor):
     dsd_type: DSDType
     color: str
     extent: int
+    queue: int
 
     def __post_init__(self):
         assert self.dsd_type in (DSDType.fabin, DSDType.fabout)
 
     def as_csl(self) -> str:
-        return f'@get_dsd({self.dsd_type.name}_dsd, .{{ .extent = {self.extent}, .fabric_color = {self.color}}})'
+        direction = "in" if self.dsd_type == DSDType.fabin else "out"
+        queue_type = "input_queue" if self.dsd_type == DSDType.fabin else "output_queue"
+        fabric_color = f' .fabric_color = {self.color}_{direction},' if self.color else ''
+        return f'@get_dsd({self.dsd_type.name}_dsd, .{{ .extent = {self.extent},{fabric_color} .{queue_type} = @get_{queue_type}({self.queue}) }})'
 
     def __hash__(self):
         return hash(("FabricDSD", self.as_csl()))
