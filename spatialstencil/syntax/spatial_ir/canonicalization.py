@@ -359,5 +359,8 @@ def remove_memcpy_stream_operators(kernel: spir.Kernel, rectangles: list[Rectang
             stream_args.add(arg.identifier)
         elif isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType):
             stream_args.add(arg.identifier)
+        
+    # TODO(later): Verify that each stream argument is used once, and then replace every occurrence of the stream
+    #              argument with its internal name.
     for rect in rectangles:
         rect.metadata.compute = _MemCpyStreamOperatorRemover(stream_args).visit(rect.metadata.compute)

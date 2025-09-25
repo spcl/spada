@@ -19,10 +19,15 @@ class AsyncTarget:
 class DSDOp:
     """ Class representing a DSD operation that can be lowered to CSL. """
 
-    def _append_async_suffix(self, base: str, async_target: Optional[AsyncTarget]) -> str:
+    def _append_async_suffix(self, base: str, dsd_objects: list[cslstruct.DataStructureDescriptor],
+                             async_target: Optional[AsyncTarget]) -> str:
         if async_target is None:
             return base
-        return f'{base[:-2]}, .{{ .async = true, .{async_target.inter_task_edge} = {async_target.target_task} }});'
+        if any(isinstance(dsd, cslstruct.FabricDSD) for dsd in dsd_objects):
+            return f'{base[:-2]}, .{{ .async = true, .{async_target.inter_task_edge} = {async_target.target_task} }});'
+        else:
+            # Pure Memory DSD operations are synchronous
+            return f'{base}\n@{async_target.inter_task_edge}({async_target.target_task});'
 
     def as_csl(self,
                statement: spir.Statement,
@@ -38,7 +43,8 @@ class DSDOp:
             statement = statement.body[0]
         elif hasattr(statement, 'body'):
             statement = statement.body[0]
-        return self._append_async_suffix(self._as_csl(statement, dtypes, dsds), async_target)
+        dsd_objects = self.used_dsd_objects(statement, dsds)
+        return self._append_async_suffix(self._as_csl(statement, dtypes, dsds), dsd_objects, async_target)
 
     def _as_csl(self, statement: spir.Statement, dtypes: dict[spir.Identifier, spir.IRType],
                 dsds: UniqueDSDDict) -> str:
@@ -49,6 +55,17 @@ class DSDOp:
         :param dtypes: A mapping of identifiers to their data types.
         :param statement: The Spatial IR statement to convert.
         :return: The CSL representation of the DSD operation.
+        """
+        raise NotImplementedError
+
+    def used_dsd_objects(self, statement: spir.AssignmentStatement,
+                         dsds: UniqueDSDDict) -> list[cslstruct.DataStructureDescriptor]:
+        """
+        Identifies the DSD objects used in the given assignment statement.
+
+        :param statement: The assignment statement to analyze.
+        :param dsds: The mapping of DSD names to their descriptors.
+        :return: A list of DSD objects used in the statement.
         """
         raise NotImplementedError
 
@@ -90,8 +107,31 @@ def _dsd(dsds: UniqueDSDDict, expr: spir.SpatialNode, output: bool = False) -> s
     raise TypeError(f"Unsupported expression type: {type(expr)}")
 
 
+def _dsd_object(dsds: UniqueDSDDict, expr: spir.SpatialNode, output: bool = False) -> str:
+    from spatialstencil.syntax.csl.statements import name_to_csl
+    if isinstance(expr, spir.Identifier):
+        if expr.as_ir() not in dsds:
+            return name_to_csl(expr)
+        if output:
+            # Find fabout DSD, if exists
+            for dsd in dsds[expr.as_ir()]:
+                if isinstance(dsd[1], cslstruct.FabricDSD) and dsd[1].dsd_type == cslstruct.DSDType.fabout:
+                    return dsd[1]
+        return dsds[expr.as_ir()][0][1]
+    elif isinstance(expr, spir.ConstantLiteral):
+        return str(expr.value)
+    raise TypeError(f"Unsupported expression type: {type(expr)}")
+
+
 class UnaryDSDOp(DSDOp):
-    pass
+
+    def used_dsd_objects(self, statement: spir.AssignmentStatement,
+                         dsds: UniqueDSDDict) -> list[cslstruct.DataStructureDescriptor]:
+        assert isinstance(statement.source.value, spir.UnaryOperator)
+        arg = _ident_or_const(statement.source.value.value.value)
+        dest = _ident(statement.destination)
+
+        return [_dsd_object(dsds, dest, output=True), _dsd_object(dsds, arg)]
 
 
 class BinaryDSDOp(DSDOp):
@@ -116,6 +156,15 @@ class BinaryDSDOp(DSDOp):
 
         op = self._csl_op(a_dtype, b_dtype, dest_dtype)
         return f"{op}({_dsd(dsds, dest, output=True)}, {_dsd(dsds, a)}, {_dsd(dsds, b)});"
+
+    def used_dsd_objects(self, statement: spir.AssignmentStatement,
+                         dsds: UniqueDSDDict) -> list[cslstruct.DataStructureDescriptor]:
+        assert isinstance(statement.source.value, spir.BinaryOperator)
+        a = _ident_or_const(statement.source.value.left.value)
+        b = _ident_or_const(statement.source.value.right.value)
+        dest = _ident(statement.destination)
+
+        return [_dsd_object(dsds, dest, output=True), _dsd_object(dsds, a), _dsd_object(dsds, b)]
 
 
 class NegDSDOp(UnaryDSDOp):
@@ -190,6 +239,16 @@ class FMADSDOp(DSDOp):
             return f'@fmacs({_dsd(dsds, dest, output=True)}, {_dsd(dsds, a)}, {_dsd(dsds, b)}, {_dsd(dsds, c)});'
         raise TypeError(f"Unsupported types for FMA: {a_dtype}, {b_dtype}, {c_dtype}")
 
+    def used_dsd_objects(self, statement: spir.AssignmentStatement,
+                         dsds: UniqueDSDDict) -> list[cslstruct.DataStructureDescriptor]:
+        assert isinstance(statement.source.value, spir.MultiplyAccumulateOperator)
+        a = _ident_or_const(statement.source.value.a)
+        b = _ident_or_const(statement.source.value.b)
+        c = _ident_or_const(statement.source.value.c)
+        dest = _ident(statement.destination)
+
+        return [_dsd_object(dsds, dest, output=True), _dsd_object(dsds, a), _dsd_object(dsds, b), _dsd_object(dsds, c)]
+
 
 class CopyDSDOp(DSDOp):
 
@@ -232,6 +291,18 @@ class CopyDSDOp(DSDOp):
             else:
                 raise TypeError(f"Unsupported types for cast operation: {src_dtype}, {dtype}")
         return f'{op}({_dsd(dsds, dest, output=True)}, {_dsd(dsds, src)});'
+
+    def used_dsd_objects(self, statement: spir.AssignmentStatement,
+                         dsds: UniqueDSDDict) -> list[cslstruct.DataStructureDescriptor]:
+        if isinstance(statement, spir.SendStatement):
+            src = _ident(statement.local_array)
+            dest = _ident(statement.stream_name)
+        else:
+            assert isinstance(statement.source.value, (spir.ArraySlice, spir.Identifier, spir.ConstantLiteral))
+            src = _ident_or_const(statement.source.value)
+            dest = _ident(statement.destination)
+
+        return [_dsd_object(dsds, dest, output=True), _dsd_object(dsds, src)]
 
 
 DSD_ASSIGNMENT_MAPPING: dict[str, type[DSDOp]] = {
