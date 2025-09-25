@@ -224,7 +224,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     #      maintains the current state
     completion_dag = analysis.to_completion_dag(rect.metadata.compute)
     tasks = tdag.create_csl_tasks(completion_dag, rect.metadata.compute, dtypes)
-    dsds = _collect_unique_dsds(tasks, rect.metadata, header, dtypes, kernel)
+    dsds = _collect_unique_dsds(tasks, rect.metadata, header, dtypes, kernel, use_memcpy_mode)
 
     # Generate each task
     for i, task in enumerate(tasks):
@@ -435,12 +435,89 @@ def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, foote
     header.write('\n')
 
 
+def _dsd_from_array(array_candidates: dict[str, tuple[spir.FieldDeclaration, list[int | spir.Expression]]],
+                    node: spir.Identifier | spir.ArraySlice):
+    ident = node if isinstance(node, spir.Identifier) else node.array
+    _, shape = array_candidates[ident.as_ir()]
+    if len(shape) == 1:
+        dsd_type = cslstruct.DSDType.mem1d
+        extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
+    else:
+        dsd_type = cslstruct.DSDType.mem4d
+        extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
+
+    # Find the index in the array
+    def _find_index(ind: spir.Expression) -> spir.Identifier:
+        candidates = []
+        for n in ind.walk():
+            if isinstance(n, spir.Identifier):
+                candidates.append(n)
+        if len(candidates) > 1:
+            raise SyntaxError(
+                f'Expected one index variable in array access, got {candidates}.\n  In line {ind.lineinfo}')
+        return candidates[0] if candidates else None
+
+    use_index = len(shape) == 1
+
+    if isinstance(node, spir.ArraySlice):
+        # Find and replace index with __index
+        idxvars = [_find_index(ind) for ind in node.indices if _find_index(ind) is not None]
+        if use_index:
+            assert len(
+                idxvars) == 1, f'Expected one index variable for 1D array, got {idxvars}.\n  In line {node.lineinfo}'
+            far = passes.FindAndReplace({idxvars[0]: spir.Identifier('__index', 0)})
+        else:
+            far = passes.FindAndReplace({
+                old: new for old, new in zip(idxvars, [spir.Identifier(f'__index_{i}', 0) for i in range(len(idxvars))])
+            })
+        idxvars = ['__index' if use_index else f'__index_{i}' for i in range(len(idxvars))]
+        indices = [expr_to_csl(far.visit(copy.deepcopy(ind))) for ind in node.indices]
+        name = name_to_csl(node.array)
+    else:
+        # Use __index if 1d
+        if use_index:
+            idxvars = ['__index']
+            indices = ['__index']
+        else:
+            idxvars = [f'__index_{i}' for i in range(len(shape))]
+            indices = [f'__index_{i}' for i in range(len(shape))]
+        name = name_to_csl(node)
+
+    return cslstruct.MemoryDSD(
+        dsd_type,
+        name,
+        extents,
+        idxvars,
+        indices,
+    )
+
+
+def _dsd_from_stream(stream_candidates: dict[str, tuple[spir.RelativeStreamDeclaration | spir.KernelArgument,
+                                                        int | spir.Expression]],
+                     node: spir.Identifier | spir.ArraySlice):
+    ident = node if isinstance(node, spir.Identifier) else node.array
+    _, shape = stream_candidates[ident.as_ir()]
+    dsd_type = cslstruct.DSDType.mem1d
+    extents = [str(shape) if isinstance(shape, int) else shape.as_ir()]
+
+    idxvars = ['__index']
+    indices = ['__index']
+
+    if isinstance(node, spir.ArraySlice):
+        name = name_to_csl(node.array)
+    else:
+        name = name_to_csl(node)
+
+    return cslstruct.MemoryDSD(dsd_type, name, extents, idxvars, indices)
+
+
 def _collect_unique_dsds(
     tasks: list[tdag.CSLTask],
     rect: PEBlock,
     header: StringIO,
     dtypes: dict[spir.Identifier, spir.IRType],
     kernel: spir.Kernel,
+    memcpy_mode: bool,
 ) -> UniqueDSDDict:
     """
     Returns a list of DSDs and generates them in the header.
@@ -494,7 +571,11 @@ def _collect_unique_dsds(
         # Find out if compute block uses this stream for receive/send
         if isinstance(stmt, (spir.ReceiveStatement, spir.SendStatement)):
             stream_name = stmt.stream_name.array if isinstance(stmt.stream_name, spir.ArraySlice) else stmt.stream_name
-            if isinstance(stmt, spir.ReceiveStatement) and stream_name.as_ir() in stream_candidates:
+            if memcpy_mode and stream_name in stream_args:
+                # If memcpy mode is enabled, the stream contents will have already been copied to the PE
+                dsd = _dsd_from_stream(stream_candidates, stream_name)
+                dsds[stream_name.as_ir()].append((f"{name_to_csl(stream_name)}_dsd", dsd))
+            elif isinstance(stmt, spir.ReceiveStatement) and stream_name.as_ir() in stream_candidates:
                 dsd_type = cslstruct.DSDType.fabin
                 dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
                 extents = stream_candidates[stream_name.as_ir()][1]
@@ -510,6 +591,8 @@ def _collect_unique_dsds(
                 fabric_color = f'{name_to_csl(stream_name)}_color'
                 dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, 0)
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
+
+            if isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
                 # If the send statement sends from a local array, create another DSD
                 # This case does not apply for receive statements, as they would be lowered to foreach statements
                 if stmt.local_array.as_ir() in array_candidates:
@@ -544,74 +627,23 @@ def _collect_unique_dsds(
                 # A data task will be created instead (handled in _generate_data_task)
             else:
                 if stream_name.as_ir() in stream_candidates:
-                    dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
-                    extents = stream_candidates[stream_name.as_ir()][1]
-                    extents = extents if isinstance(extents, int) else extents.eval()
-                    fabric_color = f'{name_to_csl(stream_name)}_color'
-                    dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents, 0)
-                    dsds[stream_name.as_ir()].append((dsd_name, dsd))
-
-        def _dsd_from_array(node: spir.Identifier | spir.ArraySlice):
-            ident = node if isinstance(node, spir.Identifier) else node.array
-            _, shape = array_candidates[ident.as_ir()]
-            if len(shape) == 1:
-                dsd_type = cslstruct.DSDType.mem1d
-                extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
-            else:
-                dsd_type = cslstruct.DSDType.mem4d
-                extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
-
-            # Find the index in the array
-            def _find_index(ind: spir.Expression) -> spir.Identifier:
-                candidates = []
-                for n in ind.walk():
-                    if isinstance(n, spir.Identifier):
-                        candidates.append(n)
-                if len(candidates) > 1:
-                    raise SyntaxError(
-                        f'Expected one index variable in array access, got {candidates}.\n  In line {ind.lineinfo}')
-                return candidates[0] if candidates else None
-
-            use_index = len(shape) == 1
-
-            if isinstance(node, spir.ArraySlice):
-                # Find and replace index with __index
-                idxvars = [_find_index(ind) for ind in node.indices if _find_index(ind) is not None]
-                if use_index:
-                    assert len(
-                        idxvars
-                    ) == 1, f'Expected one index variable for 1D array, got {idxvars}.\n  In line {node.lineinfo}'
-                    far = passes.FindAndReplace({idxvars[0]: spir.Identifier('__index', 0)})
-                else:
-                    far = passes.FindAndReplace({
-                        old: new
-                        for old, new in zip(idxvars, [spir.Identifier(f'__index_{i}', 0) for i in range(len(idxvars))])
-                    })
-                idxvars = ['__index' if use_index else f'__index_{i}' for i in range(len(idxvars))]
-                indices = [expr_to_csl(far.visit(copy.deepcopy(ind))) for ind in node.indices]
-                name = name_to_csl(node.array)
-            else:
-                # Use __index if 1d
-                if use_index:
-                    idxvars = ['__index']
-                    indices = ['__index']
-                else:
-                    idxvars = [f'__index_{i}' for i in range(len(shape))]
-                    indices = [f'__index_{i}' for i in range(len(shape))]
-                name = name_to_csl(node)
-
-            return cslstruct.MemoryDSD(
-                dsd_type,
-                name,
-                extents,
-                idxvars,
-                indices,
-            )
+                    if memcpy_mode and stream_name in stream_args:
+                        # If memcpy mode is enabled, the stream contents will have already been copied to the PE
+                        dsd = _dsd_from_stream(stream_candidates, stream_name)
+                        dsds[stream_name.as_ir()].append((f"{name_to_csl(stream_name)}_dsd", dsd))
+                    else:
+                        dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
+                        extents = stream_candidates[stream_name.as_ir()][1]
+                        extents = extents if isinstance(extents, int) else extents.eval()
+                        fabric_color = f'{name_to_csl(stream_name)}_color'
+                        dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents, 0)
+                        dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
         def _visit_dsd(substmt, in_foreach_or_map):
             if (isinstance(substmt, spir.Identifier) and substmt.as_ir() in array_candidates and
                     substmt.as_ir() not in dsds):
-                dsds[substmt.as_ir()].append((f"{name_to_csl(substmt)}_dsd", _dsd_from_array(substmt)))
+                dsds[substmt.as_ir()].append((f"{name_to_csl(substmt)}_dsd", _dsd_from_array(array_candidates,
+                                                                                             substmt)))
                 return
 
             # If the destination is an array, we need to create a DSD
@@ -622,7 +654,7 @@ def _collect_unique_dsds(
             if not in_foreach_or_map:
                 return
 
-            dsd = _dsd_from_array(substmt)
+            dsd = _dsd_from_array(array_candidates, substmt)
             dsds[substmt.array.as_ir()].append((f"{name_to_csl(substmt.array)}_dsd", dsd))
 
         DSDVisitor(_visit_dsd, toplevel=not hasattr(stmt, 'body')).visit(stmt)
