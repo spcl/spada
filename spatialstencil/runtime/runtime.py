@@ -108,8 +108,8 @@ def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.Sdk
         data.ravel(),
         metadata.inputs[name].rect_offset[0],  # PE offset in x direction
         metadata.inputs[name].rect_offset[1],  # PE offset in y direction
-        shape[1],  # Width is the second dimension
-        shape[0],  # Height is the first dimension
+        shape[0],  # Width is the second dimension
+        shape[1],  # Height is the first dimension
         shape[2],
         streaming=not metadata.memcpy_mode,  # Use streaming if not in memcpy mode
         data_type=crt.MemcpyDataType.MEMCPY_32BIT if data.dtype == np.float32 else crt.MemcpyDataType.MEMCPY_16BIT,
