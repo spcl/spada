@@ -164,3 +164,5 @@ simfab_traces/
 *.npy
 wio_flow.json
 /copy_sptl/*
+/add_sptl/
+/lap_sptl/

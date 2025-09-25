@@ -54,6 +54,9 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
     try:
         canonicalization.lower_bulk_communication(rectangles)
         canonicalization.lower_array_assignment(rectangles)
+        # TODO(later): Optimize out one extra copy
+        # if use_memcpy_mode:
+        #     canonicalization.remove_memcpy_stream_operators(kernel, rectangles)
     except KeyError as e:
         if e.args and isinstance(e.args[0], spir.Identifier):
             raise ValueError(f"Error in {e.args[0].lineinfo}. Undefined identifier \"{e.args[0].as_ir()}\".")

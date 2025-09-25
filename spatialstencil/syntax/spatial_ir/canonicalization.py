@@ -71,7 +71,10 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
                 rect = place.get_grid_rect()
                 if rect in rect_place:
                     # Replace variables in place statements with the new variables
-                    rep = passes.FindAndReplace({oldv.identifier: newv.identifier for oldv, newv in zip(place.variables, rect_place[rect].variables)})
+                    rep = passes.FindAndReplace({
+                        oldv.identifier: newv.identifier
+                        for oldv, newv in zip(place.variables, rect_place[rect].variables)
+                    })
                     stmts = [rep.visit(s) for s in place.statements]
                     rect_place[rect].statements.extend(stmts)
                 else:
@@ -80,7 +83,10 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
             for df in block.dataflow:
                 rect = df.get_grid_rect()
                 if rect in rect_dataflow:
-                    rep = passes.FindAndReplace({oldv.identifier: newv.identifier for oldv, newv in zip(df.variables, rect_dataflow[rect].variables)})
+                    rep = passes.FindAndReplace({
+                        oldv.identifier: newv.identifier
+                        for oldv, newv in zip(df.variables, rect_dataflow[rect].variables)
+                    })
                     stmts = [rep.visit(s) for s in df.statements]
                     rect_dataflow[rect].statements.extend(stmts)
                 else:
@@ -90,7 +96,10 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
                 rect = compute.get_grid_rect()
                 if rect in rect_compute:
                     rect_compute[rect].statements.append(spir.AwaitAllStatement())
-                    rep = passes.FindAndReplace({oldv.identifier: newv.identifier for oldv, newv in zip(compute.variables, rect_compute[rect].variables)})
+                    rep = passes.FindAndReplace({
+                        oldv.identifier: newv.identifier
+                        for oldv, newv in zip(compute.variables, rect_compute[rect].variables)
+                    })
                     stmts = [rep.visit(s) for s in compute.statements]
                     rect_compute[rect].statements.extend(stmts)
                 else:
@@ -239,6 +248,7 @@ def lower_bulk_communication(rectangles: list[Rectangle[PEBlock]]) -> None:
     for rect in rectangles:
         rect.metadata.compute = _BulkCommunicationLowerer(rect.metadata.place).visit(rect.metadata.compute)
 
+
 class _MakeArraySlices(spir.NodeTransformer):
 
     def __init__(self, index: list[spir.Identifier], identifier_sizes: dict[spir.Identifier, list[int]]):
@@ -248,10 +258,7 @@ class _MakeArraySlices(spir.NodeTransformer):
 
     def visit_Identifier(self, node: spir.Identifier):
         if self.identifier_sizes[node]:
-            new_node = spir.ArraySlice(
-                node,
-                [spir.Expression(v) for v in self.index]
-            )
+            new_node = spir.ArraySlice(node, [spir.Expression(v) for v in self.index])
             new_node.lineinfo = node.lineinfo
             return new_node
         return self.generic_visit(node)
@@ -272,7 +279,9 @@ class _ArrayAssignmentLowerer(spir.NodeTransformer):
 
         sz = self.identifier_sizes[node.destination]
 
-        typed_variables = [spir.TypedIdentifier(spir.ScalarType.u16, spir.Identifier(f'__k{i}', 0)) for i in range(len(sz))]
+        typed_variables = [
+            spir.TypedIdentifier(spir.ScalarType.u16, spir.Identifier(f'__k{i}', 0)) for i in range(len(sz))
+        ]
         variables = [spir.Identifier(f'__k{i}', 0) for i in range(len(sz))]
         for i in range(len(sz)):
             variables[i].lineinfo = node.lineinfo
@@ -297,10 +306,58 @@ class _ArrayAssignmentLowerer(spir.NodeTransformer):
 
         return new_node
 
+
 def lower_array_assignment(rectangles: list[Rectangle[PEBlock]]) -> None:
     """
     Lowers array assignments into ``map`` operations.
+
     :param rectangles: A list of PE block rectangles to lower computations within.
     """
     for rect in rectangles:
         rect.metadata.compute = _ArrayAssignmentLowerer(rect.metadata.place).visit(rect.metadata.compute)
+
+
+class _MemCpyStreamOperatorRemover(spir.NodeTransformer):
+
+    def __init__(self, stream_args: set[spir.Identifier]):
+        super().__init__()
+        self.stream_args = stream_args
+
+    def visit_ReceiveStatement(self, node: spir.ReceiveStatement):
+        if isinstance(node.stream_name, spir.Identifier) and node.stream_name in self.stream_args:
+            return None
+        if isinstance(node.stream_name, spir.ArraySlice) and node.stream_name.array in self.stream_args:
+            return None
+        return self.generic_visit(node)
+
+    def visit_SendStatement(self, node: spir.SendStatement):
+        if isinstance(node.stream_name, spir.Identifier) and node.stream_name in self.stream_args:
+            return None
+        if isinstance(node.stream_name, spir.ArraySlice) and node.stream_name.array in self.stream_args:
+            return None
+        return self.generic_visit(node)
+
+    def visit_ForeachStatement(self, node: spir.ForeachStatement):
+        if isinstance(node.receive_stream.stream_name, spir.Identifier) and node.receive_stream.stream_name in self.stream_args:
+            return None
+        if isinstance(node.receive_stream.stream_name, spir.ArraySlice) and node.receive_stream.stream_name.array in self.stream_args:
+            return None
+        return self.generic_visit(node)
+
+
+def remove_memcpy_stream_operators(kernel: spir.Kernel, rectangles: list[Rectangle[PEBlock]]) -> None:
+    """
+    Removes receives/sends/foreach loops that involve kernel arguments from the given rectangles in memcpy mode.
+    This pass is performed because memcpy mode will already copy the memory in and out outside the kernel code.
+
+    :param kernel: The kernel to modify.
+    :param rectangles: A list of PE block rectangles to modify.
+    """
+    stream_args: set[spir.Identifier] = set()
+    for arg in kernel.arguments:
+        if isinstance(arg.dtype, spir.StreamType):
+            stream_args.add(arg.identifier)
+        elif isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType):
+            stream_args.add(arg.identifier)
+    for rect in rectangles:
+        rect.metadata.compute = _MemCpyStreamOperatorRemover(stream_args).visit(rect.metadata.compute)
