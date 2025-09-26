@@ -268,6 +268,9 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     for task in source_tasks:
         prefix = "d" if task.task_type == 'data' else ""
         current_code.write(f'    @activate({prefix}task_{task.task_id}_id);\n')
+    if not source_tasks:
+        # Unblock command stream if function is empty
+        current_code.write(f'    sys_mod.unblock_cmd_stream();\n')
     current_code.write('}\n')
 
     current_code.write(f'''
@@ -581,7 +584,7 @@ def _collect_unique_dsds(
                 extents = stream_candidates[stream_name.as_ir()][1]
                 extents = extents if isinstance(extents, int) else extents.eval()
                 fabric_color = f'{name_to_csl(stream_name)}_color'
-                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, 0)
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, 1)
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
             elif isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
                 dsd_type = cslstruct.DSDType.fabout
@@ -589,7 +592,7 @@ def _collect_unique_dsds(
                 extents = stream_candidates[stream_name.as_ir()][1]
                 extents = extents if isinstance(extents, int) else extents.eval()
                 fabric_color = f'{name_to_csl(stream_name)}_color'
-                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, 0)
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, 1)
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
             if isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
@@ -636,7 +639,7 @@ def _collect_unique_dsds(
                         extents = stream_candidates[stream_name.as_ir()][1]
                         extents = extents if isinstance(extents, int) else extents.eval()
                         fabric_color = f'{name_to_csl(stream_name)}_color'
-                        dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents, 0)
+                        dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents, 1)
                         dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
         def _visit_dsd(substmt, in_foreach_or_map):

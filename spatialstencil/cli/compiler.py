@@ -91,10 +91,10 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     kernel_dims = [xend - xbegin, yend - ybegin]
     memcpy_channels = 1  # TODO: Determine the number of memcpy channels (1-16) based on the kernel arguments
     if memcpy_channels >= 0:
-        xbegin += 4
-        xend += 4 * 3
+        xbegin += 4  # Memcpy needs 3 extra columns to the left, and 1 extra column for fabric offset
+        xend += 4 + 2 + 1  # Memcpy needs 2 extra columns to the right, plus an extra column for fabric offset
         ybegin += 1
-        yend += 1 * 3
+        yend += 1 + 1
 
     # Generate metadata.json file
     kernel = canonicalization.canonicalize_phases(kernel)
@@ -128,7 +128,7 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         return
 
     cslc_command = [
-        'cslc', 'layout.csl', f'--fabric-dims={xend - xbegin},{yend - ybegin}',
+        'cslc', 'layout.csl', f'--fabric-dims={xend},{yend}',
         f'--fabric-offsets={offset_x + xbegin},{offset_y + ybegin}', '--memcpy', f'--channels={memcpy_channels}'
     ]
     print("Compiling with command:", ' '.join(cslc_command))
