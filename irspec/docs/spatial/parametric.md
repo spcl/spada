@@ -54,7 +54,7 @@ in the control flow graph and $s$ is the largest number of statements in a block
 ## *Parametric* Stream Edges
 
 The parametric stream edges are a compact representation of the stream edges.
-Each stream edge is represented as $(S_1, (i, j)) , (S_2, (i+d_x, j+d_y))$ for statements
+Each stream edge is represented as $(S_1, (i, j)) , (S_2, (i+d_x, j+d_y)) \ | \ P_1$ for statements
 $S_1$, $S_2$, predicated by $P_1$.
 Here, $i$ and $j$ are variables that appear in the predicate.
 The interpretation is that if the predicate $P_1$ is true for some $i$, $j$ where
@@ -308,6 +308,32 @@ Adding all edges for a given vertex takes at most $n$ time,
 where $n$ is the number of `compute` blocks.
 Hence, the overall runtime is $O(n^2 \cdot h)$.
 The space complexity is $O(n \cdot h)$.
+
+## Parametric Strict Happens-Before
+
+We represent the strict happens-before relation parametrically as $S_1, (i, j) \longmapsto S_2, (i+d_x, j+d_y) | P_1(i, j)$, 
+which means that if $P_1(i, j)$ is true for some $i, j$ in the compute block of $S_1$, then $S_1 (i, j) \longmapsto S_2 (i+d_x, j+d_y)$.
+
+The parametric strict happens-before relation is constructed by repeatedly applying the constructive
+definition of the strict happens-before relation (see [routing](../routing)) using the parametric
+stream edges. Whenever the relation is constructed from a stream edge, we add the predicate of the stream edge
+to the predicate of the strict happens-before relation. We do not apply the transitive closure explicitly.
+
+## Parametric Empties-Before
+
+We represent the empties before relation parametrically as $e_1 [i, j] \longmapsto e_2 [i + d_x, j + d_y] \mid P_1(i, j)$,
+meaning that if $P_1(i, j)$ is true for some $i, j$ in the compute block of source of $e_1$, then $e_1$ empties before $e_2$, where
+the coordinates of $e_2$ have been shifted by $(d_x, d_y)$.
+
+The parametric empties-before relation is constructed by checking every pair of parametric stream edges
+$(S_1, (i, j) \rightarrow S_2, (i+d_x, j+d_y) \mid P_2)$ 
+and 
+$(S_3, (i, j) \rightarrow S_4, (i+d_x, j+d_y) \mid P_3)$ 
+
+if $S_2, (i, j) \longmapsto S_3, (i+d_x', j+d_y') \mid P_4$ exists,
+adjusting the coordinates of the involved predicates and edges, creating a new predicate $P_1$ that 
+expressed the conditions adequately [TODO define exactly how].
+
 
 ## The Conflict Graph
 

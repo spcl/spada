@@ -1,0 +1,90 @@
+kernel @2d_pipelined_reduce<K, J> (stream<f32>[K, J] readonly in, stream<f32> writeonly out ) {
+
+    place i16 i, i16 j in [0:K, 0:J] {
+        f32[K] a
+    }
+
+    // Read input
+    phase {
+        compute i32 i, i32 j in [0:K, 0:J] {
+            await receive(a, in[i])
+        }
+    }
+
+    // First phase, from east to west
+    phase {
+        dataflow i32 i, i32 j in [0:K, 0:J] {
+            stream<f32> red = relative_stream(-1, 0)
+            stream<f32> blue = relative_stream(-1, 0)
+        }
+
+        compute i32 i, i32 j in [K-1, 0:J] {
+            // The if statement can be resolved compile-time
+            if i % 2 == 0 {
+                await send(a, red)
+            } else {
+                await send(a, blue)
+            }
+        }
+
+        compute i32 i, i32 j in [1:K-1:2, 0:J] {
+            await foreach f32 k, i32 x in [0:K], receive(red) {
+                a[k] = a[k] + x
+                await send(a[k], blue)
+            }
+        }
+
+        compute i32 i, i32 j in [2:K-1:2, 0:J] {
+            await foreach f32 k, i32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+                await send(a[k], red)
+            }
+        }
+
+        compute i32 i, i32 j in [0, 0:J] {
+            await foreach f32 k, i32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+            }
+        }
+    }
+
+    // Second phase, from south to north
+    phase {
+
+        dataflow i32 i, i32 j in [0:K, 0] {
+            stream<f32> green = relative_stream(0, -1)
+            stream<f32> yellow = relative_stream(0, -1)
+        }
+
+        compute i32 i, i32 j in [K-1, 0] {
+            // The if statement can be resolved compile-time
+            if i % 2 == 0 {
+                await send(a, green)
+            } else {
+                await send(a, yellow)
+            }
+        }
+
+        compute i32 i, i32 j in [1:K-1:2, 0] {
+            await foreach f32 k, i32 x in [0:K], receive(green) {
+                a[k] = a[k] + x
+                send(a[k], yellow)
+            }
+        }
+
+        compute i32 i, i32 j in [2:K-1:2, 0] {
+            await foreach f32 k, i32 x in [0:K], receive(yellow) {
+                a[k] = a[k] + x
+                send(a[k], green)
+            }
+        }
+
+        compute i32 i, i32 j in [0, 0] {
+            await foreach f32 k, i32 x in [0:K], receive(yellow) {
+                a[k] = a[k] + x
+            }
+            // Send the result
+            send(a, out)
+        }
+    }
+}
