@@ -1,0 +1,42 @@
+kernel @totheright<K>(stream<f32, K>[2, 1] readonly inp, stream<f32, K>[2, 1] writeonly out) {
+  place u16 i, u16 j in [0:1, 0:1] {
+    f32[K] tmp;
+    f32[K] output;
+  }
+  place u16 i#1, u16 j#1 in [1:2, 0:1] {
+    f32[K] tmp;
+    f32[K] output;
+  }
+  dataflow u16 i#2, u16 j#2 in [0:1, 0:1] {
+    stream<f32, K> east = relative_stream(1, 0) {
+    hops = [(1, 0)],
+    channel = 0
+    }
+  }
+  dataflow u16 i#3, u16 j#3 in [1:2, 0:1] {
+    stream<f32, K> east = relative_stream(1, 0) {
+    hops = [(1, 0)],
+    channel = 0
+    }
+  }
+  compute u16 i#4, u16 j#4 in [0:1, 0:1] {
+    await foreach i32 k, f32 x in [0:K], receive(inp[i#4]) {
+      tmp[k] = x
+    }
+    await send(tmp, east);
+    for i32 k in [0:K] {
+      output[k] = 1.0 + tmp[k];
+    }
+    await send(output, out[i#4]);
+  }
+  compute u16 i#5, u16 j#5 in [1:2, 0:1] {
+    await foreach i32 k, f32 x in [0:K], receive(inp[i#5]) {
+      tmp[k] = x
+    }
+    await receive(tmp, east);
+    for i32 k in [0:K] {
+      output[k] = 1.0 + tmp[k];
+    }
+    await send(output, out[i#5]);
+  }
+}

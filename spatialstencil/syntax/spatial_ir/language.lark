@@ -117,7 +117,7 @@ hops : "[" hop ("," hop)* "]"
 routing : "hops" "=" (auto | hops) "," "channel" "=" (auto | integer_literal)
 
 field_declaration : builtin_type identifier  (";")? //(";" | NEWLINE)
-stream_declaration : "stream" "<" scalar_type ">" identifier "=" "relative_stream" "(" value_expr "," value_expr ")" ("{" routing "}")?  (";")?
+stream_declaration : stream_type identifier "=" "relative_stream" "(" value_expr "," value_expr ")" ("{" routing "}")?  (";")?
 vars : identifier ("," identifier)*
 typed_var : scalar_type identifier
 typed_vars : typed_var ("," typed_var)*

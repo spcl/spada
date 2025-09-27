@@ -1,7 +1,7 @@
 /**
  * Simple chain reduction
  **/
- kernel @reduce<N>(stream<f32>[N] readonly inp, stream<f32> writeonly out) {
+ kernel @reduce<N>(stream<f32, 1>[N] readonly inp, stream<f32, 1> writeonly out) {
     // Start
     place u16 i, u16 j in [N-1:N, 0:1] {
         f32 local

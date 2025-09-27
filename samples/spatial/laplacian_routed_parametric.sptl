@@ -41,91 +41,91 @@ kernel @laplacian<I, J, K>(stream<f32, K>[I+2, J+2] readonly _in, stream<f32, K>
   }
   phase {
     dataflow u16 i#12, u16 j#12 in [1:I+1 , 1:J+1] {
-      stream<f32> west = relative_stream(-1, 0) {
+      stream<f32, K> west = relative_stream(-1, 0) {
         hops = [(-1, 0)],
         channel = 3
       }
-      stream<f32> north = relative_stream(0, -1) {
+      stream<f32, K> north = relative_stream(0, -1) {
         hops = [(0, -1)],
         channel = 2
       }
-      stream<f32> east = relative_stream(1, 0) {
+      stream<f32, K> east = relative_stream(1, 0) {
         hops = [(1, 0)],
         channel = 0
       }
-      stream<f32> south = relative_stream(0, 1) {
+      stream<f32, K> south = relative_stream(0, 1) {
         hops = [(0, 1)],
         channel = 1
       }
     }
     dataflow u16 i#12, u16 j#12 in [1:I+1 , 0:1] {
-      stream<f32> west = relative_stream(-1, 0) {
+      stream<f32, K> west = relative_stream(-1, 0) {
         hops = [(-1, 0)],
         channel = 3
       }
-      stream<f32> north = relative_stream(0, -1) {
+      stream<f32, K> north = relative_stream(0, -1) {
         hops = [(0, -1)],
         channel = 2
       }
-      stream<f32> east = relative_stream(1, 0) {
+      stream<f32, K> east = relative_stream(1, 0) {
         hops = [(1, 0)],
         channel = 0
       }
-      stream<f32> south = relative_stream(0, 1) {
+      stream<f32, K> south = relative_stream(0, 1) {
         hops = [(0, 1)],
         channel = 1
       }
     }
     dataflow u16 i#12, u16 j#12 in [0:1 , 1:J+1] {
-      stream<f32> west = relative_stream(-1, 0) {
+      stream<f32, K> west = relative_stream(-1, 0) {
         hops = [(-1, 0)],
         channel = 3
       }
-      stream<f32> north = relative_stream(0, -1) {
+      stream<f32, K> north = relative_stream(0, -1) {
         hops = [(0, -1)],
         channel = 2
       }
-      stream<f32> east = relative_stream(1, 0) {
+      stream<f32, K> east = relative_stream(1, 0) {
         hops = [(1, 0)],
         channel = 0
       }
-      stream<f32> south = relative_stream(0, 1) {
+      stream<f32, K> south = relative_stream(0, 1) {
         hops = [(0, 1)],
         channel = 1
       }
     }
     dataflow u16 i#12, u16 j#12 in [I+1:I+2 , 1:J+1] {
-      stream<f32> west = relative_stream(-1, 0) {
+      stream<f32, K> west = relative_stream(-1, 0) {
         hops = [(-1, 0)],
         channel = 3
       }
-      stream<f32> north = relative_stream(0, -1) {
+      stream<f32, K> north = relative_stream(0, -1) {
         hops = [(0, -1)],
         channel = 2
       }
-      stream<f32> east = relative_stream(1, 0) {
+      stream<f32, K> east = relative_stream(1, 0) {
         hops = [(1, 0)],
         channel = 0
       }
-      stream<f32> south = relative_stream(0, 1) {
+      stream<f32, K> south = relative_stream(0, 1) {
         hops = [(0, 1)],
         channel = 1
       }
     }
     dataflow u16 i#12, u16 j#12 in [1:I+1 , J+1:J+2] {
-      stream<f32> west = relative_stream(-1, 0) {
+      stream<f32, K> west = relative_stream(-1, 0) {
         hops = [(-1, 0)],
         channel = 3
       }
-      stream<f32> north = relative_stream(0, -1) {
+      stream<f32, K> north = relative_stream(0, -1) {
         hops = [(0, -1)],
         channel = 2
       }
-      stream<f32> east = relative_stream(1, 0) {
+      stream<f32, K> east = relative_stream(1, 0) {
         hops = [(1, 0)],
         channel = 0
       }
-      stream<f32> south = relative_stream(0, 1) {
+      stream<f32, K> south = relative_stream(0, 1) {
         hops = [(0, 1)],
         channel = 1
       }

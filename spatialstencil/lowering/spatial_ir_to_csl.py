@@ -227,9 +227,11 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     dsds = _collect_unique_dsds(tasks, rect.metadata, header, dtypes, kernel, use_memcpy_mode)
 
     # Generate each task
+    max_task_id = -1
     for i, task in enumerate(tasks):
         prefix = "d" if task.task_type == 'data' else ""
         current_code.write(f'const {prefix}task_{i}_id = @get_{task.task_type}_task_id({task.task_id});\n')
+        max_task_id = max(max_task_id, task.task_id)
         if task.task_type == 'local':
             current_code.write(f'task task_{task.task_id}() void {{\n')
             try:
@@ -254,7 +256,10 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
         # Make sure to block tasks
         if task.blocked:
-            footer.write(f'    @block({prefix}task_{task.task_id}_id);\n')
+            footer.write(f'    @block({prefix}task_{i}_id);\n')
+
+    # Bind exit task
+    footer.write(f'    @bind_local_task(exit_task, exit_task_id);\n')
 
     exit_task_blocked = any(n == -1 and typ == tdag.InterTaskEdge.UNBLOCK for t in tasks for n, typ in t.outgoing)
     if exit_task_blocked:
@@ -265,16 +270,16 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 ''')
     non_source_tasks = set(n for i, t in enumerate(tasks) for n, _ in t.outgoing if n != i)
     source_tasks = [t for i, t in enumerate(tasks) if i not in non_source_tasks]
-    for task in source_tasks:
+    for i, task in enumerate(source_tasks):
         prefix = "d" if task.task_type == 'data' else ""
-        current_code.write(f'    @activate({prefix}task_{task.task_id}_id);\n')
+        current_code.write(f'    @activate({prefix}task_{i}_id);\n')
     if not source_tasks:
         # Unblock command stream if function is empty
         current_code.write(f'    sys_mod.unblock_cmd_stream();\n')
     current_code.write('}\n')
 
     current_code.write(f'''
-const exit_task_id = @get_local_task_id({csl.EXIT_TASK_ID});
+const exit_task_id = @get_local_task_id({max_task_id + 1});
 task exit_task() void {{
     // On completion, unblock command stream
     sys_mod.unblock_cmd_stream();

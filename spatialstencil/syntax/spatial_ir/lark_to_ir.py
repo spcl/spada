@@ -174,7 +174,6 @@ class TreeToSpatialIR(lark.Transformer):
         return irnodes.RoutingHop(o)
 
     def stream_declaration(self, args):
-        args[0] = StreamType(args[0])
         return irnodes.RelativeStreamDeclaration(*args)
 
     # Scopes
