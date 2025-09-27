@@ -107,7 +107,8 @@ def _construct_arg(name: str, arg_t: sast.FieldType | ScalarType) -> spa.KernelA
         # TODO: detect write-only / readonly fields
         array_size_x = domain.x[1] - domain.x[0]
         array_size_y = domain.y[1] - domain.y[0]
-        stream_type = spa.StreamType(arg_t.dtype)
+        array_size_z = domain.z[1] - domain.z[0]
+        stream_type = spa.StreamType(arg_t.dtype, spa.Expression(spa.ConstantLiteral(array_size_z, spa.ScalarType.i16)))
 
         array_type = spa.ArrayType(stream_type, [array_size_x, array_size_y])
         identifier = spa.Identifier(f'_{name}', 0)
