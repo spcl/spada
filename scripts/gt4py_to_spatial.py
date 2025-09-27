@@ -2,6 +2,7 @@
 import argparse
 import sys
 from pathlib import Path
+import traceback
 from spatialstencil.syntax.gt4py import parser
 from spatialstencil.lowering import gt4py_to_stencil_ir
 from spatialstencil.lowering.stencil_to_spatial import lower_stencil_to_spatial
@@ -98,7 +99,7 @@ def lower_gt4p_to_sptl(input_file: Path,
                 lower_function(input_file, func_name, domain_size, output_dir, gtfuncs)
             except Exception as e:
                 print(f"Exception occured during lowering of function {func_name}: ")
-                print(e)
+                print(traceback.format_exc())
     else:
         # Process single function
         lower_function(input_file, function_name, domain_size, output_dir, gtfuncs)

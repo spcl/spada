@@ -6,6 +6,18 @@ from gt4py import computation, interval, PARALLEL, FORWARD, BACKWARD
 Field3D = np.ndarray
 
 
+def laplacian(in_field: Field3D, out_field: Field3D):
+    with computation(PARALLEL), interval(...):
+        out_field = 4.0 * in_field[0, 0, 0] - (
+            in_field[1, 0, 0] + in_field[-1, 0, 0] + in_field[0, 1, 0] + in_field[0, -1, 0])
+
+def pure_vertical(in_field: Field3D, out_field: Field3D):
+    with computation(FORWARD):
+        with interval(0, 1):
+            in_field = in_field[0, 0, 0]
+        with interval(1, None):
+            in_field = in_field[0, 0, 0] - 0.5 * in_field[0, 0, -1]
+
 # See https://github.com/GridTools/gt4py/blob/1caca893034a18d5df1522ed251486659f846589/tests/test_integration/stencil_definitions.py#L194
 def horizontal_diffusion(in_field: Field3D, out_field: Field3D, coeff: Field3D):
     with computation(PARALLEL), interval(...):
