@@ -3,6 +3,7 @@ import itertools
 import os
 from spatialstencil.lowering import spatial_ir_to_csl as s2c
 from spatialstencil.syntax.spatial_ir import parser, passes, analysis, irnodes as spa, canonicalization
+from spatialstencil.syntax.csl import constants as csl
 from spatialstencil.syntax.common import serialization
 import subprocess
 
@@ -128,7 +129,7 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         return
 
     cslc_command = [
-        'cslc', 'layout.csl', f'--fabric-dims={xend},{yend}',
+        'cslc', f'--arch={csl.ARCH}', 'layout.csl', f'--fabric-dims={xend - xbegin},{yend - ybegin}',
         f'--fabric-offsets={offset_x + xbegin},{offset_y + ybegin}', '--memcpy', f'--channels={memcpy_channels}'
     ]
     print("Compiling with command:", ' '.join(cslc_command))
