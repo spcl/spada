@@ -1,4 +1,4 @@
-kernel @totheright<K>(stream<f32, K>[2, 1] readonly inp, stream<f32, K>[2, 1] writeonly out) {
+kernel @copy_right<K>(stream<f32, K>[2, 1] readonly inp, stream<f32, K>[2, 1] writeonly out) {
   place u16 i, u16 j in [0:1, 0:1] {
     f32[K] tmp;
     f32[K] output;
