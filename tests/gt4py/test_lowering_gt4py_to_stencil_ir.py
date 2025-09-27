@@ -125,7 +125,7 @@ class TestStencilIRParser(unittest.TestCase):
 
         comp = irprogram.computations[0]
         assert comp.outputs == [sast.Identifier('out', version=5)]
-        
+
         # If block (all version 0)
         assert isinstance(comp.body[1], sast.IfBlock)
         ifblock = comp.body[1]
@@ -136,7 +136,7 @@ class TestStencilIRParser(unittest.TestCase):
         ifelse_block = ifblock.else_ifs[0]
         stmt2 = ifelse_block.body[0]
         assert stmt2.outputs == [sast.Identifier('out', version=2)]
-        
+
         # Successor to if block (version 1)
         succ = comp.body[2]
         assert isinstance(succ, sast.StatementBlock)
@@ -178,7 +178,7 @@ class TestStencilIRParser(unittest.TestCase):
 
     def test_domain_inference(self):
         # Parse stencil samples file
-        gtfuncs = parser.parse_file(os.path.join(os.path.dirname(__file__), '..', 'samples', 'stencils.py'))
+        gtfuncs = parser.parse_file(os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'stencils.py'))
         program = gtfuncs['horizontal_diffusion']
 
         # Lower without a domain
@@ -195,7 +195,7 @@ class TestStencilIRParser(unittest.TestCase):
 
     def test_domain_inference_vertical(self):
         # Parse stencil samples file
-        gtfuncs = parser.parse_file(os.path.join(os.path.dirname(__file__), '..', 'samples', 'stencils.py'))
+        gtfuncs = parser.parse_file(os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'stencils.py'))
         program = gtfuncs['vertical_advection']
 
         # Lower without a domain
@@ -269,8 +269,8 @@ def output_overwrite(inp: Field3D, out: Field3D):
         tmp = inp + out
         out = tmp + 1
 
-def versioning_in_ifelse(inp: Field3D,
-                              out: Field3D):
+
+def versioning_in_ifelse(inp: Field3D, out: Field3D):
     with computation(PARALLEL), interval(...):
         pred1 = inp < 233.16
         if pred1:

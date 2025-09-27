@@ -9,11 +9,11 @@ kernel @two_phase<K> (stream<f32>[4] readonly in,
         f32[K] a
     }
 
-    place i16 i, i16 j in [3, 0] {
+    place i16 i, i16 j in [2, 0] {
         f32[K] a
     }
 
-    place i16 i, i16 j in [4, 0] {
+    place i16 i, i16 j in [3, 0] {
         f32[K] a
     }
 
@@ -52,10 +52,10 @@ kernel @two_phase<K> (stream<f32>[4] readonly in,
         }
         compute i32 i, i32 j in [0, 0] {
             await receive(a, in[i])
-            await foreach f32 k, i32 x in [0:K], receive(hop1) {
+            await foreach i32 k, f32 x in [0:K], receive(hop1) {
               a[k] = a[k] + x
             }
-            await foreach f32 k, i32 x in [0:K], receive(hop2) {
+            await foreach i32 k, f32 x in [0:K], receive(hop2) {
               a[k] = a[k] + x
             }
             await send(a, out)
@@ -66,7 +66,7 @@ kernel @two_phase<K> (stream<f32>[4] readonly in,
         }
         compute i32 i, i32 j in [2, 0] {
             await receive(a, in[i])
-            await foreach f32 k, i32 x in [0:K], receive(hop1) {
+            await foreach i32 k, f32 x in [0:K], receive(hop1) {
               a[k] = a[k] + x
             }
             await send(a, hop2)

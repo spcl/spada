@@ -51,19 +51,19 @@ jobs:
         path: cerebras-sdk
         key: ${{ runner.os }}-deps
 
-    - name: Install Cerebras SDK v1.2.0
-      if: steps.cache-deps.outputs.cache-hit != 'true'
-      run: |
-        mkdir cerebras-sdk
-        cd cerebras-sdk
-        wget -q -O sdk-1.2.0.tar.gz 'https://www.dropbox.com/scl/fi/qapgr3xsz70x6uhs8p3gh/Cerebras-SDK-1.2.0-202406260214-4-70afe120.tar.gz?rlkey=nb9pqad1f81jklgvwzri63e0z&st=vl43ui70&dl=1'
-        tar xf sdk-1.2.0.tar.gz
-        rm sdk-1.2.0.tar.gz
-        cd ..
+    # - name: Install Cerebras SDK v1.2.0
+    #   if: steps.cache-deps.outputs.cache-hit != 'true'
+    #   run: |
+    #     mkdir cerebras-sdk
+    #     cd cerebras-sdk
+    #     wget -q -O sdk-1.2.0.tar.gz 'https://www.dropbox.com/scl/fi/qapgr3xsz70x6uhs8p3gh/Cerebras-SDK-1.2.0-202406260214-4-70afe120.tar.gz?rlkey=nb9pqad1f81jklgvwzri63e0z&st=vl43ui70&dl=1'
+    #     tar xf sdk-1.2.0.tar.gz
+    #     rm sdk-1.2.0.tar.gz
+    #     cd ..
 
-    - name: Test Cerebras SDK
-      run: |
-        ./cerebras-sdk/cslc -h
+    # - name: Test Cerebras SDK
+    #   run: |
+    #     ./cerebras-sdk/cslc -h
 
     - name: Test with pytest
       run: |

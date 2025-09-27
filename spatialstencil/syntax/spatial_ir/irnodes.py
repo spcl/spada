@@ -24,6 +24,19 @@ class SpatialNode(BaseNode):
         raise NotImplementedError()
 
 
+@dataclass
+class LineInfo:
+    """
+    Represents source line information for a node in the IR.
+    """
+    filename: str
+    line: int
+    column: int
+
+    def __str__(self) -> str:
+        return f"{self.filename}:{self.line}:{self.column}"
+
+
 # Constant Literals
 @dataclass
 class ConstantLiteral(SpatialNode):
@@ -39,6 +52,12 @@ class ConstantLiteral(SpatialNode):
 
     def as_ir(self, indent: int = 0) -> str:
         return str(self.value)
+
+    def eval(self) -> Union[int, float]:
+        """
+        Evaluate the constant literal.
+        """
+        return self.value
 
 
 # Parameters
@@ -78,6 +97,9 @@ class Identifier(SpatialNode):
             return self.name
         return f'{self.name}#{self.version}'
 
+    def __hash__(self) -> int:
+        return hash((Identifier, self.name, self.version))
+
 
 # Streams
 @dataclass
@@ -85,14 +107,21 @@ class StreamType(SpatialNode, IRType):
     """
     A stream type that sends elements of type T.
     """
-    dtype: ScalarType
+    element_type: ScalarType
+    buffer_size: Optional['Expression'] = None
 
     def validate(self) -> None:
-        assert isinstance(self.dtype, ScalarType)
+        assert isinstance(self.element_type, ScalarType)
 
     def as_ir(self, indent: int = 0) -> str:
-        return f'stream<{self.dtype.as_ir()}>'
+        if self.buffer_size is not None:
+            return f'stream<{self.element_type.as_ir()}, {self.buffer_size.as_ir()}>'
+        return f'stream<{self.element_type.as_ir()}>'
 
+    @property
+    def shape(self) -> list[Union[int, 'Expression']]:
+        # This is here to consolidate data type analysis
+        return []
 
 
 # Arrays
@@ -112,6 +141,11 @@ class ArrayType(SpatialNode, IRType):
     def as_ir(self, indent: int = 0) -> str:
         dims = ", ".join(str(dim.as_ir() if isinstance(dim, SpatialNode) else dim) for dim in self.shape)
         return f'{self.base_type.as_ir()}[{dims}]'
+
+    @property
+    def element_type(self) -> ScalarType:
+        # This is here to consolidate data types when generating code
+        return self.base_type
 
 
 @dataclass
@@ -146,6 +180,14 @@ class UnaryOperator(SpatialNode):
     def as_ir(self, indent: int = 0) -> str:
         return f'{self.op}{self.value.as_ir()}'
 
+    def eval(self) -> Union[int, float]:
+        value = self.value.eval()
+        if self.op == '+':
+            return +value
+        elif self.op == '-':
+            return -value
+        raise ValueError("Cannot evaluate non-constant unary operator.")
+
 
 # Binary Operators
 @dataclass
@@ -158,22 +200,54 @@ class BinaryOperator(SpatialNode):
     right: 'Expression'
 
     def validate(self) -> None:
-        assert self.op in ('+', '-', '*', '/', '//', '%', '==', '!=', '<', '<=', '>', '>=')
+        assert self.op in ('+', '-', '*', '/', '%', '==', '!=', '<', '<=', '>', '>=')
         assert isinstance(self.left, Expression)
         assert isinstance(self.right, Expression)
 
     def as_ir(self, indent: int = 0) -> str:
         return f'({self.left.as_ir()} {self.op} {self.right.as_ir()})'
 
+    def eval(self) -> Union[int, float]:
+        """
+        Evaluate the binary operator if both left and right are constant literals.
+        """
+        left_val = self.left.eval()
+        right_val = self.right.eval()
 
-# Ternary Operator
+        if isinstance(left_val, (int, float)) and isinstance(right_val, (int, float)):
+            if self.op == '+':
+                return left_val + right_val
+            elif self.op == '-':
+                return left_val - right_val
+            elif self.op == '*':
+                return left_val * right_val
+            elif self.op == '/':
+                return left_val / right_val
+            elif self.op == '%':
+                return left_val % right_val
+            elif self.op == '==':
+                return left_val == right_val
+            elif self.op == '!=':
+                return left_val != right_val
+            elif self.op == '<':
+                return left_val < right_val
+            elif self.op == '<=':
+                return left_val <= right_val
+            elif self.op == '>':
+                return left_val > right_val
+            elif self.op == '>=':
+                return left_val >= right_val
+        raise ValueError("Cannot evaluate non-constant binary operator.")
+
+
+# Ternary Operators
 @dataclass
 class TernaryOperator(SpatialNode):
     """
     A ternary operator (``x ? y : z`` in C or ``y if x else z`` in Python).
     """
-    cond: 'Expression'
     if_true: 'Expression'
+    cond: 'Expression'
     if_false: 'Expression'
 
     def validate(self) -> None:
@@ -183,6 +257,47 @@ class TernaryOperator(SpatialNode):
 
     def as_ir(self, indent: int = 0) -> str:
         return f'({self.if_true.as_ir()} if {self.cond.as_ir()} else {self.if_false.as_ir()})'
+
+    def eval(self) -> Union[int, float, Identifier, Parameter, "ArraySlice"]:
+        """
+        Evaluate the ternary operator if all parts are constant literals.
+        """
+        cond_val = self.cond.eval()
+        if_true_val = self.if_true.eval()
+        if_false_val = self.if_false.eval()
+
+        if isinstance(cond_val, bool):
+            return if_true_val if cond_val else if_false_val
+        raise ValueError("Cannot evaluate non-constant ternary operator.")
+
+
+@dataclass
+class MultiplyAccumulateOperator(SpatialNode):
+    """
+    A fused multiply-accumulation operator (e.g., fmac). Implemented as ``a + b * c``
+    """
+    a: 'Expression'
+    b: 'Expression'
+    c: 'Expression'
+
+    def validate(self) -> None:
+        assert isinstance(self.a, Expression)
+        assert isinstance(self.b, Expression)
+        assert isinstance(self.c, Expression)
+
+    def as_ir(self, indent: int = 0) -> str:
+        return f'fmac({self.a.as_ir()}, {self.b.as_ir()}, {self.c.as_ir()})'
+
+    def eval(self) -> Union[int, float]:
+        """
+        Evaluate the multiply-accumulate operator if all parts are constant literals.
+        """
+        a_val = self.a.eval()
+        b_val = self.b.eval()
+        c_val = self.c.eval()
+        if isinstance(a_val, (int, float)) and isinstance(b_val, (int, float)) and isinstance(c_val, (int, float)):
+            return a_val + b_val * c_val
+        raise ValueError("Cannot evaluate non-constant multiply-accumulate operator.")
 
 
 # ArraySlice to handle both subscripts (single index access) and array slices (start:end)
@@ -219,20 +334,18 @@ class Expression(SpatialNode):
     """
     A general expression that can take the form of an identifier, literal, array slice, unary/binary operator, etc.
     """
-    value: Union[Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator, TernaryOperator]
+    value: Union[Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator, TernaryOperator,
+                 MultiplyAccumulateOperator]
 
     def validate(self) -> None:
-        assert isinstance(
-            self.value,
-            (Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator, BinaryOperator, TernaryOperator))
+        assert isinstance(self.value, (Identifier, ConstantLiteral, Parameter, ArraySlice, UnaryOperator,
+                                       BinaryOperator, TernaryOperator, MultiplyAccumulateOperator))
 
     def as_ir(self, indent: int = 0) -> str:
         return self.value.as_ir()
 
     def eval(self) -> int | float | Identifier | Parameter | ArraySlice | UnaryOperator | BinaryOperator:
-        if isinstance(self.value, ConstantLiteral):
-            return self.value.value
-        return self.value
+        return self.value.eval() if hasattr(self.value, 'eval') else self.value
 
 
 @dataclass
@@ -267,7 +380,7 @@ class RangeExpression(SpatialNode):
         if step is not None:
             step_expr = Expression(ConstantLiteral(step, ScalarType.i32))
             return RangeExpression(start_expr, stop_expr, step_expr)
-        if abs(start-stop) == 1:
+        if abs(start - stop) == 1:
             return RangeExpression(start_expr)
         else:
             return RangeExpression(start_expr, stop_expr)
@@ -296,14 +409,38 @@ class SubgridExpression(SpatialNode):
         range_y = Expression(ConstantLiteral(y[0], ScalarType.i32))
         range_y_end = Expression(ConstantLiteral(y[1], ScalarType.i32))
 
-        subgrid = SubgridExpression(RangeExpression(range_x, range_x_end),
-                                    RangeExpression(range_y, range_y_end))
+        subgrid = SubgridExpression(RangeExpression(range_x, range_x_end), RangeExpression(range_y, range_y_end))
         return subgrid
 
     def validate(self) -> None:
         assert isinstance(self.x_range, RangeExpression)
         assert isinstance(self.y_range, RangeExpression)
 
+    def get_grid_rect(self) -> tuple[int, int, int, int]:
+        """
+        Get the concrete grid rectangle defined by the subgrid expression.
+
+        :return: A tuple of (start_x, stop_x, start_y, stop_y)
+        """
+        start_x, start_y = self.x_range.start.eval(), self.y_range.start.eval()
+        if self.x_range.stop is None:
+            stop_x = start_x + 1
+        else:
+            stop_x = self.x_range.stop.eval()
+        if self.y_range.stop is None:
+            stop_y = start_y + 1
+        else:
+            stop_y = self.y_range.stop.eval()
+        if not isinstance(start_x, int):
+            raise TypeError(f'Cannot obtain concrete grid size. x range value "{start_x.as_ir()}" is not integral')
+        if not isinstance(start_y, int):
+            raise TypeError(f'Cannot obtain concrete grid size. y range value "{start_y.as_ir()}" is not integral')
+        if not isinstance(stop_x, int):
+            raise TypeError(f'Cannot obtain concrete grid size. x range value "{stop_x.as_ir()}" is not integral')
+        if not isinstance(stop_y, int):
+            raise TypeError(f'Cannot obtain concrete grid size. y range value "{stop_y.as_ir()}" is not integral')
+
+        return start_x, stop_x, start_y, stop_y
 
     def as_ir(self, indent: int = 0) -> str:
         return f'[{self.x_range.as_ir()} , {self.y_range.as_ir()}]'
@@ -342,6 +479,9 @@ class PlaceBlock(SpatialNode):
     variables: list[TypedIdentifier]
     subgrid: SubgridExpression
     statements: list[FieldDeclaration]
+
+    def get_grid_rect(self) -> tuple[int, int, int, int]:
+        return self.subgrid.get_grid_rect()
 
     def validate(self) -> None:
         assert isinstance(self.subgrid, SubgridExpression)
@@ -384,15 +524,15 @@ class RoutingDeclaration(SpatialNode):
 
     def validate(self) -> None:
         if isinstance(self.hops, list):
-            for r in self.hops:
-                dx, dy = r.offset
+            for hop in self.hops:
+                dx, dy = hop.offset
                 assert abs(dx) + abs(dy) == 1, "Each hop must have an absolute sum of 1."
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         hops_str = "auto" if self.hops == "auto" else f"[{', '.join(hop.as_ir() for hop in self.hops)}]"
         channel_str = "auto" if self.channel == "auto" else str(self.channel)
-        return f"{indent_str}hops = {hops_str},\n{indent_str}channel = {channel_str}"
+        return f"{indent_str}hops = {hops_str}, \n{indent_str}channel = {channel_str}"
 
 
 @dataclass
@@ -419,8 +559,9 @@ class RelativeStreamDeclaration(SpatialNode):
         indent_str = '  ' * indent
         routing_str = ""
         if self.routing:
-            routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{' ' * indent}}}"
-        return f'{indent_str}stream<{self.dtype.dtype.as_ir()}> {self.stream_name.as_ir()} = relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}'
+            routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{indent_str}}}"
+        return (f'{indent_str}stream<{self.dtype.element_type.as_ir()}> {self.stream_name.as_ir()} = '
+                f'relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}')
 
 
 ###
@@ -441,6 +582,9 @@ class DataflowBlock(SpatialNode):
         assert all(isinstance(var, TypedIdentifier) for var in self.variables)
         assert all(isinstance(stmt, RelativeStreamDeclaration) for stmt in self.statements)
         assert len(self.variables) == 2
+
+    def get_grid_rect(self) -> tuple[int, int, int, int]:
+        return self.subgrid.get_grid_rect()
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -501,6 +645,20 @@ class SendStatement(Statement):
             return f'{indent_str}{self.completion_name.as_ir()} = send({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
         return f'{indent_str}await send({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
 
+    def get_size(self, identifier_sizes: dict[Identifier, list[int]]) -> list[int]:
+        """
+        Returns the total number of elements passed through the stream during this operation as a list of dimensions.
+        If the operation is a scalar operation, an empty list will be returned.
+
+        :param identifier_sizes: A dictionary mapping identifiers to their respective sizes.
+        :return: A list of dimensions representing the extents of the operation, or an empty list if scalar.
+        """
+        if isinstance(self.local_array, ArraySlice):
+            raise NotImplementedError('Not yet implemented')
+        if self.local_array not in identifier_sizes:
+            raise NameError(f'{self.local_array.as_ir()} is not registered in its corresponding `place` block.')
+        return identifier_sizes[self.local_array]
+
 
 @dataclass
 class ReceiveStatement(Statement):
@@ -517,12 +675,25 @@ class ReceiveStatement(Statement):
         if self.completion_name:
             assert isinstance(self.completion_name, Completion)
 
-
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         if self.completion_name:
             return f'{indent_str}{self.completion_name.as_ir()} = receive({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
         return f'{indent_str}await receive({self.local_array.as_ir()}, {self.stream_name.as_ir()})'
+
+    def get_size(self, identifier_sizes: dict[Identifier, list[int]]) -> list[int]:
+        """
+        Returns the total number of elements passed through the stream during this operation as a list of dimensions.
+        If the operation is a scalar operation, an empty list will be returned.
+
+        :param identifier_sizes: A dictionary mapping identifiers to their respective sizes.
+        :return: A list of dimensions representing the extents of the operation, or an empty list if scalar.
+        """
+        if isinstance(self.local_array, ArraySlice):
+            raise NotImplementedError('Not yet implemented')
+        if self.local_array not in identifier_sizes:
+            raise NameError(f'{self.local_array.as_ir()} is not registered in its corresponding `place` block.')
+        return identifier_sizes[self.local_array]
 
 
 # Receive generator
@@ -635,6 +806,12 @@ class ForStatement(Statement):
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
         return f'{indent_str}for {vars_str} in [{rng_str}] {{\n{body_str}\n{indent_str}}}'
 
+    @property
+    def completion_name(self):
+        # This property is added to maintain compatibility with all other statements that have this property
+        # Completion is always None (for statements are synchronous)
+        return None
+
 
 # Asynchronous Block
 @dataclass
@@ -642,17 +819,20 @@ class AsyncBlock(Statement):
     """
     Asynchronous block for executing a computation asynchronously.
     """
-    completion_name: Completion
+    completion_name: Optional[Completion]
     body: list[Statement]
 
     def validate(self) -> None:
-        assert isinstance(self.completion_name, Completion)
+        if self.completion_name is not None:
+            assert isinstance(self.completion_name, Completion)
         assert isinstance(self.body, list)
         assert all(isinstance(stmt, Statement) for stmt in self.body)
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
+        if self.completion_name is None:
+            return f'{indent_str}await async {{\n{body_str}\n{indent_str}}}'
         return f'{indent_str}{self.completion_name.as_ir()} = async {{\n{body_str}\n{indent_str}}}'
 
 
@@ -691,6 +871,29 @@ class AssignmentStatement(Statement):
         indent_str = '  ' * indent
         return f'{indent_str}{self.destination.as_ir()} = {self.source.as_ir()}'
 
+    @property
+    def completion_name(self):
+        # This property is added to maintain compatibility with all other statements that have this property
+        # Completion is always None (free assignment statements are synchronous)
+        return None
+
+
+class AwaitAllStatement(Statement):
+    """
+    Awaits all completions that have not yet been awaited for.
+    The statement can also be used to mark the end of a phase.
+    """
+
+    def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
+        return f'{indent_str}awaitall'
+
+    @property
+    def completion_name(self):
+        # This property is added to maintain compatibility with all other statements that have this property
+        # Completion is always None (awaitall statements are synchronous)
+        return None
+
 
 # Compute Block
 @dataclass
@@ -709,6 +912,14 @@ class ComputeBlock(SpatialNode):
         assert all(isinstance(var, TypedIdentifier) for var in self.variables)
         assert all(isinstance(stmt, Statement) for stmt in self.statements)
         assert len(self.variables) == 2
+
+    def get_grid_rect(self) -> tuple[int, int, int, int]:
+        """
+        Returns the total PE grid rectangle for this compute block.
+
+        :return: A rectangle as a tuple of (x range begin, x range end, y range begin, y range end).
+        """
+        return self.subgrid.get_grid_rect()
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -738,6 +949,22 @@ class Phase(SpatialNode):
         assert all(isinstance(pl, PlaceBlock) for pl in self.place)
         assert all(isinstance(df, DataflowBlock) for df in self.dataflow)
         assert all(isinstance(cmp, ComputeBlock) for cmp in self.compute)
+
+    def get_grid_rect(self) -> tuple[int, int, int, int]:
+        """
+        Returns the total PE grid size for this phase.
+        
+        :return: A rectangle as a tuple of (x range begin, x range end, y range begin, y range end).
+        """
+        grid_rect = [None] * 4
+        for block in self.place:
+            grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
+        for block in self.dataflow:
+            grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
+        for block in self.compute:
+            grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
+
+        return tuple(grid_rect)
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -813,6 +1040,19 @@ class Kernel(SpatialNode):
         assert all(isinstance(p, Parameter) for p in self.parameters)
         assert all(isinstance(arg, KernelArgument) for arg in self.arguments)
         assert all(isinstance(stmt, (Phase, ComputeBlock, DataflowBlock, PlaceBlock)) for stmt in self.body)
+        assert self.validate_schema()
+
+    def get_grid_rect(self) -> tuple[int, int, int, int]:
+        """
+        Returns the total PE grid size for this kernel.
+        
+        :return: A rectangle as a tuple of (x range begin, x range end, y range begin, y range end).
+        """
+        grid_rect = [None, None, None, None]
+        for block in self.body:
+            grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
+
+        return tuple(grid_rect)
 
     def as_ir(self, indent: int = 0) -> str:
         param_str = ", ".join(p.as_ir() for p in self.parameters)
@@ -826,28 +1066,50 @@ class Kernel(SpatialNode):
         phase_id = 1
         for elem in self.body:
             if isinstance(elem, Phase):
-                rectangles.extend([Rectangle(a.subgrid.x_range.as_tuple(),
-                                             a.subgrid.y_range.as_tuple(),
-                                             (phase_id, a))
-                                   for a in elem.place])
+                rectangles.extend([
+                    Rectangle(a.subgrid.x_range.as_tuple(), a.subgrid.y_range.as_tuple(), (phase_id, a))
+                    for a in elem.place
+                ])
 
-                rectangles.extend([Rectangle(a.subgrid.x_range.as_tuple(),
-                                             a.subgrid.y_range.as_tuple(),
-                                             (phase_id, a))
-                                  for a in elem.dataflow])
+                rectangles.extend([
+                    Rectangle(a.subgrid.x_range.as_tuple(), a.subgrid.y_range.as_tuple(), (phase_id, a))
+                    for a in elem.dataflow
+                ])
 
-                rectangles.extend([Rectangle(a.subgrid.x_range.as_tuple(),
-                                             a.subgrid.y_range.as_tuple(),
-                                             (phase_id, a))
-                                  for a in elem.compute])
+                rectangles.extend([
+                    Rectangle(a.subgrid.x_range.as_tuple(), a.subgrid.y_range.as_tuple(), (phase_id, a))
+                    for a in elem.compute
+                ])
                 phase_id += 1
             else:
                 assert isinstance(elem, (ComputeBlock, DataflowBlock, PlaceBlock))
-                rectangles.append(Rectangle(elem.subgrid.x_range.as_tuple(),
-                                            elem.subgrid.y_range.as_tuple(),
-                                            (0, elem)))
+                rectangles.append(
+                    Rectangle(elem.subgrid.x_range.as_tuple(), elem.subgrid.y_range.as_tuple(), (0, elem)))
 
         return rectangles
+
+
+# Helper functions
+def _combine_grids(grid: tuple[int, int, int, int], current_grid: list[int]):
+    gxb, gxe, gyb, gye = grid
+    if current_grid[0] is None:
+        current_grid[0] = gxb
+    else:
+        current_grid[0] = min(gxb, current_grid[0])
+    if current_grid[1] is None:
+        current_grid[1] = gxe
+    else:
+        current_grid[1] = max(gxe, current_grid[1])
+    if current_grid[2] is None:
+        current_grid[2] = gyb
+    else:
+        current_grid[2] = min(gyb, current_grid[2])
+    if current_grid[3] is None:
+        current_grid[3] = gye
+    else:
+        current_grid[3] = max(gye, current_grid[3])
+    return current_grid
+
 
 # Specialized visitors
 

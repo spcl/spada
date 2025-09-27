@@ -24,6 +24,11 @@ class ScalarType(enum.Enum):
     def as_ir(self, indent: int = 0) -> str:
         return self.name
 
+    @property
+    def element_type(self) -> 'ScalarType':
+        # This is here to consolidate data types when generating code
+        return self
+
 
 BIT_WIDTH = {
     ScalarType.UNKNOWN: 0,

@@ -1,0 +1,16 @@
+/**
+ * Simple matrix addition without any communication
+ **/
+kernel @add<N>(stream<f32, 1>[N, N] readonly a, stream<f32, 1>[N, N] readonly b, 
+               stream<f32, 1>[N, N] writeonly out) {
+    place u16 i, u16 j in [0:N, 0:N] {
+        f32 local_a;
+        f32 local_b;
+    }
+    compute u16 i, u16 j in [0:N, 0:N] {
+        await receive(local_a, a[i, j]);
+        await receive(local_b, b[i, j]);
+        local_a = local_a + local_b;
+        await send(local_a, out[i, j]);
+    }
+}

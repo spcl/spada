@@ -835,6 +835,7 @@ class Program(Node, Operation, Block):
         assert all(isinstance(i, (FieldType, ScalarType, AnyType)) for i in self.operation_type.source)
         assert all(isinstance(i, (FieldType, ScalarType, AnyType)) for i in self.operation_type.destination)
         assert isinstance(self.computations[-1], ReturnOp)
+        assert self.validate_schema()
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent

@@ -23,7 +23,7 @@ string_literal  : ESCAPED_STRING
 unknown_dim_literal : "?"
 
 // Identifier syntax (loosely following MLIR conventions)
-bare_id : (letter| underscore) (letter|digit|underscore)*
+bare_id : /[_a-zA-Z][_0-9a-zA-Z]*/
 suffix_id : digits | bare_id
 identifier : "%" suffix_id ("#" digits)?
 

@@ -6,6 +6,27 @@ from spatialstencil.syntax.spatial_ir.irnodes import StreamType, Identifier
 
 
 class TreeToSpatialIR(lark.Transformer):
+
+    def __init__(self, filename: str = None):
+        super().__init__()
+        self.filename = filename
+
+    def _call_userfunc(self, tree, new_children=None):
+        """
+        Override the default _call_userfunc to add source line information.
+        """
+        # Call the original function with the transformed children
+        result = super()._call_userfunc(tree, new_children)
+
+        # Add source line information to the result
+        if isinstance(result, irnodes.SpatialNode):
+            try:
+                result.lineinfo = irnodes.LineInfo(self.filename, tree.meta.line, tree.meta.column)
+            except AttributeError:
+                result.lineinfo = None
+
+        return result
+
     # Low-level literal syntax
     digit = lambda self, val: int(val[0])
     digits = lambda self, val: int(val[0])
@@ -17,6 +38,7 @@ class TreeToSpatialIR(lark.Transformer):
     true = lambda self, _: True
     false = lambda self, _: False
     prefix = lambda self, _: None
+    auto = lambda self, _: 'auto'
 
     def NEWLINE(self, args):
         return None
@@ -64,7 +86,9 @@ class TreeToSpatialIR(lark.Transformer):
     typed_var = irnodes.TypedIdentifier.from_lark
 
     float_type = int_type = uint_type = bool_type = lambda self, args: getattr(irnodes.ScalarType, str(args[0]))
-    stream_type = irnodes.StreamType.from_lark
+
+    def stream_type(self, args):
+        return irnodes.StreamType(args[0], args[1] if len(args) > 1 else None)
 
     def array_type(self, args):
         return irnodes.ArrayType(args[0], args[1:])
@@ -73,6 +97,8 @@ class TreeToSpatialIR(lark.Transformer):
         # Contract/inline value expressions that only contain another value expression
         if len(args) == 1 and isinstance(args[0], lark.Tree) and args[0].data == 'value_expr':
             return args[0]
+        if len(args) == 1 and isinstance(args[0], (int, bool, float, str)):
+            return irnodes.Expression(irnodes.ConstantLiteral(args[0], ScalarType.UNKNOWN))
         return irnodes.Expression(*args)
 
     # Expressions
@@ -109,6 +135,11 @@ class TreeToSpatialIR(lark.Transformer):
     def ternary_op(self, args, meta=None):
         return irnodes.TernaryOperator(_expr(args[0]), _expr(args[1]), _expr(args[2]))
 
+    def call(self, args):
+        if args[0] == 'fmac':
+            return irnodes.MultiplyAccumulateOperator(_expr(args[1][0]), _expr(args[1][1]), _expr(args[1][2]))
+        raise SyntaxError(f'Unrecognized function call to "{args[0]}"')
+
     # Free function call to builtins
     def function_call(self, args, meta=None):
         if isinstance(args[0], irnodes.Completion):
@@ -131,18 +162,18 @@ class TreeToSpatialIR(lark.Transformer):
     range_expression = irnodes.RangeExpression.from_lark
 
     # Declarations and routing
-    hop = irnodes.RoutingHop.from_lark
+    def hop(self, args):
+        return irnodes.RoutingHop(tuple(args))
+
     routing = irnodes.RoutingDeclaration.from_lark
     field_declaration = irnodes.FieldDeclaration.from_lark
     subgrid_expression_2d = irnodes.SubgridExpression.from_lark
-
 
     def hop(self, args):
         o = (args[0], args[1])
         return irnodes.RoutingHop(o)
 
     def stream_declaration(self, args):
-        args[0] = StreamType(args[0])
         return irnodes.RelativeStreamDeclaration(*args)
 
     # Scopes
@@ -159,6 +190,7 @@ class TreeToSpatialIR(lark.Transformer):
     for_stmt = lambda self, args: irnodes.ForStatement.from_lark(args)
     map_stmt = lambda self, args: self._scope_wrapper(irnodes.MapStatement, args)
     async_stmt = irnodes.AsyncBlock.from_lark
+    awaitall_stmt = irnodes.AwaitAllStatement.from_lark
 
     # Foreach statements and generators
     receive_generator = irnodes.ReceiveGenerator.from_lark
@@ -190,7 +222,10 @@ class TreeToSpatialIR(lark.Transformer):
             itervars, other_gens[0], iters[stream_varind], stream_gen, body, completion_name=completion)
 
     # Await for a completion object
-    await_completion = irnodes.AwaitCompletionStatement.from_lark
+    def await_completion(self, args):
+        if args[0].name == 'all':
+            return irnodes.AwaitAllStatement()
+        return irnodes.AwaitCompletionStatement.from_lark(args)
 
     # Definitions and assignments
     completion = irnodes.Completion.from_lark
@@ -265,4 +300,8 @@ class TreeToSpatialIR(lark.Transformer):
 def _expr(val: irnodes.SpatialNode | int | float | str) -> irnodes.Expression:
     if isinstance(val, irnodes.Expression):
         return val
+    if isinstance(val, int):
+        return irnodes.Expression(irnodes.ConstantLiteral(val, irnodes.ScalarType.UNKNOWN))
+    if isinstance(val, float):
+        return irnodes.Expression(irnodes.ConstantLiteral(val, irnodes.ScalarType.UNKNOWN))
     return irnodes.Expression(val)

@@ -1,0 +1,1020 @@
+"""
+Converts routed Spatial IR code to Cerebras CSL.
+"""
+
+from collections import defaultdict
+import copy
+from io import StringIO
+from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, analysis, passes
+from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
+from spatialstencil.syntax.csl import constants as csl, preprocessing, tasks as tdag, statements as cslstmt, dsd_ops
+from spatialstencil.syntax.csl import structures as cslstruct
+from spatialstencil.syntax.csl.codefile import CodeFile
+from spatialstencil.syntax.csl.statements import name_to_csl, dtype_as_csl, expr_to_csl
+
+UniqueDSDDict = dict[str, list[tuple[str, cslstruct.DataStructureDescriptor]]]
+
+
+def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = (0, 0)) -> list[CodeFile]:
+    """
+    Lowers a routed Spatial IR kernel into Cerebras CSL code.
+
+    :param kernel: The Spatial IR kernel to lower.
+    :param rect_offset: The offset of the output rectangle to use.
+    :return: List of code-file objects that can be written to files. See ``write_code_to_files``.
+    """
+    # PRECONDITION: Rectangles of dataflow/compute/place do not intersect (comes from Spatial IR)
+
+    # Verify all parameter objects are either inlined or have defined values
+    for param in kernel.parameters:
+        if param.value is None:
+            raise ValueError(f'Undefined parameter value for "{param.name}"')
+
+    # Transform Spatial IR such that:
+    #     * For every place block range, the same range should exist for dataflow and compute. (pass)
+    #        * There is no "orphan" block that does not have all matching place/dataflow/compute (pass)
+    #     * There are no phases in the code, there may be local phases for each rectangle (pass)
+
+    # Check if virtual rectangles are equal, consolidate, add phase-end remark at end of computation
+    kernel = canonicalization.canonicalize_phases(kernel)
+    kernel = canonicalization.reduce_streams(kernel)
+    kernel = canonicalization.inline_phases(kernel)
+    print(kernel.as_ir())
+
+    # Check if we are streaming or using memcpy mode
+    use_memcpy_mode = analysis.kernel_uses_memcpy_mode(kernel)
+
+    # Create mapping between SpIR blocks and PE rectangles. Creates empty blocks as necessary
+    rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+
+    # Detect stream argument extents (mapping e.g., `stream<f32>[N]` to an `Nx1` rectangle, or `stream<f32>` to one PE)
+    stream_rects = analysis.detect_stream_argument_extents(rectangles, kernel)
+
+    # Lower array operations to foreach/map iterators as necessary
+    try:
+        canonicalization.lower_bulk_communication(rectangles)
+        canonicalization.lower_array_assignment(rectangles)
+        # TODO(later): Optimize out one extra copy
+        # if use_memcpy_mode:
+        #     canonicalization.remove_memcpy_stream_operators(kernel, rectangles)
+    except KeyError as e:
+        if e.args and isinstance(e.args[0], spir.Identifier):
+            raise ValueError(f"Error in {e.args[0].lineinfo}. Undefined identifier \"{e.args[0].as_ir()}\".")
+
+    # Collect scalar argument types
+    scalar_argument_types = []
+    scalar_arguments = []
+
+    # For each rectangle, collect metadata and generate code
+    csl_codes: list[CodeFile] = []
+    routing_instructions: list[str] = []
+    color_maps = []
+    for rect in rectangles:
+        # Create a unique CSL code file based on rectangle offset
+        csl_name = f'code_{rect.x_range[0]}_{rect.y_range[0]}.csl'
+        rect_code, color_map = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode,
+                                                  stream_rects)
+        color_maps.append(color_map)
+        csl_codes.append(CodeFile(csl_name, rect_code))
+
+    # Prepare outputs
+    layout_code = StringIO()
+
+    ###############################################
+    # Generate main layout file
+    grid_rect = kernel.get_grid_rect()
+    rect_size = grid_rect[1] - grid_rect[0], grid_rect[3] - grid_rect[2]
+
+    # Collect unique routes for all rectangles
+    routes_per_rectangle = _collect_routes(rectangles, color_maps)
+
+    if use_memcpy_mode:
+        layout_code.write(f'''
+// Memcpy setup
+const memcpy = @import_module("<memcpy/get_params>", .{{
+.width = {rect_size[0]},
+.height = {rect_size[1]},
+}});
+''')
+    else:
+        input_args = []
+        output_args = []
+        for arg in kernel.arguments:
+            if arg.compiletime:
+                continue
+            if arg.readonly:
+                input_args.append(arg)
+            elif arg.writeonly:
+                output_args.append(arg)
+            else:
+                input_args.append(arg)
+                output_args.append(arg)
+
+        # Only up to 4 streams in each direction are supported (4 input, 4 output streams)
+        if len(input_args) > 4 or len(output_args) > 4:
+            raise ValueError('Too many input/output streams: only 4 input and 4 output streams are supported in CSL')
+
+        # Generate streaming DATA_*_ID parameters for each input/output stream
+        layout_code.write('// Streaming copy setup\n')
+        for i, input_arg in enumerate(input_args):
+            layout_code.write(f'''param MEMCPYH2D_DATA_{i}_ID: i16;
+const MEMCPYH2D_DATA_{i}: color = @get_color(MEMCPYH2D_DATA_{i}_ID);
+''')
+        for i, output_arg in enumerate(output_args):
+            layout_code.write(f'''param MEMCPYD2H_DATA_{i}_ID: i16;
+const MEMCPYD2H_DATA_{i}: color = @get_color(MEMCPYD2H_DATA_{i}_ID);
+''')
+
+        layout_code.write(f'''
+const memcpy = @import_module("<memcpy/get_params>", .{{
+     .width = width,
+     .height = height,
+''')
+        for i, input_arg in enumerate(input_args):
+            layout_code.write(f'''    .MEMCPYH2D_{i} = MEMCPYH2D_DATA_{i}_ID,
+''')
+        for i, output_arg in enumerate(output_args):
+            layout_code.write(f'''    .MEMCPYD2H_{i} = MEMCPYD2H_DATA_{i}_ID,
+''')
+        layout_code.write(f'''
+}});
+''')
+
+    layout_code.write(f'''layout {{
+    // Rectangle and code setup
+    @set_rectangle{rect_size};''')
+
+    for rect in rectangles:
+        xs, xe, ys, ye = rect.x_range[0], rect.x_range[1], rect.y_range[0], rect.y_range[1]
+        code_filename = f'code_{xs}_{ys}.csl'
+        # Add global offsets as necessary
+        xs += rect_offset[0]
+        xe += rect_offset[0]
+        ys += rect_offset[1]
+        ye += rect_offset[1]
+
+        # Emit rectangle code setup
+        layout_code.write(f'''
+    for (@range(i16, {xs}, {xe}, 1)) |pe_x| {{
+        for (@range(i16, {ys}, {ye}, 1)) |pe_y| {{
+            @set_tile_code(pe_x, pe_y, "{code_filename}", .{{ .memcpy_params = memcpy.get_params(pe_x) }});
+{routes_per_rectangle[(xs, ys)]}
+        }}
+    }}\n''')
+
+    # Emit routing instructions
+    layout_code.write('\n    // Routes\n')
+    for rinst in routing_instructions:
+        layout_code.write(rinst + '\n')
+
+    # Emit symbol names for arguments and kernel
+    layout_code.write('\n    // Arguments\n')
+    for argument in kernel.arguments:
+        layout_code.write(
+            f'    @export_name("{argument.identifier.name}", {dtype_as_csl(argument.dtype, export=True)}, true);\n')
+
+    layout_code.write(f'''
+    // Kernel
+    @export_name("{kernel.name}", fn({", ".join(scalar_argument_types)})void);
+}}''')
+    csl_codes.append(CodeFile('layout.csl', layout_code.getvalue()))
+
+    # Return all generated code files
+    return csl_codes
+
+
+def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_instructions: list[str],
+                       scalar_arguments: list[str], use_memcpy_mode: bool,
+                       stream_extents: analysis.StreamExtents) -> tuple[str, dict[str, int]]:
+    # Code generation carets
+    header = StringIO()
+    current_code = StringIO()
+    footer = StringIO()
+
+    header.write("""
+param memcpy_params: comptime_struct;
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+""")
+
+    # Initialize footer
+    footer.write('comptime {\n')
+
+    # TODO: Preprocessing passes:
+    #     * FMA fusion
+    preprocessing.preprocess_rectangle(rect.metadata)
+
+    # Collect metadata:
+    #     * Find colors from dataflow blocks
+    #     * Collect PE-local arrays from place blocks
+    #     * Make (unique) DSDs out of memory accesses in compute blocks
+    #     * Generate routing instructions from dataflow blocks
+    #     * Make unique colors out of streams, reduce number of streams
+    color_map = _collect_and_allocate_colors(rect, header, kernel, use_memcpy_mode, stream_extents)
+    _collect_and_generate_fields(rect.metadata.place, header, footer, kernel, use_memcpy_mode)
+    dtypes = _collect_identifier_types(rect.metadata, kernel.arguments)
+
+    # Convert compute block subgraphs into tasks:
+    #    * Make task DAG out of computations
+    #    * Any node that has two or more incoming edges (i.e., requires wait) initiates a new task
+    #    * Communication inter-task dependency uses ``activate`` and then ``unblock``
+    #    * Compute task dependency uses ``unblock``
+    #    * Phase end is a task that modifies the current system state and activates next phase's tasks (see below)
+    #    * First phase begin is done as part of the kernel function call
+    #    * (re)cycle task IDs based on ``csl.{DATA,LOCAL,CONTROL}_TASK_IDS``: becomes switch-case on the variable that
+    #      maintains the current state
+    completion_dag = analysis.to_completion_dag(rect.metadata.compute)
+    tasks = tdag.create_csl_tasks(completion_dag, rect.metadata.compute, dtypes)
+    dsds = _collect_unique_dsds(tasks, rect.metadata, header, dtypes, kernel, use_memcpy_mode)
+
+    # Generate each task
+    max_task_id = -1
+    for i, task in enumerate(tasks):
+        prefix = "d" if task.task_type == 'data' else ""
+        current_code.write(f'const {prefix}task_{i}_id = @get_{task.task_type}_task_id({task.task_id});\n')
+        max_task_id = max(max_task_id, task.task_id)
+        if task.task_type == 'local':
+            current_code.write(f'task task_{task.task_id}() void {{\n')
+            try:
+                _generate_task_code(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map, tasks)
+            except KeyError as e:
+                # If a KeyError occurs with an identifier, it means that it is not defined in the current scope
+                identifier = e.args[0]
+                if isinstance(identifier, spir.Identifier):
+                    if identifier.lineinfo:
+                        raise SyntaxError(
+                            f'Undefined identifier "{identifier.as_ir()}" in {identifier.lineinfo}') from e
+                    else:
+                        raise SyntaxError(
+                            f'Undefined identifier "{identifier.as_ir()}" in task "task_{task.task_id}"') from e
+                else:
+                    raise
+            current_code.write(f'}}\n')
+        elif task.task_type == 'data':
+            _generate_data_task(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map, tasks)
+
+        footer.write(f'    @bind_{task.task_type}_task({prefix}task_{task.task_id}, {prefix}task_{i}_id);\n')
+
+        # Make sure to block tasks
+        if task.blocked:
+            footer.write(f'    @block({prefix}task_{i}_id);\n')
+
+    # Bind exit task
+    footer.write(f'    @bind_local_task(exit_task, exit_task_id);\n')
+
+    exit_task_blocked = any(n == -1 and typ == tdag.InterTaskEdge.UNBLOCK for t in tasks for n, typ in t.outgoing)
+    if exit_task_blocked:
+        footer.write('    @block(exit_task_id);\n')
+
+    # Write entry point code
+    current_code.write(f'''\nfn {kernel.name}({", ".join(scalar_arguments)}) void {{
+''')
+    non_source_tasks = set(n for i, t in enumerate(tasks) for n, _ in t.outgoing if n != i)
+    source_tasks = [t for i, t in enumerate(tasks) if i not in non_source_tasks]
+    for i, task in enumerate(source_tasks):
+        prefix = "d" if task.task_type == 'data' else ""
+        current_code.write(f'    @activate({prefix}task_{i}_id);\n')
+    if not source_tasks:
+        # Unblock command stream if function is empty
+        current_code.write(f'    sys_mod.unblock_cmd_stream();\n')
+    current_code.write('}\n')
+
+    current_code.write(f'''
+const exit_task_id = @get_local_task_id({max_task_id + 1});
+task exit_task() void {{
+    // On completion, unblock command stream
+    sys_mod.unblock_cmd_stream();
+}}''')
+
+    # Finalize footer
+    footer.write(f'''
+    @export_symbol({kernel.name}, "{kernel.name}");
+}}\n''')
+
+    # Finalize code generation by concatenating carets
+    return header.getvalue() + '\n' + current_code.getvalue() + '\n' + footer.getvalue(), color_map
+
+
+def _collect_and_allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Kernel, use_memcpy_mode: bool,
+                                 stream_extents: analysis.StreamExtents) -> dict[str, int]:
+    """
+    Returns a mapping of each stream to a CSL color, and adds an allocation there.
+
+    :param rect: The rectangle to use.
+    :param header: A code generator stream for a file's header (where the declarations are).
+    :param kernel: The kernel to use for argument colors.
+    :param use_memcpy_mode: Whether to use memcpy mode.
+    :param stream_extents: The stream extents to use for argument color assignment.
+    :return: Dictionary mapping each stream to its respective color
+    """
+    result: dict[str, int] = {}
+    wrote_header: bool = False
+    color_offset: int = 0
+
+    # Collect colors from kernel arguments if in streaming mode
+    if not use_memcpy_mode:
+        input_args = []
+        output_args = []
+        for arg in kernel.arguments:
+            if arg.compiletime:
+                continue
+            if not stream_extents.is_valid(arg.identifier,
+                                           rect):  # Skip arguments that are not participating in this rectangle
+                continue
+            if arg.readonly:
+                input_args.append((False, arg))
+            elif arg.writeonly:
+                output_args.append((True, arg))
+            else:
+                input_args.append((False, arg))
+                output_args.append((True, arg))
+
+        for is_output, arg in input_args + output_args:
+            if ((isinstance(arg.dtype, spir.StreamType) and arg.dtype.buffer_size is None) or
+                (isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType) and
+                 arg.dtype.base_type.buffer_size is None)):
+                if not wrote_header:
+                    header.write('\n// Streaming memcpy colors\n')
+                    wrote_header = True
+
+                # If the argument is a stream, allocate a color for h2d and d2h transfers
+                name = name_to_csl(arg.identifier)
+                if not is_output:
+                    result[name + "_H2D"] = csl.COLORS[color_offset]
+                    color_offset += 1
+                    header.write(f'const {name}_H2D_color: color = @get_color({result[name + "_H2D"]});\n')
+                else:
+                    result[name + "_D2H"] = csl.COLORS[color_offset]
+                    color_offset += 1
+                    header.write(f'const {name}_D2H_color: color = @get_color({result[name + "_D2H"]});\n')
+
+    if rect.metadata.dataflow.statements:
+        header.write('\n// Colors\n')
+
+    channel_to_in_color: dict[int, int] = {}
+    channel_to_out_color: dict[int, int] = {}
+    sends_recvs = analysis.sends_and_receives(rect.metadata.compute)
+    # Collect colors from streams in dataflow
+    for stream_decl in rect.metadata.dataflow.statements:
+        name = name_to_csl(stream_decl.stream_name)
+        if stream_decl.stream_name not in sends_recvs:
+            continue  # Unused stream
+        outbound, inbound = sends_recvs[stream_decl.stream_name]
+        if stream_decl.routing is None:
+            raise SyntaxError(f'Non-routed stream "{name}". When generating CSL, Spatial IR code must have all streams '
+                              'routed.')
+        if stream_decl.routing.channel == 'auto':
+            raise SyntaxError(f'"auto" stream channel found in stream "{name}". All streams must be concretized prior '
+                              'to lowering to CSL')
+
+        if inbound:
+            # Register or lookup channel in color map
+            if stream_decl.routing.channel in channel_to_in_color:
+                this_color = channel_to_in_color[stream_decl.routing.channel]
+            else:
+                this_color = color_offset
+                color_offset += 1
+                channel_to_in_color[stream_decl.routing.channel] = this_color
+
+            if this_color not in csl.COLORS:
+                raise SyntaxError(f'Too many communication channels allocated for CSL: stream {name} has channel '
+                                  f'{stream_decl.routing.channel} (inbound)')
+
+            # Add to mapping
+            result[name + "_IN"] = csl.COLORS[this_color]
+            # Declare color
+            header.write(f'const {name}_color_in: color = @get_color({result[name + "_IN"]});\n')
+
+        if outbound:
+            # Register or lookup channel in color map
+            if stream_decl.routing.channel in channel_to_out_color:
+                this_color = channel_to_out_color[stream_decl.routing.channel]
+            else:
+                this_color = color_offset
+                color_offset += 1
+                channel_to_out_color[stream_decl.routing.channel] = this_color
+
+            if this_color not in csl.COLORS:
+                raise SyntaxError(f'Too many communication channels allocated for CSL: stream {name} has channel '
+                                  f'{stream_decl.routing.channel} (outbound)')
+            # Add to mapping
+            result[name + "_OUT"] = csl.COLORS[this_color]
+            # Declare color
+            header.write(f'const {name}_color_out: color = @get_color({result[name + "_OUT"]});\n')
+
+    if result:
+        header.write('\n')
+
+    return result
+
+
+def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, footer: StringIO, kernel: spir.Kernel,
+                                 use_memcpy_mode: bool) -> None:
+    """
+    Generates array allocation and symbol exports from a rectangle's ``place`` block.
+
+    :param place: The ``place`` block to generate from.
+    :param header: A code generator stream for a file's header (where the array would be defined).
+    :param footer: A code generator stream for a file's footer (the comptime block where the array would be exported).
+    """
+    header.write('// Place block\n')
+    for field_dec in place.statements:
+        name = name_to_csl(field_dec.field_name)
+        header.write(f'var {name}: {dtype_as_csl(field_dec.dtype)};\n')
+
+    # Add arguments to header and footer
+    if use_memcpy_mode:
+        for argument in kernel.arguments:
+            if isinstance(argument.dtype, spir.ArrayType) and isinstance(argument.dtype.base_type, spir.StreamType):
+                assert argument.dtype.base_type.buffer_size is not None, f'Argument {argument.identifier.name} has no buffer size defined'
+                name = name_to_csl(argument.identifier)
+                # Ignore array size in arguments, as they are spatially mapped
+                size = argument.dtype.base_type.buffer_size.eval()
+            else:
+                size = 1
+
+            header.write(f'var {name}: [{size}]'
+                         f'{dtype_as_csl(argument.dtype.element_type.element_type.element_type)};\n')
+            header.write(f'var __{name}_ptr: {dtype_as_csl(argument.dtype, export=True)} = &{name};\n')
+            footer.write(f'    @export_symbol(__{name}_ptr, "{name}");\n')
+    else:
+        # TODO(later): Some scaffolding for streaming indices within rectangle code
+        pass
+
+    header.write('\n')
+
+
+def _dsd_from_array(array_candidates: dict[str, tuple[spir.FieldDeclaration, list[int | spir.Expression]]],
+                    node: spir.Identifier | spir.ArraySlice):
+    ident = node if isinstance(node, spir.Identifier) else node.array
+    _, shape = array_candidates[ident.as_ir()]
+    if len(shape) == 1:
+        dsd_type = cslstruct.DSDType.mem1d
+        extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
+    else:
+        dsd_type = cslstruct.DSDType.mem4d
+        extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
+
+    # Find the index in the array
+    def _find_index(ind: spir.Expression) -> spir.Identifier:
+        candidates = []
+        for n in ind.walk():
+            if isinstance(n, spir.Identifier):
+                candidates.append(n)
+        if len(candidates) > 1:
+            raise SyntaxError(
+                f'Expected one index variable in array access, got {candidates}.\n  In line {ind.lineinfo}')
+        return candidates[0] if candidates else None
+
+    use_index = len(shape) == 1
+
+    if isinstance(node, spir.ArraySlice):
+        # Find and replace index with __index
+        idxvars = [_find_index(ind) for ind in node.indices if _find_index(ind) is not None]
+        if use_index:
+            assert len(
+                idxvars) == 1, f'Expected one index variable for 1D array, got {idxvars}.\n  In line {node.lineinfo}'
+            far = passes.FindAndReplace({idxvars[0]: spir.Identifier('__index', 0)})
+        else:
+            far = passes.FindAndReplace({
+                old: new for old, new in zip(idxvars, [spir.Identifier(f'__index_{i}', 0) for i in range(len(idxvars))])
+            })
+        idxvars = ['__index' if use_index else f'__index_{i}' for i in range(len(idxvars))]
+        indices = [expr_to_csl(far.visit(copy.deepcopy(ind))) for ind in node.indices]
+        name = name_to_csl(node.array)
+    else:
+        # Use __index if 1d
+        if use_index:
+            idxvars = ['__index']
+            indices = ['__index']
+        else:
+            idxvars = [f'__index_{i}' for i in range(len(shape))]
+            indices = [f'__index_{i}' for i in range(len(shape))]
+        name = name_to_csl(node)
+
+    return cslstruct.MemoryDSD(
+        dsd_type,
+        name,
+        extents,
+        idxvars,
+        indices,
+    )
+
+
+def _dsd_from_stream(stream_candidates: dict[str, tuple[spir.RelativeStreamDeclaration | spir.KernelArgument,
+                                                        int | spir.Expression]],
+                     node: spir.Identifier | spir.ArraySlice):
+    ident = node if isinstance(node, spir.Identifier) else node.array
+    _, shape = stream_candidates[ident.as_ir()]
+    dsd_type = cslstruct.DSDType.mem1d
+    extents = [str(shape) if isinstance(shape, int) else shape.as_ir()]
+
+    idxvars = ['__index']
+    indices = ['__index']
+
+    if isinstance(node, spir.ArraySlice):
+        name = name_to_csl(node.array)
+    else:
+        name = name_to_csl(node)
+
+    return cslstruct.MemoryDSD(dsd_type, name, extents, idxvars, indices)
+
+
+def _collect_unique_dsds(
+    tasks: list[tdag.CSLTask],
+    rect: PEBlock,
+    header: StringIO,
+    dtypes: dict[spir.Identifier, spir.IRType],
+    kernel: spir.Kernel,
+    memcpy_mode: bool,
+) -> UniqueDSDDict:
+    """
+    Returns a list of DSDs and generates them in the header.
+    """
+    dsds: UniqueDSDDict = defaultdict(list)
+
+    # Generate appropriate header code
+    header.write('// DSDs\n')
+
+    # What defines a DSD?
+    # 1. A (used) dataflow stream;
+    # 2. A (used) local array in a place block, whose manipulation can use DSD operations; or
+    # 3. An argument that is a stream or an array of streams in non memcpy mode, or buffer_size > 1 in memcpy mode.
+
+    # Collect metadata from dataflow and place blocks
+    stream_candidates: dict[str, tuple[spir.RelativeStreamDeclaration | spir.KernelArgument,
+                                       int | spir.Expression]] = {}
+    array_candidates: dict[str, tuple[spir.FieldDeclaration, list[int | spir.Expression]]] = {}
+    stream_args: set[spir.Identifier] = set()
+    for df_statement in rect.dataflow.statements:
+        if isinstance(df_statement, spir.RelativeStreamDeclaration):
+            buffer_size = df_statement.dtype.buffer_size or 1
+            stream_candidates[df_statement.stream_name.as_ir()] = (df_statement, buffer_size)
+    for place_statement in rect.place.statements:
+        if isinstance(place_statement, spir.FieldDeclaration):
+            if isinstance(place_statement.dtype, spir.ArrayType):
+                try:
+                    eval_shape = [s if isinstance(s, int) else s.eval() for s in place_statement.dtype.shape]
+                    # If the product of the shape is 1, it is a scalar
+                    if not eval_shape or all(s == 1 for s in eval_shape):
+                        # Scalar, no DSD
+                        continue
+                except ValueError:
+                    # Dynamic shape, must create a DSD
+                    pass
+
+                array_candidates[place_statement.field_name.as_ir()] = (place_statement, place_statement.dtype.shape)
+    for arg in kernel.arguments:
+        if isinstance(arg.dtype, spir.StreamType):
+            buffer_size = arg.dtype.buffer_size or 1
+            stream_candidates[arg.identifier.as_ir()] = (arg, buffer_size)
+            stream_args.add(arg.identifier)
+        elif isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType):
+            buffer_size = arg.dtype.base_type.buffer_size or 1
+            stream_candidates[arg.identifier.as_ir()] = (arg, buffer_size)
+            stream_args.add(arg.identifier)
+
+    # Find used DSDs in compute block
+    # TODO: Infer input/output queue ID based on concurrency
+    for stmt in rect.compute.statements:
+        # Find out if compute block uses this stream for receive/send
+        if isinstance(stmt, (spir.ReceiveStatement, spir.SendStatement)):
+            stream_name = stmt.stream_name.array if isinstance(stmt.stream_name, spir.ArraySlice) else stmt.stream_name
+            if memcpy_mode and stream_name in stream_args:
+                # If memcpy mode is enabled, the stream contents will have already been copied to the PE
+                dsd = _dsd_from_stream(stream_candidates, stream_name)
+                dsds[stream_name.as_ir()].append((f"{name_to_csl(stream_name)}_dsd", dsd))
+            elif isinstance(stmt, spir.ReceiveStatement) and stream_name.as_ir() in stream_candidates:
+                dsd_type = cslstruct.DSDType.fabin
+                dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
+                extents = stream_candidates[stream_name.as_ir()][1]
+                extents = extents if isinstance(extents, int) else extents.eval()
+                fabric_color = f'{name_to_csl(stream_name)}_color'
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, 1)
+                dsds[stream_name.as_ir()].append((dsd_name, dsd))
+            elif isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
+                dsd_type = cslstruct.DSDType.fabout
+                dsd_name = f'{name_to_csl(stream_name)}_out_dsd'
+                extents = stream_candidates[stream_name.as_ir()][1]
+                extents = extents if isinstance(extents, int) else extents.eval()
+                fabric_color = f'{name_to_csl(stream_name)}_color'
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, 1)
+                dsds[stream_name.as_ir()].append((dsd_name, dsd))
+
+            if isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
+                # If the send statement sends from a local array, create another DSD
+                # This case does not apply for receive statements, as they would be lowered to foreach statements
+                if stmt.local_array.as_ir() in array_candidates:
+                    _, shape = array_candidates[stmt.local_array.as_ir()]
+                    if len(shape) == 1:
+                        dsd_type = cslstruct.DSDType.mem1d
+                        extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
+                        indices = ['__index']
+                    else:
+                        dsd_type = cslstruct.DSDType.mem4d
+                        extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
+                        indices = [f'__index_{i}' for i in range(len(shape))]
+
+                    dsd = cslstruct.MemoryDSD(
+                        dsd_type,
+                        name_to_csl(stmt.local_array),
+                        extents,
+                        indices,
+                        indices,
+                    )
+                    dsds[stmt.local_array.as_ir()].append((f"{name_to_csl(stmt.local_array)}_dsd", dsd))
+        elif isinstance(stmt, spir.ForeachStatement):
+            # If the foreach statement has a stream generator, it is a DSD
+            # unless only the receive generator is given (streaming, no range provided).
+            stream_name = (
+                stmt.receive_stream.stream_name.array
+                if isinstance(stmt.receive_stream.stream_name, spir.ArraySlice) else stmt.receive_stream.stream_name)
+            if not stmt.parameter_range:
+                if stream_name not in stream_args:
+                    raise SyntaxError(f'Foreach generator "{stream_name.as_ir()}" without a defined '
+                                      f'range must only be used with a kernel argument.\n  In line {stmt.lineinfo}')
+                # A data task will be created instead (handled in _generate_data_task)
+            else:
+                if stream_name.as_ir() in stream_candidates:
+                    if memcpy_mode and stream_name in stream_args:
+                        # If memcpy mode is enabled, the stream contents will have already been copied to the PE
+                        dsd = _dsd_from_stream(stream_candidates, stream_name)
+                        dsds[stream_name.as_ir()].append((f"{name_to_csl(stream_name)}_dsd", dsd))
+                    else:
+                        dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
+                        extents = stream_candidates[stream_name.as_ir()][1]
+                        extents = extents if isinstance(extents, int) else extents.eval()
+                        fabric_color = f'{name_to_csl(stream_name)}_color'
+                        dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents, 1)
+                        dsds[stream_name.as_ir()].append((dsd_name, dsd))
+
+        def _visit_dsd(substmt, in_foreach_or_map):
+            if (isinstance(substmt, spir.Identifier) and substmt.as_ir() in array_candidates and
+                    substmt.as_ir() not in dsds):
+                dsds[substmt.as_ir()].append((f"{name_to_csl(substmt)}_dsd", _dsd_from_array(array_candidates,
+                                                                                             substmt)))
+                return
+
+            # If the destination is an array, we need to create a DSD
+            if not isinstance(substmt, spir.ArraySlice):
+                return
+            if substmt.array.as_ir() not in array_candidates:
+                return
+            if not in_foreach_or_map:
+                return
+
+            dsd = _dsd_from_array(array_candidates, substmt)
+            dsds[substmt.array.as_ir()].append((f"{name_to_csl(substmt.array)}_dsd", dsd))
+
+        DSDVisitor(_visit_dsd, toplevel=not hasattr(stmt, 'body')).visit(stmt)
+
+    # Make DSD values in the dictionary unique if equivalent
+    for key, dsd_list in dsds.items():
+        unique_dsds = {}
+        for name, dsd in dsd_list:
+            if dsd not in unique_dsds:
+                unique_dsds[dsd] = name
+        dsds[key] = [(v, k) for k, v in unique_dsds.items()]
+
+    # Write DSDs to header
+    for dsd_value in dsds.values():
+        for name, dsd in dsd_value:
+            header.write(f'const {name} = {dsd.as_csl()};\n')
+
+    # TODO(later): This function assumes that DSDs are tied to identifiers. This is a limitation
+    # of the dictionary keys, which cannot use arbitrary Spatial IR nodes. This can lead to issues
+    # where an identifier is accessed in multiple contexts (e.g., x[i] and x[i+1]).
+    # An ideal solution would tie the DSDs to IR nodes (e.g., foreach) and then run a post-processing
+    # pass to eliminate duplicates.
+    for key, dsd_list in dsds.items():
+        if len(dsd_list) > 1:
+            if isinstance(dsd_list[0][1], cslstruct.MemoryDSD):
+                raise SyntaxError(f"Multiple Memory DSDs for variable {key}, got {[name for name, _ in dsd_list]}.")
+            assert isinstance(dsd_list[0][1], cslstruct.FabricDSD) and isinstance(dsd_list[1][1], cslstruct.FabricDSD), \
+                f"Expected FabricDSD for key {key}, got {[type(dsd) for _, dsd in dsd_list]}."
+            assert len(dsd_list) == 2, f"Expected up to two DSDs for key {key}, got {[name for name, _ in dsd_list]}."
+
+    return dsds
+
+
+class DSDVisitor(spir.NodeVisitor):
+
+    def __init__(self, callback, toplevel: bool):
+        self.callback = callback
+        self.toplevel = toplevel
+        self.in_foreach = False
+        self.in_map = False
+        super().__init__()
+
+    def visit_ForeachStatement(self, node: spir.ForeachStatement):
+        self.in_foreach = True
+        self.generic_visit(node)
+        self.in_foreach = False
+
+    def visit_MapStatement(self, node: spir.MapStatement):
+        self.in_map = True
+        self.generic_visit(node)
+        self.in_map = False
+
+    def visit_Identifier(self, node: spir.Identifier):
+        self.callback(node, self.in_foreach or self.in_map)
+        return
+
+    def visit_ArraySlice(self, node: spir.ArraySlice):
+        self.callback(node, self.in_foreach or self.in_map)
+        # Do not visit internal identifier
+        return
+
+    def visit_AssignmentStatement(self, node: spir.AssignmentStatement):
+        if self.toplevel and isinstance(node.destination, spir.ArraySlice):
+            self.generic_visit(node.source)  # Do not visit assignment to array slice
+        else:
+            self.generic_visit(node)
+        return
+
+
+def _route_dir(dx: int, dy: int):
+    """
+    Helper function that returns directions for routing: (source, target).
+    """
+    assert abs(dx + dy) == 1
+    if dx == -1:
+        return ('EAST', 'WEST')
+    elif dx == 1:
+        return ('WEST', 'EAST')
+    elif dy == -1:
+        return ('SOUTH', 'NORTH')
+    elif dy == 1:
+        return ('NORTH', 'SOUTH')
+
+
+def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[str,
+                                                                                int]]) -> dict[tuple[int, int], str]:
+    """
+    Creates a parametric version of the Routing Graph (see the Spatial IR specification for more information) and
+    returns a dictionary of code segements to add to the layout CSL file based on the streams.
+
+    :param rectangles: All rectangles involved in this kernel.
+    :return: A dictionary mapping the starting point of each rectangle to a string representing the layout instructions.
+    """
+    INDENT = 12 * ' '
+    result = {}
+
+    # Create a routing graph
+    for rect, color_map in zip(rectangles, color_maps):
+        # Test whether a receive/send statement are called for creating inbound/outbound routes
+        sends_recvs = analysis.sends_and_receives(rect.metadata.compute)
+        inst = ''
+
+        # Make routing instructions unique
+        routing_instructions: set[str] = set()
+
+        # For each hop, make a color WEST-EAST/NORTH-SOUTH pair. For the first and last hop, pair with RAMP
+        for stream in rect.metadata.dataflow.statements:
+            if stream.stream_name not in sends_recvs:  # Skip unused streams
+                continue
+            sent, received = sends_recvs[stream.stream_name]
+            if received:
+                color_name_inbound = f'@get_color({color_map[name_to_csl(stream.stream_name) + "_IN"]})'
+            if sent:
+                color_name_outbound = f'@get_color({color_map[name_to_csl(stream.stream_name) + "_OUT"]})'
+
+            if len(stream.routing.hops) == 1:  # Inbound and outbound generated together
+                route = _route_dir(*stream.routing.hops[0].offset)
+                if sent:
+                    routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                        color_name_outbound, 'RAMP', route[1])
+                    if routing_inst not in routing_instructions:
+                        inst += routing_inst
+                        routing_instructions.add(routing_inst)
+                if received:
+                    routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                        color_name_inbound, route[0], 'RAMP')
+                    if routing_inst not in routing_instructions:
+                        inst += routing_inst
+                        routing_instructions.add(routing_inst)
+            else:  # Multi-hop
+                if sent:
+                    first_hop = stream.routing.hops[0]
+                    route = ('RAMP', _route_dir(*first_hop.offset)[1])
+                    routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                        color_name_outbound, route[0], route[1])
+                    if routing_inst not in routing_instructions:
+                        inst += routing_inst
+                        routing_instructions.add(routing_inst)
+                    cur_offx = 0
+                    cur_offy = 0
+                    for hop in stream.routing.hops[1:]:
+                        route = _route_dir(*hop.offset)
+                        cur_offx += hop.offset[0]
+                        cur_offy += hop.offset[1]
+                        routing_inst = INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                            cur_offx, cur_offy, color_name_outbound, route[0], route[1])
+                        if routing_inst not in routing_instructions:
+                            inst += routing_inst
+                            routing_instructions.add(routing_inst)
+                if received:
+                    cur_offx = 0
+                    cur_offy = 0
+                    last_hop = stream.routing.hops[-1]
+                    route = (_route_dir(*last_hop.offset)[0], 'RAMP')
+                    routing_inst = INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                        cur_offx, cur_offy, color_name_inbound, route[0], route[1])
+                    if routing_inst not in routing_instructions:
+                        inst += routing_inst
+                        routing_instructions.add(routing_inst)
+                    cur_offx += last_hop.offset[0]
+                    cur_offy += last_hop.offset[1]
+                    for hop in reversed(stream.routing.hops[:-1]):
+                        route = _route_dir(*hop.offset)
+                        routing_inst = INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                            cur_offx, cur_offy, color_name_inbound, route[0], route[1])
+                        if routing_inst not in routing_instructions:
+                            inst += routing_inst
+                            routing_instructions.add(routing_inst)
+                        cur_offx += hop.offset[0]
+                        cur_offy += hop.offset[1]
+
+        result[(rect.x_range[0], rect.y_range[0])] = inst
+
+    return result
+
+
+def _generate_data_task(
+    rect: PEBlock,
+    task: tdag.CSLTask,
+    current_code: StringIO,
+    header: StringIO,
+    footer: StringIO,
+    dsds: list[tuple[str, cslstruct.DataStructureDescriptor]],
+    dtypes: dict[spir.Identifier, spir.IRType],
+    color_map: dict[str, int],
+    tasks: list[tdag.CSLTask],
+):
+    """
+    Generates a data task from a foreach loop.
+
+    :param rect: The rectangle PE block to generate.
+    :param task: The data task to generate.
+    :param current_code: The caret to the code generator at the current position (global).
+    :param header: A code generator stream for a file's header (where the declarations are).
+    :param footer: A code generator stream for a file's footer (the comptime block where the array would be exported).
+    :param dsds: A dictionary mapping names to unique data structure descriptor objects.
+    :param dtypes: A dictionary mapping identifiers to their defined types.
+    :param color_map: Dictionary mapping each stream to its respective color id ({name}_color also works).
+    :param tasks: A list of all tasks in the kernel.
+    """
+    #   * If index is requested: before unblocking task, set k; inc at end of task
+    #   * Wavelet-triggered task as fallback
+    assert task.task_type == 'data'
+    assert len(task.statements) == 1
+
+    stmt_id = task.statements[0]
+    if isinstance(stmt_id, int) and stmt_id >= 0:
+        stmt: spir.ForeachStatement = rect.compute.statements[stmt_id]
+    else:
+        return
+    next_task, itedge = task.outgoing[0]
+    next_task_type = tasks[next_task].task_type if next_task != -1 else 'local'
+    itedge_code = 'unblock' if itedge == tdag.InterTaskEdge.UNBLOCK else 'activate'
+
+    # If a range was specified, write counter and add code to execute next task
+    if stmt.parameter_range:
+        assert len(stmt.parameter_range) == 1, 'Only one-dimensional foreach loops are supported in data tasks'
+        if next_task == -1:
+            next_task_code = f'@{itedge_code}(exit_task_id);'
+        else:
+            prefix = "d" if next_task_type == 'data' else ""
+            next_task_code = f'@{itedge_code}({prefix}task_{next_task}_id);'
+
+        var_dtype_csl = dtype_as_csl(stmt.variables[0].dtype)
+        param_range = stmt.parameter_range[0]
+        current_code.write(f"var __num_dtask_{task.task_id}: {var_dtype_csl} = {param_range.start.as_ir()};\n")
+
+        next_task_code = f"""
+    __num_dtask_{task.task_id} += {1 if param_range.step is None else param_range.step.as_ir()};
+    if (__num_dtask_{task.task_id} == {param_range.stop.as_ir()}) {{
+        {next_task_code}
+    }}"""
+    else:
+        next_task_code = ""
+
+    # Write frame for data task
+    argtype_csl = dtype_as_csl(stmt.stream_variable.dtype)
+    argname = name_to_csl(stmt.stream_variable.identifier)
+    current_code.write(f"task dtask_{task.task_id}({argname}: {argtype_csl}) void {{\n")
+    if stmt.variables:
+        current_code.write(
+            f'    var {name_to_csl(stmt.variables[0].identifier)}: {var_dtype_csl} = __num_dtask_{task.task_id};\n')
+
+    # Write op contents
+    for substmt in stmt.body:
+        code = cslstmt.generate_csl_statement(substmt, dsds, dtypes, None, header)
+
+        for line in code.splitlines():
+            current_code.write(f'    {line}\n')
+
+    # Write footer
+    current_code.write(next_task_code)
+    current_code.write(f"\n}}\n")
+
+
+def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringIO, header: StringIO, footer: StringIO,
+                        dsds: list[tuple[str, cslstruct.DataStructureDescriptor]],
+                        dtypes: dict[spir.Identifier, spir.IRType], color_map: dict[str,
+                                                                                    int], tasks: list[tdag.CSLTask]):
+    """
+    Generates a local task from a CSL task.
+    This function converts statements to DSD operations or generates appropriate code.
+
+    :param rect: The rectangle PE block to generate.
+    :param task: The CSL task to generate.
+    :param current_code: The caret to the code generator at the current position (global).
+    :param header: A code generator stream for a file's header (where the declarations are).
+    :param footer: A code generator stream for a file's footer (the comptime block where the array would be exported).
+    :param dsds: A dictionary mapping names to unique data structure descriptor objects.
+    :param dtypes: A dictionary mapping identifiers to their defined types.
+    :param color_map: Dictionary mapping each stream to its respective color id ({name}_color also works).
+    :param tasks: A list of all tasks in the kernel.
+    """
+    # Convert task contents:
+    # Convert receives/sends from/to arguments to memcpy
+    # Communication calls become async calls based on task's outgoing field
+    # ``map``:
+    #    * becomes DSD operations as much as possible
+    #    * @map as a fallback
+    # if ``foreach``, has to be a DSD operation
+    assert task.task_type == 'local'
+
+    for stmt_id, (next_task, itedge) in zip(task.statements, task.outgoing):
+        skip_activation = False
+
+        if isinstance(stmt_id, int) and stmt_id >= 0:
+            # Write op contents
+            stmt = rect.compute.statements[stmt_id]
+            # If DSD is asynchronous, encode the next task and edge type (activate/unblock)
+            # into the DSD operation
+            if itedge in (tdag.InterTaskEdge.ACTIVATE, tdag.InterTaskEdge.UNBLOCK):
+                if next_task == -1:
+                    task_id = 'exit_task_id'
+                else:
+                    prefix = "d" if tasks[next_task].task_type == 'data' else ""
+                    task_id = f'{prefix}task_{next_task}_id'
+
+                async_target = dsd_ops.AsyncTarget(task_id, itedge.name.lower())
+            else:
+                async_target = None
+
+            code = cslstmt.generate_csl_statement(stmt, dsds, dtypes, async_target, header)
+            lines = code.splitlines()
+
+            # DSD operation or async call
+            if any(dsdop in line for line in lines for dsdop in dsd_ops.DSD_ASSIGNMENT_MAPPING):
+                # Asynchronous DSD op. DSD line already contains activation or unblocking
+                skip_activation = True
+
+            for line in lines:
+                current_code.write(f'    {line}\n')
+
+        if skip_activation:
+            continue
+
+        # If not DSD or asynchronous op, activate/unblock must be called after the generated operation code
+        if itedge in (tdag.InterTaskEdge.ACTIVATE, tdag.InterTaskEdge.UNBLOCK):
+            # Determine task ID
+            if next_task == -1:
+                task_id = 'exit_task_id'
+            else:
+                prefix = "d" if tasks[next_task].task_type == 'data' else ""
+                task_id = f'{prefix}task_{next_task}_id'
+            if itedge == tdag.InterTaskEdge.ACTIVATE:
+                current_code.write(f'    @activate({task_id});\n')
+            elif itedge == tdag.InterTaskEdge.UNBLOCK:
+                current_code.write(f'    @unblock({task_id});\n')
+
+
+def _collect_identifier_types(rect: PEBlock,
+                              kernel_args: list[spir.KernelArgument]) -> dict[spir.Identifier, spir.IRType]:
+    """
+    Returns a dictionary mapping all place, dataflow, and compute variables (streams, arrays, scalars) to datatypes.
+    """
+    result = {}
+
+    # Collect from kernel arguments
+    for arg in kernel_args:
+        result[arg.identifier] = arg.dtype
+
+    # Collect from place blocks
+    for fielddec in rect.place.statements:
+        result[fielddec.field_name] = fielddec.dtype
+
+    # Collect from dataflow blocks
+    for streamdec in rect.dataflow.statements:
+        result[streamdec.stream_name] = streamdec.dtype
+
+    # Collect from compute blocks
+    for stmt in rect.compute.statements:
+        for value in stmt.walk():
+            if isinstance(value, spir.TypedIdentifier):
+                result[value.identifier] = value.dtype
+
+    return result

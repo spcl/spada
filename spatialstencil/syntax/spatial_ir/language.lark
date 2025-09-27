@@ -22,7 +22,7 @@ string_literal  : ESCAPED_STRING
 ?constant_literal : bool_literal | posneg_integer_literal | float_literal | string_literal
 
 // Identifier syntax (loosely following MLIR conventions)
-bare_id : (letter| underscore) (letter|digit|underscore)*
+bare_id : /[_a-zA-Z][_0-9a-zA-Z]*/
 suffix_id : digits | bare_id
 identifier : suffix_id ("#" digits)?
 
@@ -32,7 +32,7 @@ identifier : suffix_id ("#" digits)?
 !uint_type : "u8" | "u16" | "u32"
 !bool_type : "bool"
 ?scalar_type : float_type | int_type | uint_type | bool_type
-stream_type : "stream" "<" scalar_type ">"
+stream_type : "stream" "<" scalar_type ("," value_expr)? ">"
 ?standard_type : scalar_type | stream_type
 
 // Array types
@@ -117,7 +117,7 @@ hops : "[" hop ("," hop)* "]"
 routing : "hops" "=" (auto | hops) "," "channel" "=" (auto | integer_literal)
 
 field_declaration : builtin_type identifier  (";")? //(";" | NEWLINE)
-stream_declaration : "stream" "<" scalar_type ">" identifier "=" "relative_stream" "(" value_expr "," value_expr ")" ("{" routing "}")?  (";")?
+stream_declaration : stream_type identifier "=" "relative_stream" "(" value_expr "," value_expr ")" ("{" routing "}")?  (";")?
 vars : identifier ("," identifier)*
 typed_var : scalar_type identifier
 typed_vars : typed_var ("," typed_var)*
@@ -152,14 +152,15 @@ await_completion : "await" identifier
 for_stmt : "for" typed_vars "in" subgrid_expression compute_body
 map_stmt : prefix "map" typed_vars "in" subgrid_expression compute_body
 foreach_stmt : prefix "foreach" typed_vars "in" generators compute_body
-async_stmt : completion "async" compute_body
+async_stmt : prefix "async" compute_body
+awaitall_stmt : "awaitall"
 
 // Top-level statements that are direct children of `compute` blocks
-?base_stmt : (function_call | await_completion | map_stmt | foreach_stmt | async_stmt | for_stmt)
+?base_stmt : (function_call | await_completion | map_stmt | foreach_stmt | async_stmt | for_stmt | awaitall_stmt)
 
 assignment : (subscript | identifier) "=" value_expr
 
-?statement : (assignment | base_stmt)
+?statement : (base_stmt | assignment)
 
 
 ////////////////////////////////////////////////////

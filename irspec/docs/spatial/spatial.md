@@ -25,6 +25,9 @@ For any scalar type `T`,  `stream<T>` indicates the corresponding element type s
 Streams do not send a predetermined number of elements, but the sender and receiver must agree on the number of elements sent and received.
 This can be done explicitly (when the size is known from the parameters) or implicitly (by sending a completion signal with/after the last element).
 
+Kernel arguments that are streams may have a second template parameter `stream<T, K>`. If the second parameter is given, then
+exactly `K` elements are transferred over the stream. This is useful for enabling, e.g., memcpy mode in CSL.
+
 ### Arrays
 
 Any scalar or stream type `T` and one or more parameter expressions `S_1`, `S_2`, ... `S_d` may be used to create an array type `T[S_1, S_2, ... S_d]`.
@@ -56,11 +59,11 @@ A variable is in scope if it is declared in the current block or any enclosing b
 A parameter expression is an expression that may depend on parameters and constant **integer** literals. 
 
 ```
-parameter_expression ::= constant_literal | parameter_literal | parameter_expression + parameter_expression | parameter_expression - parameter_expression | parameter_expression * parameter_expression | parameter_expression // parameter_expression | parameter_expression % parameter_expression | (parameter_expression)
+parameter_expression ::= constant_literal | parameter_literal | parameter_expression + parameter_expression | parameter_expression - parameter_expression | parameter_expression * parameter_expression | parameter_expression / parameter_expression | parameter_expression % parameter_expression | (parameter_expression)
 ```
-where // denotes integer division and % denotes modulo.
+where / denotes integer division and % denotes modulo.
 
-For example, `I`, `J+2`, `10`, `(I+J) // 2` are parameter expressions.
+For example, `I`, `J+2`, `10`, `(I+J) / 2` are parameter expressions.
 
 ### Expressions
 
@@ -68,11 +71,11 @@ An expression may depend on parameters, constants, in-scope variables, and field
 
 ```
 array_expression ::= variable[int_expression]
-int_expression ::= constant_literal | parameter_literal | variable | expression + expression | expression - expression | expression * expression | expression // expression | expression % expression | (expression)
-expression ::= constant_literal | parameter_literal | variable | array_expression | expression + expression | expression - expression | expression * expression | expression / expression | expression // expression | expression % expression | (expression) 
+int_expression ::= constant_literal | parameter_literal | variable | expression + expression | expression - expression | expression * expression | expression / expression | expression % expression | (expression)
+expression ::= constant_literal | parameter_literal | variable | array_expression | expression + expression | expression - expression | expression * expression | expression / expression | expression % expression | (expression) 
 bool_expression ::= expression == expression | expression != expression | expression < expression | expression <= expression | expression > expression | expression >= expression | bool_expression & bool_expression | bool_expression | bool_expression | !bool_expression | (bool_expression)
 ```
-where // denotes integer division and % denotes modulo,
+where / denotes integer division and % denotes modulo,
 and `==`, `!=`, `<`, `<=`, `>`, `>=`, `&`, `|`, `!` are the standard comparison and logical operators.
 Note that the logical operators `&` and `|` do not short circuit. Both operands are always evaluated.
 
@@ -135,7 +138,7 @@ subgrid_expression ::= [parameter_expression, parameter_expression]
 and it describes a subgrid of the PEs.
 
 For example, `[0:I, 0:J]` describes the entire grid of PEs.
-`[0:I:2, 0:J//2]` describes every second PE in the `x` direction and the first half of PEs in the `y` direction.
+`[0:I:2, 0:J/2]` describes every second PE in the `x` direction and the first half of PEs in the `y` direction.
 
 ### Kernel
 
@@ -165,7 +168,7 @@ where `T` is a scalar type, stream type, or stream array type.
 Notable, it is not possible to pass scalar arrays as arguments, instead,
 arrays must be read through streams.
 
-If an argument may be *only* read from or written to, it is marked as `readonly` or `writeonly`, respectively.
+If an argument may be *only* read from or written to, it is marked as `readonly` or `writeonly`, respectively. Stream arguments must be marked with either `readonly` or `writeonly`.
 
 ???+ example "Example: Kernel arguments"
     `stream<f32>[I, J] readonly arg1`, `stream<f32>[I, J] writeonly arg2`, `f32 arg3` are arguments.
@@ -493,10 +496,10 @@ always execute in [local order](../async#local-order).
     For example, the following code correctly synchronizes two sends to the same stream:
     ```rust
     // Send the first half of the array
-    completion c1 = send(a[0:K//2], stream_name);
+    completion c1 = send(a[0:K/2], stream_name);
     await c1;
     // Send the rest of the array
-    completion c2 = send(a[K//2:K], stream_name);
+    completion c2 = send(a[K/2:K], stream_name);
     ```
 
 ### Receiving Streaming Data with `receive`

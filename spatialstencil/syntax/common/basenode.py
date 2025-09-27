@@ -101,6 +101,7 @@ class BaseNode:
             else:
                 if not isinstance(field_type, type) or not issubclass(field_type, (int, float, str, type(None), Enum)):
                     raise TypeError(f'Unsupported terminator type {field_type} for field {field_name} of {cls}')
+        return True
 
     def validate(self) -> None:
         """

@@ -21,7 +21,7 @@ class Parser:
             ebnf = fp.read()
 
         # Create a parser
-        self.parser = lark.Lark(ebnf, parser='earley')
+        self.parser = lark.Lark(ebnf, parser='earley', propagate_positions=True)
         self.transformer = lark_to_ast.TreeToAST()
 
     def parse(self, code: str) -> irnodes.Program:
