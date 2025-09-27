@@ -176,7 +176,7 @@ class Program:
         self.metadata = ProgramMetadata.from_json(metadata)
 
         # Initialize SDK runtime
-        self.runtime = crt.SdkRuntime(str(self.out_folder))
+        self.runtime = crt.SdkRuntime(str(self.out_folder), suppress_simfab_trace=True)
 
         # Store input/output information from metadata
         self.inputs = self.metadata.inputs
@@ -232,7 +232,7 @@ class Program:
             if self.metadata.memcpy_mode:
                 print("Launching kernel...", flush=True, end='')
                 self.runtime.launch(self.metadata.kernel_name, nonblock=False)
-                print("kernel launched.", flush=True)
+                print("kernel complete.", flush=True)
 
             # Copy outputs back from device
             results = {}
