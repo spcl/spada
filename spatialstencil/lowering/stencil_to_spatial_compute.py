@@ -313,20 +313,43 @@ class MapTransformer(
                 sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
             ))
 
-        assignments = [sast.AssignOp(Wildcard[sast.Identifier]("dst")(), e, Wildcard()()) for e in [e_0, e_1, e_2]]
-        returns = [sast.ReturnOp([e], Wildcard()()) for e in [e_0, e_1, e_2]]
+        # Copy operator (op and value are none)
+        e_3 = sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0]))
+
+        e_0_neg = sast.Expression(
+            sast.BinaryOperator(
+                sast.Expression(sast.UnaryOperator(
+                    Wildcard[str]("unary_op")(),
+                    sast.Expression(Wildcard[float]("value")())
+                )),
+                Wildcard("op")(),
+                sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
+            ))
+
+        e_1_neg = sast.Expression(
+            sast.BinaryOperator(
+                sast.Expression(sast.UnaryOperator(
+                    Wildcard[str]("unary_op")(),
+                    sast.Expression(Wildcard[int]("value")())
+                )),
+                Wildcard("op")(),
+                sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
+            ))
+
+        assignments = [sast.AssignOp(Wildcard[sast.Identifier]("dst")(), e, Wildcard()()) for e in [e_0, e_1, e_2, e_3, e_1_neg, e_0_neg]]
+        returns = [sast.ReturnOp([e], Wildcard()()) for e in [e_0, e_1, e_2, e_3, e_1_neg, e_0_neg]]
 
         super().__init__(assignments + returns)
 
     def transform(self,
                   root: sast.AssignOp,
                   op: str = None,
+                  unary_op: str = None,
                   value=None,
                   src: sast.Identifier = None,
                   src2: sast.Identifier = None,
                   dst: sast.Identifier = None,
                   **wildcards) -> list[AbstractStatement]:
-        assert op is not None
         assert src is not None
 
         src_id, src_dtype = self.placement.get_storage(src)
@@ -341,18 +364,33 @@ class MapTransformer(
         res_id, res_dtype = self.placement.get_storage(dst)
 
         var_k = self.versioning.next_version('k')
-
         if src2 is None:
-            src_e = spa.Expression(
-                spa.BinaryOperator(
-                    spa.Expression(spa.ConstantLiteral(value, src_dtype.base_type)),
-                    op,
-                    spa.Expression(spa.ArraySlice(
-                        src_id,
-                        [spa.Expression(var_k)]
-                    )),
+            
+            if value is None and op is None:
+                
+                src_e = spa.Expression(spa.ArraySlice(
+                            src_id,
+                            [spa.Expression(var_k)]
+                        ))
+                
+            else:
+                assert value is not None and op is not None
+                
+                if unary_op is None:
+                    const_expr = spa.ConstantLiteral(value, src_dtype.base_type)
+                else:
+                    const_expr = spa.UnaryOperator(unary_op, spa.Expression(spa.ConstantLiteral(value, src_dtype.base_type)))
+                
+                src_e = spa.Expression(
+                    spa.BinaryOperator(
+                        spa.Expression(const_expr),
+                        op,
+                        spa.Expression(spa.ArraySlice(
+                            src_id,
+                            [spa.Expression(var_k)]
+                        )),
+                    )
                 )
-            )
         else:
             src2_id, src2_dtype = self.placement.get_storage(src2)
             src_e = spa.Expression(
