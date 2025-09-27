@@ -160,7 +160,7 @@ def hdiffsmag(arg0: Field3D, arg1: Field3D, arg2: Field3D, arg3: Field3D, arg4: 
         i25 = arg0[1, 0, 0]
         i26 = arg0[0, 0, 0]
         i27 = i24 + i25
-        i28 = i26 * cst_3
+        i28 = cst_3 * i26 
         i29 = i27 + i28
         i30 = arg0[0, 1, 0]
         i31 = arg0[0, -1, 0]
@@ -177,7 +177,7 @@ def hdiffsmag(arg0: Field3D, arg1: Field3D, arg2: Field3D, arg3: Field3D, arg4: 
         i25 = arg1[1, 0, 0]
         i26 = arg1[0, 0, 0]
         i27 = i24 + i25
-        i28 = i26 * cst_3
+        i28 = cst_3 * i26
         i29 = i27 + i28
         i30 = arg1[0, 1, 0]
         i31 = arg1[0, -1, 0]
