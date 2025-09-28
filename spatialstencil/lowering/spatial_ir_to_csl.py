@@ -227,7 +227,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     dsds = _collect_unique_dsds(tasks, rect.metadata, header, dtypes, kernel, use_memcpy_mode)
 
     # Generate each task
-    max_task_id = -1
+    max_task_id = csl.LOCAL_TASK_IDS[0] - 1
     for i, task in enumerate(tasks):
         prefix = "d" if task.task_type == 'data' else ""
         current_code.write(f'const {prefix}task_{i}_id = @get_{task.task_type}_task_id({task.task_id});\n')
@@ -575,6 +575,8 @@ def _collect_unique_dsds(
 
     # Find used DSDs in compute block
     # TODO: Infer input/output queue ID based on concurrency
+    input_queue_id_ctr = 0
+    output_queue_id_ctr = 0
     for stmt in rect.compute.statements:
         # Find out if compute block uses this stream for receive/send
         if isinstance(stmt, (spir.ReceiveStatement, spir.SendStatement)):
@@ -589,7 +591,9 @@ def _collect_unique_dsds(
                 extents = stream_candidates[stream_name.as_ir()][1]
                 extents = extents if isinstance(extents, int) else extents.eval()
                 fabric_color = f'{name_to_csl(stream_name)}_color'
-                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, 1)
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, input_queue_id_ctr)
+                input_queue_id_ctr += 1
+                output_queue_id_ctr += 1
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
             elif isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
                 dsd_type = cslstruct.DSDType.fabout
@@ -597,7 +601,9 @@ def _collect_unique_dsds(
                 extents = stream_candidates[stream_name.as_ir()][1]
                 extents = extents if isinstance(extents, int) else extents.eval()
                 fabric_color = f'{name_to_csl(stream_name)}_color'
-                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, 1)
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, output_queue_id_ctr)
+                input_queue_id_ctr += 1
+                output_queue_id_ctr += 1
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
             if isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
@@ -644,8 +650,10 @@ def _collect_unique_dsds(
                         extents = stream_candidates[stream_name.as_ir()][1]
                         extents = extents if isinstance(extents, int) else extents.eval()
                         fabric_color = f'{name_to_csl(stream_name)}_color'
-                        dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents, 1)
+                        dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents, input_queue_id_ctr)
                         dsds[stream_name.as_ir()].append((dsd_name, dsd))
+                        input_queue_id_ctr += 1
+                        output_queue_id_ctr += 1
 
         def _visit_dsd(substmt, in_foreach_or_map):
             if (isinstance(substmt, spir.Identifier) and substmt.as_ir() in array_candidates and
