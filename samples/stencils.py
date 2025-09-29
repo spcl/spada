@@ -8,7 +8,7 @@ Field3D = np.ndarray
 
 def laplacian(in_field: Field3D, out_field: Field3D):
     with computation(PARALLEL), interval(...):
-        out_field = 4.0 * in_field[0, 0, 0] - (
+        out_field = - 4.0 * in_field[0, 0, 0] + (
             in_field[1, 0, 0] + in_field[-1, 0, 0] + in_field[0, 1, 0] + in_field[0, -1, 0])
 
 def pure_vertical(in_field: Field3D, out_field: Field3D):

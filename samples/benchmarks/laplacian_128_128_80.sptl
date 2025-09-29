@@ -65,43 +65,43 @@ kernel @laplacian<>(stream<f32, 80>[130, 130] _in_field, stream<f32, 80>[128, 12
     }
     dataflow u16 i#11, u16 j#11 in [1:129 , 1:129] {
       stream<f32> _stream_in_field = relative_stream(1, 0) {
-        hops = auto, 
+        hops = [(1, 0)], 
         channel = 0
       }
       stream<f32> _stream_in_field#1 = relative_stream(0, 1) {
-        hops = auto, 
+        hops = [(0, 1)], 
         channel = 1
       }
       stream<f32> _stream_in_field#2 = relative_stream(0, -1) {
-        hops = auto, 
+        hops = [(0, -1)], 
         channel = 2
       }
       stream<f32> _stream_in_field#3 = relative_stream(-1, 0) {
-        hops = auto, 
+        hops = [(-1, 0)], 
         channel = 3
       }
     }
     dataflow u16 i#12, u16 j#12 in [0:1 , 1:129] {
       stream<f32> _stream_in_field = relative_stream(1, 0) {
-        hops = auto, 
+        hops = [(1, 0)], 
         channel = 0
       }
     }
     dataflow u16 i#13, u16 j#13 in [1:129 , 0:1] {
       stream<f32> _stream_in_field#1 = relative_stream(0, 1) {
-        hops = auto, 
+        hops = [(0, 1)], 
         channel = 1
       }
     }
     dataflow u16 i#14, u16 j#14 in [1:129 , 129:130] {
       stream<f32> _stream_in_field#2 = relative_stream(0, -1) {
-        hops = auto, 
+        hops = [(0, -1)], 
         channel = 2
       }
     }
     dataflow u16 i#15, u16 j#15 in [129:130 , 1:129] {
       stream<f32> _stream_in_field#3 = relative_stream(-1, 0) {
-        hops = auto, 
+        hops = [(-1, 0)], 
         channel = 3
       }
     }
@@ -131,10 +131,10 @@ kernel @laplacian<>(stream<f32, 80>[130, 130] _in_field, stream<f32, 80>[128, 12
       await _send_comp#3
       await _recv_comp#3
       await map i32 k#4 in [0:80] {
-        _temp_0_0_0#4[k#4] = (4.0 * in_field_0_0_0[k#4])
+        _temp_0_0_0#4[k#4] = (-4.0 * in_field_0_0_0[k#4])
       }
       await map i32 k#5 in [0:80] {
-        out_field_0_0_0#1[k#5] = (_temp_0_0_0#4[k#5] - _temp_0_0_0#3[k#5])
+        out_field_0_0_0#1[k#5] = (_temp_0_0_0#4[k#5] + _temp_0_0_0#3[k#5])
       }
       await map i32 k#6 in [0:80] {
         out_field_0_0_0[k#6] = out_field_0_0_0#1[k#6]

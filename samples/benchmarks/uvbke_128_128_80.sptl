@@ -42,39 +42,39 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] _arg0, stream<f32, 80>[129, 128] _arg1
     }
     dataflow u16 i#7, u16 j#7 in [1:129 , 1:129] {
       stream<f32> _stream_arg1 = relative_stream(1, 0) {
-        hops = auto, 
+        hops = [(1, 0)], 
         channel = 0
       }
       stream<f32> _stream_arg0 = relative_stream(0, 1) {
-        hops = auto, 
+        hops = [(0, 1)], 
         channel = 1
       }
       stream<f32> _stream_arg0#1 = relative_stream(0, 1) {
-        hops = auto, 
+        hops = [(0, 1)], 
         channel = 2
       }
       stream<f32> _stream_arg1#1 = relative_stream(1, 0) {
-        hops = auto, 
+        hops = [(1, 0)], 
         channel = 3
       }
     }
     dataflow u16 i#8, u16 j#8 in [0:1 , 1:129] {
       stream<f32> _stream_arg1 = relative_stream(1, 0) {
-        hops = auto, 
+        hops = [(1, 0)], 
         channel = 0
       }
       stream<f32> _stream_arg1#1 = relative_stream(1, 0) {
-        hops = auto, 
+        hops = [(1, 0)], 
         channel = 3
       }
     }
     dataflow u16 i#9, u16 j#9 in [1:129 , 0:1] {
       stream<f32> _stream_arg0 = relative_stream(0, 1) {
-        hops = auto, 
+        hops = [(0, 1)], 
         channel = 1
       }
       stream<f32> _stream_arg0#1 = relative_stream(0, 1) {
-        hops = auto, 
+        hops = [(0, 1)], 
         channel = 2
       }
     }

@@ -79,25 +79,25 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] _dtr_stage, stream<f32, 4>[4, 
     }
     dataflow u16 i#9, u16 j#9 in [4:5 , 0:4] {
       stream<f32> _stream_wcon = relative_stream(-1, 0) {
-        hops = auto, 
+        hops = [(-1, 0)], 
         channel = 0
       }
     }
     dataflow u16 i#9, u16 j#9 in [0:1 , 0:1] {
       stream<f32> _stream_wcon = relative_stream(-1, 0) {
-        hops = auto, 
+        hops = [(-1, 0)], 
         channel = 0
       }
     }
     dataflow u16 i#9, u16 j#9 in [1:4 , 0:4] {
       stream<f32> _stream_wcon = relative_stream(-1, 0) {
-        hops = auto, 
+        hops = [(-1, 0)], 
         channel = 0
       }
     }
     dataflow u16 i#9, u16 j#9 in [0:1 , 1:4] {
       stream<f32> _stream_wcon = relative_stream(-1, 0) {
-        hops = auto, 
+        hops = [(-1, 0)], 
         channel = 0
       }
     }
