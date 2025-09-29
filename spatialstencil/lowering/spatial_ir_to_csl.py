@@ -325,7 +325,7 @@ def _collect_and_allocate_colors(rect: Rectangle[PEBlock], header: StringIO, ker
     """
     result: dict[str, int] = {}
     wrote_header: bool = False
-    color_offset: int = 0
+    color_offset: int = csl.COLORS[0]
 
     # Collect colors from kernel arguments if in streaming mode
     if not use_memcpy_mode:
@@ -412,7 +412,7 @@ def _collect_and_allocate_colors(rect: Rectangle[PEBlock], header: StringIO, ker
 
             if this_color not in csl.COLORS:
                 raise SyntaxError(f'Too many communication channels allocated for CSL: stream {name} has channel '
-                                  f'{stream_decl.routing.channel} (outbound)')
+                                  f'{stream_decl.routing.channel} (outbound) and color {this_color} is not available')
             # Add to mapping
             result[name + "_OUT"] = csl.COLORS[this_color]
             # Declare color
