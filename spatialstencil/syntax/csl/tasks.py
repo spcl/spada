@@ -157,7 +157,8 @@ def create_csl_tasks(completion_dag: nx.DiGraph, block: spir.ComputeBlock, dtype
         # Create a new task
         task_id = len(result)
         cnode_to_task_id[cnode] = task_id
-        current_task = CSLTask(task_id, this_task_type, [], [], blocked=(indeg > 1))
+        current_task = CSLTask(
+            task_id, this_task_type, [], [], blocked=((indeg > 1) or (this_task_type == 'data' and indeg > 0)))
         result.append(current_task)
         statement_id_to_task_id[cnode.statement_id] = task_id
 
@@ -209,7 +210,7 @@ def create_csl_tasks(completion_dag: nx.DiGraph, block: spir.ComputeBlock, dtype
             etype = InterTaskEdge.SEQUENCE
         else:
             # Check if task already has an activate edge
-            if succ_task in task_has_activate:
+            if succ_task in task_has_activate or result[succ_task].task_type == 'data':
                 etype = InterTaskEdge.UNBLOCK
             else:
                 etype = InterTaskEdge.ACTIVATE

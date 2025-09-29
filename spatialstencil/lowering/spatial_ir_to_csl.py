@@ -230,7 +230,24 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     max_task_id = csl.LOCAL_TASK_IDS[0] - 1
     for i, task in enumerate(tasks):
         prefix = "d" if task.task_type == 'data' else ""
-        current_code.write(f'const {prefix}task_{i}_id = @get_{task.task_type}_task_id({task.task_id});\n')
+        
+        if task.task_type == "local":
+            current_code.write(f'const {prefix}task_{i}_id = @get_local_task_id({task.task_id});\n')
+        elif task.task_type == "data":
+            stmt = rect.metadata.compute.statements[task.statements[0]]
+            assert isinstance(stmt, spir.ForeachStatement)
+            sname = stmt.receive_stream.stream_name
+            if isinstance(sname, spir.ArraySlice):
+                sname = sname.array
+            if sname.as_ir() + "_H2D" in color_map:
+                color = color_map[sname.as_ir() + "_H2D"]
+            elif sname.as_ir() + "_IN" in color_map:
+                color = color_map[sname.as_ir() + "_IN"]
+            else:
+                raise ValueError(f'Cannot find color for stream "{sname.as_ir()}" in data task {i}')
+            current_code.write(f'const {prefix}task_{i}_id = @get_data_task_id(@get_color({color}));\n')
+
+
         max_task_id = max(max_task_id, task.task_id)
         if task.task_type == 'local':
             current_code.write(f'task task_{task.task_id}() void {{\n')

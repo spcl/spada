@@ -214,7 +214,7 @@ def test_data_local_task_combo():
     assert tasks[0].task_type == 'local'
     assert tasks[1].task_type == 'data'
     assert len(tasks[0].statements) == 1  # Initialization
-    assert tasks[0].outgoing[0][1] == tdag.InterTaskEdge.ACTIVATE
+    assert tasks[0].outgoing[0][1] == tdag.InterTaskEdge.UNBLOCK
 
 
 if __name__ == '__main__':
