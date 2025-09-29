@@ -145,7 +145,7 @@ def main():
         args.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Call the stub function with validated arguments
-        lower_gt4p_to_sptl(
+        lower_gt4py_to_sptl(
             input_file=args.input_file,
             function_name=args.function_name,
             domain_size=args.domain_size,
