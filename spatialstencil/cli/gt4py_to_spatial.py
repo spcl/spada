@@ -67,7 +67,7 @@ def lower_function(input_file: Path,
     print(f"  Saved SpaDa to: {output_file}")
 
 
-def lower_gt4p_to_sptl(input_file: Path,
+def lower_gt4py_to_sptl(input_file: Path,
                  function_name: str | None,
                  domain_size: tuple[int, int, int],
                  output_dir: Path):
