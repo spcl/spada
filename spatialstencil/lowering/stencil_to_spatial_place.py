@@ -75,9 +75,14 @@ class ProgramPlacement:
             if isinstance(op, sast.StatementBlock):
                 # Note: all outputs must have the same domain
                 out_t = op.operation_type.destination[0]
+                src_t = op.operation_type.source[0]
                 assert isinstance(out_t, sast.ViewType)
                 assert isinstance(out_t.domain, sast.Cartesian)
+                
                 domain = out_t.domain.add(self.get_shift())
+                # Add a halo for the dummy receives (necessary to avoid deadlocks)
+                for ext in src_t.extent.extents:
+                    domain = domain.union(domain.add((-ext[0], -ext[1], 0)))
                 # Place the outputs of the statement block
                 for out in op.outputs:
                     # Allocate a field for the output
@@ -189,6 +194,7 @@ class ProgramPlacement:
             self._set_storage(identifier, offset, spa_identifier, field_type)
 
             meta = spa.FieldDeclaration(field_type, spa_identifier)
+            
             place = AbstractFieldDeclaration((domain.x[0], domain.x[1]), (domain.y[0], domain.y[1]), meta)
             result.append(place)
 
