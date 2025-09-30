@@ -612,7 +612,7 @@ def _collect_unique_dsds(
                 extents = stream_candidates[stream_name.as_ir()][1]
                 extents = extents if isinstance(extents, int) else extents.eval()
                 fabric_color = f'{name_to_csl(stream_name)}_color'
-                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, input_queue_id_ctr)
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)])
                 input_queue_id_ctr += 1
                 output_queue_id_ctr += 1
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
@@ -622,7 +622,7 @@ def _collect_unique_dsds(
                 extents = stream_candidates[stream_name.as_ir()][1]
                 extents = extents if isinstance(extents, int) else extents.eval()
                 fabric_color = f'{name_to_csl(stream_name)}_color'
-                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, output_queue_id_ctr)
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, csl.OUTPUT_QUEUE_IDS[output_queue_id_ctr % len(csl.OUTPUT_QUEUE_IDS)])
                 input_queue_id_ctr += 1
                 output_queue_id_ctr += 1
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
@@ -671,7 +671,7 @@ def _collect_unique_dsds(
                         extents = stream_candidates[stream_name.as_ir()][1]
                         extents = extents if isinstance(extents, int) else extents.eval()
                         fabric_color = f'{name_to_csl(stream_name)}_color'
-                        dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents, input_queue_id_ctr)
+                        dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents, csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)])
                         dsds[stream_name.as_ir()].append((dsd_name, dsd))
                         input_queue_id_ctr += 1
                         output_queue_id_ctr += 1

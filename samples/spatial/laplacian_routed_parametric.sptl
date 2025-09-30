@@ -6,15 +6,19 @@ kernel @laplacian<I, J, K>(stream<f32, K>[I+2, J+2] readonly _in, stream<f32, K>
   }
   place u16 i#3, u16 j#3 in [1:I+1 , 0:1] {
     f32[K] in_0_0_0
+    f32[K] noop
   }
   place u16 i#1, u16 j#1 in [0:1 , 1:J+1] {
     f32[K] in_0_0_0
+    f32[K] noop
   }
   place u16 i#2, u16 j#2 in [I+1:I+2 , 1:J+1] {
     f32[K] in_0_0_0
+    f32[K] noop
   }
   place u16 i#4, u16 j#4 in [1:I+1 , J+1:J+2] {
     f32[K] in_0_0_0
+    f32[K] noop
   }
   place u16 i#1, u16 j#1 in [0:1 , 0:1] {
   }
@@ -161,16 +165,28 @@ kernel @laplacian<I, J, K>(stream<f32, K>[I+2, J+2] readonly _in, stream<f32, K>
       await send(res_0_0_0, _kernel_out_0[(i#22), (j#22)])
     }
     compute u16 i#18, u16 j#18 in [1:I+1 , 0:1] {
-      await send(in_0_0_0, south)
+      completion rcv = receive(noop, south)
+      completion snd = send(in_0_0_0, south)
+      await rcv
+      await snd
     }
     compute u16 i#19, u16 j#19 in [0:1 , 1:J+1] {
-      await send(in_0_0_0, east)
+      completion rcv = receive(noop, east)
+      completion snd = send(in_0_0_0, east)
+      await rcv
+      await snd
     }
     compute u16 i#20, u16 j#20 in [I+1:I+2 , 1:J+1] {
-      await send(in_0_0_0, west)
+      completion rcv = receive(noop, west)
+      completion snd = send(in_0_0_0, west)
+      await rcv
+      await snd
     }
     compute u16 i#21, u16 j#21 in [1:I+1 , J+1:J+2] {
-      await send(in_0_0_0, north)
+      completion rcv = receive(noop, north)
+      completion snd = send(in_0_0_0, north)
+      await rcv
+      await snd
     }
   }
 }
