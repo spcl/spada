@@ -1,0 +1,38 @@
+kernel @exchange<K>(stream<f32, K>[2, 1] readonly inp, stream<f32, K>[2, 1] writeonly out) {
+  place u16 i, u16 j in [0:1, 0:1] {
+    f32[K] tmp;
+    f32[K] output;
+  }
+  place u16 i, u16 j in [1:2, 0:1] {
+    f32[K] tmp;
+    f32[K] output;
+  }
+  dataflow u16 i#2, u16 j#2 in [0:1, 0:1] {
+    stream<f32, K> east = relative_stream(1, 0) {
+    hops = [(1, 0)],
+    channel = 0
+    }
+  }
+  compute u16 i#4, u16 j#4 in [0:1, 0:1] {
+    await receive(tmp, inp[i#4, j#4]);
+    completion snd = send(tmp, east);
+    completion rcv = receive(output, east);
+    await snd;
+    await rcv;
+    await send(output, out[i#4, j#4]);
+  }
+  dataflow u16 i#2, u16 j#2 in [1:2, 0:1] {
+    stream<f32, K> west = relative_stream(-1, 0) {
+    hops = [(-1, 0)],
+    channel = 0
+    }
+  }
+  compute u16 i#4, u16 j#4 in [1:2, 0:1] {
+    await receive(tmp, inp[i#4, j#4]);
+    completion snd = send(tmp, west);
+    completion rcv = receive(output, west);
+    await snd;
+    await rcv;
+    await send(output, out[i#4, j#4]);
+  }
+}
