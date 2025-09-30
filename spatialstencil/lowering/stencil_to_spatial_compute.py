@@ -734,8 +734,9 @@ def _send_receive_statement(dataflow: ProgramDataflow,
     remote_id, remote_dtype = placement.get_storage(remote)
     stream = dataflow.get_stream(remote, out_id, sast.Offset((dx, dy, 0)))
     assert stream
-
-    xy_range = dataflow.get_x_y_range(out_t, 0, 0)
+    
+    send_range_x, send_range_y = dataflow.get_x_y_send_range(out_t, dx, dy)
+    receive_range_x, receive_range_y =  dataflow.get_x_y_receive_range(out_t, dx, dy)
 
     recv = spa.ReceiveGenerator(
         stream
@@ -764,7 +765,7 @@ def _send_receive_statement(dataflow: ProgramDataflow,
 
     line_nr = versioning.next_version("___line___").version
 
-    receive = AbstractStatement(xy_range[0], xy_range[1], (line_nr, recv_foreach))
+    receive = AbstractStatement(receive_range_x, receive_range_y, (line_nr, recv_foreach))
 
     send_comp_id = versioning.next_version('_send_comp')
     send_completion = spa.Completion(send_comp_id)
@@ -774,17 +775,15 @@ def _send_receive_statement(dataflow: ProgramDataflow,
         send_completion
     )
 
-    send_x_range, send_y_range = dataflow.get_x_y_range(out_t, dx, dy)
+    line_nr = versioning.next_version("___line___").version
+    send_stmt = AbstractStatement(send_range_x, send_range_y, (line_nr, send))
 
     line_nr = versioning.next_version("___line___").version
-    send_stmt = AbstractStatement(send_x_range, send_y_range, (line_nr, send))
-
-    line_nr = versioning.next_version("___line___").version
-    await_send = AbstractStatement(send_x_range, send_y_range,
+    await_send = AbstractStatement(send_range_x, send_range_y,
                                    (line_nr, spa.AwaitCompletionStatement(send_comp_id)))
 
     line_nr = versioning.next_version("___line___").version
-    await_recv = AbstractStatement(xy_range[0], xy_range[1],
+    await_recv = AbstractStatement(receive_range_x, receive_range_y,
                                    (line_nr, spa.AwaitCompletionStatement(recv_comp_id)))
 
     return [receive, send_stmt, await_send, await_recv]

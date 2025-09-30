@@ -224,9 +224,48 @@ class ProgramDataflow:
 
         return blocks
 
-    def get_x_y_range(self, out_t: sast.ViewType | sast.FieldType, dx: int, dy: int):
+    def get_x_y_send_range(self, out_t: sast.ViewType | sast.FieldType, dx: int, dy: int):
+        """Defines the subgrid that sends for the given type and stream offset (dx, dy)
+        """
         assert isinstance(out_t.domain, sast.Cartesian)
+        # We need a buffer of +- the extent around the domain
         send_domain = out_t.domain.union(out_t.domain.add((dx, dy, 0)))
+        x_range = (send_domain.x[0] + self.offset_domain[0],
+                   send_domain.x[1] + self.offset_domain[0])
+        y_range = (send_domain.y[0] + self.offset_domain[1],
+                   send_domain.y[1] + self.offset_domain[1])
+
+        assert x_range[0] >= 0
+        assert x_range[1] >= x_range[0]
+        assert y_range[0] >= 0
+        assert y_range[1] >= y_range[0]
+
+        return x_range, y_range
+    
+    def get_x_y_receive_range(self, out_t: sast.ViewType | sast.FieldType, dx: int, dy: int):
+        """Defines the subgrid receives for the given type and stream offset (dx, dy)
+        """
+        assert isinstance(out_t.domain, sast.Cartesian)
+        # We need a buffer of +- the extent around the domain
+        send_domain = out_t.domain.union(out_t.domain.add((-dx, -dy, 0)))
+        x_range = (send_domain.x[0] + self.offset_domain[0],
+                   send_domain.x[1] + self.offset_domain[0])
+        y_range = (send_domain.y[0] + self.offset_domain[1],
+                   send_domain.y[1] + self.offset_domain[1])
+
+        assert x_range[0] >= 0
+        assert x_range[1] >= x_range[0]
+        assert y_range[0] >= 0
+        assert y_range[1] >= y_range[0]
+
+        return x_range, y_range
+
+    def get_x_y_range(self, out_t: sast.ViewType | sast.FieldType, dx: int, dy: int):
+        """Defines the subgrid sends OR receives for the given type and stream offset (dx, dy)
+        """
+        assert isinstance(out_t.domain, sast.Cartesian)
+        # We need a buffer of +- the extent around the domain
+        send_domain = out_t.domain.union(out_t.domain.add((dx, dy, 0))).union(out_t.domain.add((-dx, -dy, 0)))
         x_range = (send_domain.x[0] + self.offset_domain[0],
                    send_domain.x[1] + self.offset_domain[0])
         y_range = (send_domain.y[0] + self.offset_domain[1],

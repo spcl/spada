@@ -6,6 +6,10 @@ from gt4py import computation, interval, PARALLEL, FORWARD, BACKWARD
 Field3D = np.ndarray
 
 
+def one_d_diff(in_field: Field3D, out_field: Field3D):
+    with computation(PARALLEL), interval(...):
+        out_field = 2 * in_field[0, 0, 0] - in_field[-1, 0, 0]
+
 def laplacian(in_field: Field3D, out_field: Field3D):
     with computation(PARALLEL), interval(...):
         out_field = - 4.0 * in_field[0, 0, 0] + (
