@@ -157,7 +157,7 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
         layout_code.write(f'''
     for (@range(i16, {xs}, {xe}, 1)) |pe_x| {{
         for (@range(i16, {ys}, {ye}, 1)) |pe_y| {{
-            @set_tile_code(pe_x, pe_y, "{code_filename}", .{{ .memcpy_params = memcpy.get_params(pe_x) }});
+            @set_tile_code(pe_x, pe_y, "{code_filename}", .{{ .memcpy_params = memcpy.get_params(pe_x), .pe_x = pe_x, .pe_y = pe_y }});
 {routes_per_rectangle[(xs, ys)]}
         }}
     }}\n''')
@@ -193,6 +193,8 @@ def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_in
 
     header.write("""
 param memcpy_params: comptime_struct;
+param pe_x: i16;
+param pe_y: i16;
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 """)
 
@@ -325,7 +327,7 @@ def _collect_and_allocate_colors(rect: Rectangle[PEBlock], header: StringIO, ker
     """
     result: dict[str, int] = {}
     wrote_header: bool = False
-    color_offset: int = csl.COLORS[0]
+    color_offset: int = csl.COLORS[0] 
 
     # Collect colors from kernel arguments if in streaming mode
     if not use_memcpy_mode:
@@ -373,6 +375,8 @@ def _collect_and_allocate_colors(rect: Rectangle[PEBlock], header: StringIO, ker
     # Collect colors from streams in dataflow
     for stream_decl in rect.metadata.dataflow.statements:
         name = name_to_csl(stream_decl.stream_name)
+        cdir = 'x' if stream_decl.dx.eval() != 0 else 'y'
+
         if stream_decl.stream_name not in sends_recvs:
             continue  # Unused stream
         outbound, inbound = sends_recvs[stream_decl.stream_name]
@@ -399,7 +403,7 @@ def _collect_and_allocate_colors(rect: Rectangle[PEBlock], header: StringIO, ker
             # Add to mapping
             result[name + "_IN"] = csl.COLORS[this_color]
             # Declare color
-            header.write(f'const {name}_color_in: color = @get_color({result[name + "_IN"]});\n')
+            header.write(f'const {name}_color_in: color = @get_color((1 - (pe_{cdir} % 2)) + {result[name + "_IN"]});\n')
 
         if outbound:
             # Register or lookup channel in color map
@@ -416,7 +420,7 @@ def _collect_and_allocate_colors(rect: Rectangle[PEBlock], header: StringIO, ker
             # Add to mapping
             result[name + "_OUT"] = csl.COLORS[this_color]
             # Declare color
-            header.write(f'const {name}_color_out: color = @get_color({result[name + "_OUT"]});\n')
+            header.write(f'const {name}_color_out: color = @get_color(pe_{cdir} % 2 + {result[name + "_OUT"]});\n')
 
     if result:
         header.write('\n')
