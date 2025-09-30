@@ -27,6 +27,9 @@ kernel @uvbke<>(stream<f32, 4>[4, 5] _arg0, stream<f32, 4>[5, 4] _arg1, stream<f
   }
   phase {
     place u16 i#6, u16 j#6 in [1:5 , 1:5] {
+      f32[4] i21_0_0_0#1
+      f32[4] _temp_0_0_0#3
+      f32[4] arg5_0_0_0#1
       f32[4] i16_0_0_0
       f32[4] _temp_0_0_0
       f32[4] i19_0_0_0
@@ -36,11 +39,18 @@ kernel @uvbke<>(stream<f32, 4>[4, 5] _arg0, stream<f32, 4>[5, 4] _arg1, stream<f
       f32[4] i16_0_0_0#1
       f32[4] _temp_0_0_0#2
       f32[4] i19_0_0_0#1
-      f32[4] i21_0_0_0#1
-      f32[4] _temp_0_0_0#3
-      f32[4] arg5_0_0_0#1
     }
-    dataflow u16 i#7, u16 j#7 in [1:5 , 1:5] {
+    place u16 i#7, u16 j#7 in [5:6 , 1:5] {
+      f32[4] i16_0_0_0
+      f32[4] _temp_0_0_0
+      f32[4] i19_0_0_0#1
+    }
+    place u16 i#8, u16 j#8 in [1:5 , 5:6] {
+      f32[4] i19_0_0_0
+      f32[4] i16_0_0_0#1
+      f32[4] _temp_0_0_0#2
+    }
+    dataflow u16 i#9, u16 j#9 in [1:5 , 1:5] {
       stream<f32> _stream_arg1 = relative_stream(1, 0) {
         hops = [(1, 0)], 
         channel = 0
@@ -58,7 +68,7 @@ kernel @uvbke<>(stream<f32, 4>[4, 5] _arg0, stream<f32, 4>[5, 4] _arg1, stream<f
         channel = 3
       }
     }
-    dataflow u16 i#8, u16 j#8 in [0:1 , 1:5] {
+    dataflow u16 i#10, u16 j#10 in [0:1 , 1:5] {
       stream<f32> _stream_arg1 = relative_stream(1, 0) {
         hops = [(1, 0)], 
         channel = 0
@@ -68,7 +78,17 @@ kernel @uvbke<>(stream<f32, 4>[4, 5] _arg0, stream<f32, 4>[5, 4] _arg1, stream<f
         channel = 3
       }
     }
-    dataflow u16 i#9, u16 j#9 in [1:5 , 0:1] {
+    dataflow u16 i#11, u16 j#11 in [5:6 , 1:5] {
+      stream<f32> _stream_arg1 = relative_stream(1, 0) {
+        hops = [(1, 0)], 
+        channel = 0
+      }
+      stream<f32> _stream_arg1#1 = relative_stream(1, 0) {
+        hops = [(1, 0)], 
+        channel = 3
+      }
+    }
+    dataflow u16 i#12, u16 j#12 in [1:5 , 0:1] {
       stream<f32> _stream_arg0 = relative_stream(0, 1) {
         hops = [(0, 1)], 
         channel = 1
@@ -78,7 +98,17 @@ kernel @uvbke<>(stream<f32, 4>[4, 5] _arg0, stream<f32, 4>[5, 4] _arg1, stream<f
         channel = 2
       }
     }
-    compute u16 i#10, u16 j#10 in [1:5 , 1:5] {
+    dataflow u16 i#13, u16 j#13 in [1:5 , 5:6] {
+      stream<f32> _stream_arg0 = relative_stream(0, 1) {
+        hops = [(0, 1)], 
+        channel = 1
+      }
+      stream<f32> _stream_arg0#1 = relative_stream(0, 1) {
+        hops = [(0, 1)], 
+        channel = 2
+      }
+    }
+    compute u16 i#14, u16 j#14 in [1:5 , 1:5] {
       completion _recv_comp = foreach i32 k, f32 x in [0:4], receive(_stream_arg1) {
         _temp_0_0_0[k] = (arg1_0_0_0 + x)
       }
@@ -134,13 +164,33 @@ kernel @uvbke<>(stream<f32, 4>[4, 5] _arg0, stream<f32, 4>[5, 4] _arg1, stream<f
         arg5_0_0_0[k#13] = arg5_0_0_0#1[k#13]
       }
     }
-    compute u16 i#11, u16 j#11 in [0:1 , 1:5] {
+    compute u16 i#15, u16 j#15 in [5:6 , 1:5] {
+      completion _recv_comp = foreach i32 k, f32 x in [0:4], receive(_stream_arg1) {
+        _temp_0_0_0[k] = (arg1_0_0_0 + x)
+      }
+      await _recv_comp
+      completion _recv_comp#3 = foreach i32 k#8, f32 x#3 in [0:4], receive(_stream_arg1#1) {
+        i19_0_0_0#1[k#8] = (arg1_0_0_0 + x#3)
+      }
+      await _recv_comp#3
+    }
+    compute u16 i#16, u16 j#16 in [0:1 , 1:5] {
       completion _send_comp = send(arg1_0_0_0, _stream_arg1)
       await _send_comp
       completion _send_comp#3 = send(arg1_0_0_0, _stream_arg1#1)
       await _send_comp#3
     }
-    compute u16 i#12, u16 j#12 in [1:5 , 0:1] {
+    compute u16 i#17, u16 j#17 in [1:5 , 5:6] {
+      completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:4], receive(_stream_arg0) {
+        i19_0_0_0[k#2] = (arg0_0_0_0 + x#1)
+      }
+      await _recv_comp#1
+      completion _recv_comp#2 = foreach i32 k#6, f32 x#2 in [0:4], receive(_stream_arg0#1) {
+        _temp_0_0_0#2[k#6] = (arg0_0_0_0 + x#2)
+      }
+      await _recv_comp#2
+    }
+    compute u16 i#18, u16 j#18 in [1:5 , 0:1] {
       completion _send_comp#1 = send(arg0_0_0_0, _stream_arg0)
       await _send_comp#1
       completion _send_comp#2 = send(arg0_0_0_0, _stream_arg0#1)
@@ -148,11 +198,11 @@ kernel @uvbke<>(stream<f32, 4>[4, 5] _arg0, stream<f32, 4>[5, 4] _arg1, stream<f
     }
   }
   phase {
-    compute u32 i#13, u32 j#13 in [1:5 , 1:5] {
-      await send(arg4_0_0_0, kernel_out_0[(i#13 - 1), (j#13 - 1)])
+    compute u32 i#19, u32 j#19 in [1:5 , 1:5] {
+      await send(arg4_0_0_0, kernel_out_0[(i#19 - 1), (j#19 - 1)])
     }
-    compute u32 i#14, u32 j#14 in [1:5 , 1:5] {
-      await send(arg5_0_0_0, kernel_out_1[(i#14 - 1), (j#14 - 1)])
+    compute u32 i#20, u32 j#20 in [1:5 , 1:5] {
+      await send(arg5_0_0_0, kernel_out_1[(i#20 - 1), (j#20 - 1)])
     }
   }
 }
