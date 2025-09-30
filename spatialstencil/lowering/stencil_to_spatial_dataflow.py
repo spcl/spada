@@ -228,8 +228,8 @@ class ProgramDataflow:
         assert isinstance(out_t.domain, sast.Cartesian)
         send_domain = out_t.domain.union(out_t.domain.add((dx, dy, 0)))
         x_range = (send_domain.x[0] + self.offset_domain[0],
-                   send_domain.x[1] + self.offset_domain[1])
-        y_range = (send_domain.y[0] + self.offset_domain[0],
+                   send_domain.x[1] + self.offset_domain[0])
+        y_range = (send_domain.y[0] + self.offset_domain[1],
                    send_domain.y[1] + self.offset_domain[1])
 
         assert x_range[0] >= 0
