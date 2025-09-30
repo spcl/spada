@@ -101,6 +101,18 @@ def _dsd(dsds: UniqueDSDDict, expr: spir.SpatialNode, output: bool = False) -> s
             for dsd in dsds[expr.as_ir()]:
                 if isinstance(dsd[1], cslstruct.FabricDSD) and dsd[1].dsd_type == cslstruct.DSDType.fabout:
                     return dsd[0]
+        else:
+            # Find fabin DSD, if exists
+            for dsd in dsds[expr.as_ir()]:
+                if isinstance(dsd[1], cslstruct.FabricDSD) and dsd[1].dsd_type == cslstruct.DSDType.fabin:
+                    return dsd[0]
+
+        # If no fabin/fabout, return memory DSD
+        for dsd in dsds[expr.as_ir()]:
+            if isinstance(dsd[1], cslstruct.MemoryDSD):
+                return dsd[0]
+
+        # If all else fails, return first DSD
         return dsds[expr.as_ir()][0][0]
     elif isinstance(expr, spir.ConstantLiteral):
         return str(expr.value)
