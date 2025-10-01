@@ -81,8 +81,10 @@ class ProgramPlacement:
                 
                 domain = out_t.domain.add(self.get_shift())
                 # Add a halo for the dummy receives (necessary to avoid deadlocks)
-                for ext in src_t.extent.extents:
-                    domain = domain.union(domain.add((-ext[0], -ext[1], 0)))
+                # For a scalar src type, not necessary
+                if isinstance(src_t, sast.ViewType) or isinstance(src_t, sast.FieldType):
+                    for ext in src_t.extent.extents:
+                        domain = domain.union(domain.add((-ext[0], -ext[1], 0)))
                 # Place the outputs of the statement block
                 for out in op.outputs:
                     # Allocate a field for the output
