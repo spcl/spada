@@ -41,13 +41,12 @@ class ProgramDataflow:
     channel_strategy: CHANNEL_STRATEGY
 
     def __init__(self,
-                 domain_collector: DomainCollector,
+                 domain_shift: tuple,
                  versioning: Versioning[spa.Identifier],
                  grid_var_type: ScalarType = ScalarType.u16, 
                  channel_strategy: CHANNEL_STRATEGY = CHANNEL_STRATEGY.trivial):
         self.versioning = versioning
-        self.domain_collector = domain_collector
-        self.offset_domain = domain_collector.get_shift()[0:2]
+        self.domain_shift = domain_shift
         self._stream_map = defaultdict(lambda: defaultdict(dict))
         self.grid_var_t = grid_var_type
         self.channel_strategy = channel_strategy
@@ -230,10 +229,10 @@ class ProgramDataflow:
         assert isinstance(out_t.domain, sast.Cartesian)
         # We need a buffer of +- the extent around the domain
         send_domain = out_t.domain.union(out_t.domain.add((dx, dy, 0)))
-        x_range = (send_domain.x[0] + self.offset_domain[0],
-                   send_domain.x[1] + self.offset_domain[0])
-        y_range = (send_domain.y[0] + self.offset_domain[1],
-                   send_domain.y[1] + self.offset_domain[1])
+        x_range = (send_domain.x[0] + self.domain_shift[0],
+                   send_domain.x[1] + self.domain_shift[0])
+        y_range = (send_domain.y[0] + self.domain_shift[1],
+                   send_domain.y[1] + self.domain_shift[1])
 
         assert x_range[0] >= 0
         assert x_range[1] >= x_range[0]
@@ -248,10 +247,10 @@ class ProgramDataflow:
         assert isinstance(out_t.domain, sast.Cartesian)
         # We need a buffer of +- the extent around the domain
         send_domain = out_t.domain.union(out_t.domain.add((-dx, -dy, 0)))
-        x_range = (send_domain.x[0] + self.offset_domain[0],
-                   send_domain.x[1] + self.offset_domain[0])
-        y_range = (send_domain.y[0] + self.offset_domain[1],
-                   send_domain.y[1] + self.offset_domain[1])
+        x_range = (send_domain.x[0] + self.domain_shift[0],
+                   send_domain.x[1] + self.domain_shift[0])
+        y_range = (send_domain.y[0] + self.domain_shift[1],
+                   send_domain.y[1] + self.domain_shift[1])
 
         assert x_range[0] >= 0
         assert x_range[1] >= x_range[0]
@@ -266,10 +265,10 @@ class ProgramDataflow:
         assert isinstance(out_t.domain, sast.Cartesian)
         # We need a buffer of +- the extent around the domain
         send_domain = out_t.domain.union(out_t.domain.add((dx, dy, 0))).union(out_t.domain.add((-dx, -dy, 0)))
-        x_range = (send_domain.x[0] + self.offset_domain[0],
-                   send_domain.x[1] + self.offset_domain[0])
-        y_range = (send_domain.y[0] + self.offset_domain[1],
-                   send_domain.y[1] + self.offset_domain[1])
+        x_range = (send_domain.x[0] + self.domain_shift[0],
+                   send_domain.x[1] + self.domain_shift[0])
+        y_range = (send_domain.y[0] + self.domain_shift[1],
+                   send_domain.y[1] + self.domain_shift[1])
 
         assert x_range[0] >= 0
         assert x_range[1] >= x_range[0]

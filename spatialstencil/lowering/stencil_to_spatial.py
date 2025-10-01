@@ -46,13 +46,12 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
 
     infer_types(stencil, ScalarType.f32, ScalarType.i32, domain)
 
-    domain_collector = DomainCollector()
-    domain_collector.visit(stencil)
+    domain_shift = _get_domain_shift(stencil)
 
     versioning = Versioning[spa.Identifier](spa.Identifier)
-    placement_gen = ProgramPlacement(domain_collector, versioning)
-    dataflow_gen = ProgramDataflow(domain_collector, versioning)
-    compute_gen = ProgramCompute(domain_collector, versioning, dataflow_gen, placement_gen)
+    placement_gen = ProgramPlacement(domain_shift, versioning)
+    dataflow_gen = ProgramDataflow(domain_shift, versioning)
+    compute_gen = ProgramCompute(versioning, dataflow_gen, placement_gen)
     body = []
 
     placement_blocks = placement_gen.place_program(stencil)
@@ -83,6 +82,29 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
     kernel = canonicalize_subgrids(kernel)
 
     return kernel
+
+
+def _get_domain_shift(stencil: sast.Program) -> tuple:
+    domain_collector = DomainCollector()
+    domain_collector.visit(stencil)
+    
+    domain = domain_collector.get_union_domain()
+    
+    # Ensures halos for send/receive
+    for comp in stencil.computations:
+        if isinstance(comp, sast.ComputationBlock):
+            for stmt in comp.body:
+                if isinstance(stmt, sast.StatementBlock):
+                    out_t = stmt.operation_type.destination[0]
+
+                    for access, access_type in zip(stmt.inputs, stmt.operation_type.source):
+                        if isinstance(access_type, sast.ViewType) and any(access == inp for inp in comp.inputs):
+                            for extent in access_type.extent.extents:
+                                domain = domain.union(out_t.domain.add(extent.values)).union(out_t.domain.add((-extent.values[0], -extent.values[1], -extent.values[2])))
+
+    domain_shift = domain_collector.shift_for_domain(domain)
+
+    return domain_shift
 
 
 def kernel_arguments(stencil: sast.Program) -> list[spa.KernelArgument]:

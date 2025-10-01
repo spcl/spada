@@ -18,12 +18,10 @@ AbstractStatement = Rectangle[tuple[int, spa.Statement]]
 class ProgramCompute:
 
     def __init__(self,
-                 domains: DomainCollector,
                  versioning: Versioning[spa.Identifier],
                  dataflow: ProgramDataflow,
                  placement: ProgramPlacement,
                  subgrid_var_type: ScalarType = ScalarType.u16):
-        self.domains = domains
         self.versioning = versioning
         self.dataflow = dataflow
         self.placement = placement
