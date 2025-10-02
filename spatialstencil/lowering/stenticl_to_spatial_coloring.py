@@ -1,21 +1,21 @@
 
 import copy
+from enum import Enum, auto
 from spatialstencil.lowering.versioning import Versioning
 import spatialstencil.syntax.spatial_ir.irnodes as spa
 
+class CHANNEL_STRATEGY(Enum):
+    none = auto()
+    trivial = auto()
 
-
-class KernelColoring:
+class KernelRouting:
     """
-    Lowering Pass for coloring a SPADA kernel
+    Lowering Pass for generating routing assignments for a SPADA kernel
     """
-    
-    
     versioning: Versioning[spa.Identifier]
     
     def __init__(self, versioning: Versioning[spa.Identifier]):
         self.versioning = versioning
-        
         
     def split_blocks(self, kernel: spa.Kernel) -> spa.Kernel:
         """Splits the blocks of the kernel to allow introduction of a checkerboard pattern.
@@ -48,11 +48,96 @@ class KernelColoring:
         # Sort the kernel to ensure we visit compute blocks last
         # TODO
         
-        # Actually transform
+        # Split the kernel in preparation for coloring
         transformed_kernel = transformer.visit(kernel)
-        
 
         return transformed_kernel
+
+    def generate_routing(self, kernel: spa.Kernel, channel_strategy: CHANNEL_STRATEGY = CHANNEL_STRATEGY.trivial) -> spa.Kernel:
+        """Generates routing blocks, possibly splitting and restructuring the kernel blocks
+
+        Args:
+            kernel (spa.Kernel): _description_
+
+        Returns:
+            spa.Kernel: _description_
+        """
+        if channel_strategy.name != CHANNEL_STRATEGY.none.name:
+            kernel = self.split_blocks(kernel)
+        
+        # Gather the stream declarations
+        stream_visitor = StreamVisitor()
+        stream_visitor.visit(kernel)
+        
+        # Trivial Coloring
+        channel_map: dict[spa.Identifier, int] = dict()
+        hops_map: dict[str, list[tuple[int, int]]] = dict()
+
+        if channel_strategy.name == CHANNEL_STRATEGY.trivial.name:
+            color = 0
+            for stream in stream_visitor.streams.keys():
+                channel_map[stream] = color
+                color += 1
+                
+        for stream in stream_visitor.streams.keys():
+            if stream not in hops_map:
+                hops_map[stream] = self._shortest_path_routing(stream_visitor.streams[stream].dx.eval(),
+                                                               stream_visitor.streams[stream].dy.eval())
+            
+        routing_trans = StreamRoutingTransformer(channel_map, hops_map)
+        routing_trans.visit(kernel)
+        
+        return kernel
+    
+    
+    @staticmethod
+    def _shortest_path_routing(dx: int, dy: int) -> list[spa.RoutingHop]:
+
+        if dx > 0:
+            result = [spa.RoutingHop((1, 0)) for _ in range(dx)]
+        else:
+            result = [spa.RoutingHop((-1, 0)) for _ in range(-dx)]
+
+        if dy > 0:
+            result.extend([spa.RoutingHop((0, 1)) for _ in range(dy)])
+        else:
+            result.extend([spa.RoutingHop((0, -1)) for _ in range(-dy)])
+
+        return result
+
+
+class StreamRoutingTransformer(spa.NodeTransformer):
+    channel_map: dict[spa.Identifier, int] = dict()
+    hops_map: dict[str, list[tuple[int, int]]] = dict()
+
+    def __init__(self, channel_map: dict, hops_map: dict):
+        super().__init__()
+        self.channel_map = channel_map
+        self.hops_map = hops_map
+        
+    def visit_RelativeStreamDeclaration(self, stmt: spa.RelativeStreamDeclaration):
+        
+        routing = spa.RoutingDeclaration(
+            hops = copy.deepcopy(self.hops_map[stmt.stream_name]),
+            channel = self.channel_map[stmt.stream_name] if stmt.stream_name in self.channel_map else 'auto'
+        )
+        
+        stmt.routing = routing
+        return stmt
+    
+
+class StreamVisitor(spa.NodeVisitor):
+    
+    streams: dict[spa.Identifier, spa.RelativeStreamDeclaration]
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.streams = dict()
+        
+    def visit_RelativeStreamDeclaration(self, stmt: spa.RelativeStreamDeclaration):
+        if stmt.stream_name not in self.streams:
+            self.streams[stmt.stream_name] = stmt
+
 
 class DxDyVisitor(spa.NodeVisitor):
     

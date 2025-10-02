@@ -1,10 +1,10 @@
 import copy
 
-from spatialstencil.lowering.stenticl_to_spatial_coloring import KernelColoring
+from spatialstencil.lowering.stenticl_to_spatial_coloring import KernelRouting
 import spatialstencil.syntax.stencil_ir.irnodes as sast
 import spatialstencil.syntax.spatial_ir.irnodes as spa
 from spatialstencil.lowering.stencil_to_spatial_compute import ProgramCompute, AbstractStatement
-from spatialstencil.lowering.stencil_to_spatial_dataflow import ProgramDataflow
+from spatialstencil.lowering.stencil_to_spatial_dataflow import CHANNEL_STRATEGY, ProgramDataflow
 from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
 
 from spatialstencil.lowering.versioning import Versioning
@@ -18,7 +18,7 @@ from spatialstencil.syntax.stencil_ir.refactor_forward_backward_stencils import 
 from spatialstencil.syntax.stencil_ir.type_inference import infer_scalar_types, infer_types
 from spatialstencil.syntax.stencil_ir.ssa import SSAVisitor
 
-def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
+def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: CHANNEL_STRATEGY = CHANNEL_STRATEGY.trivial) -> spa.Kernel:
     """Lower a stencil to a spatial program.
 
     Args:
@@ -82,8 +82,8 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
     # Pass that applies rectangle splitting to all phases across block types
     kernel = canonicalize_subgrids(kernel)
     
-    coloring = KernelColoring(versioning)
-    kernel = coloring.split_blocks(kernel)
+    coloring = KernelRouting(versioning)
+    kernel = coloring.generate_routing(kernel, channel_strategy)
 
     return kernel
 
