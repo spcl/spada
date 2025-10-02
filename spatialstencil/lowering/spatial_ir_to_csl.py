@@ -173,6 +173,9 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
         layout_code.write(
             f'    @export_name("{argument.identifier.name}", {dtype_as_csl(argument.dtype, export=True)}, true);\n')
 
+    # Generate benchmarking code
+    _generate_benchmarking_code_in_layout(layout_code)
+
     layout_code.write(f'''
     // Kernel
     @export_name("{kernel.name}", fn({", ".join(scalar_argument_types)})void);
@@ -284,6 +287,9 @@ task exit_task() void {{
     // On completion, unblock command stream
     sys_mod.unblock_cmd_stream();
 }}''')
+
+    # Write benchmarking code
+    _generate_benchmarking_code(header, current_code, footer)
 
     # Finalize footer
     footer.write(f'''
@@ -990,6 +996,56 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
                 current_code.write(f'    @activate({task_id});\n')
             elif itedge == tdag.InterTaskEdge.UNBLOCK:
                 current_code.write(f'    @unblock({task_id});\n')
+
+
+def _generate_benchmarking_code(header: StringIO, current_code: StringIO, footer: StringIO):
+    """
+    Generates benchmarking code in the header, current code, and footer.
+    
+    :param header: A code generator stream for a file's header (where the declarations are).
+    :param current_code: The caret to the code generator at the current position (global).
+    :param footer: A code generator stream for a file's footer (the comptime block where the array would be exported).
+    """
+    # Generate tsc counters, functions, and imports in header
+    header.write("""// Benchmarking counters
+const timestamp = @import_module("<time>");
+var __benchmark_start = @zeros([3]u16);
+var __benchmark_start_ptr = &__benchmark_start;
+var __benchmark_stop = @zeros([3]u16);
+var __benchmark_stop_ptr = &__benchmark_stop;
+
+fn f_tic() void {
+    timestamp.enable_tsc();
+    timestamp.get_timestamp(&__benchmark_start);
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_toc() void {
+      timestamp.get_timestamp(&__benchmark_stop);
+      timestamp.disable_tsc();
+      sys_mod.unblock_cmd_stream();
+}""")
+
+    # Generate exports for function names and counters in footer
+    footer.write('\n    // Benchmarking exports\n')
+    footer.write('    @export_symbol(f_tic);\n')
+    footer.write('    @export_symbol(f_toc);\n')
+    footer.write('    @export_symbol(__benchmark_start_ptr, "__benchmark_start");\n')
+    footer.write('    @export_symbol(__benchmark_stop_ptr, "__benchmark_stop");\n')
+
+
+def _generate_benchmarking_code_in_layout(layout_code: StringIO):
+    """
+    Generates benchmarking code in the layout file's footer.
+
+    :param layout_code: A code generator stream for the layout code block.
+    """
+    # Generate exports for function names and counters in layout block
+    layout_code.write('\n    // Benchmarking exports\n')
+    layout_code.write('    @export_name("f_tic", fn()void);\n')
+    layout_code.write('    @export_name("f_toc", fn()void);\n')
+    layout_code.write('    @export_name("__benchmark_start", *[3]u16,  true);\n')
+    layout_code.write('    @export_name("__benchmark_stop", *[3]u16,  true);\n')
 
 
 def _collect_identifier_types(rect: PEBlock,
