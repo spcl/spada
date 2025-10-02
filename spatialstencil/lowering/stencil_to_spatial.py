@@ -1,6 +1,6 @@
 import copy
 
-from spatialstencil.lowering.stenticl_to_spatial_coloring import KernelRouting
+from spatialstencil.lowering.stencil_to_spatial_routing import KernelRouting
 import spatialstencil.syntax.stencil_ir.irnodes as sast
 import spatialstencil.syntax.spatial_ir.irnodes as spa
 from spatialstencil.lowering.stencil_to_spatial_compute import ProgramCompute, AbstractStatement
