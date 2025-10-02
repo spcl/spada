@@ -253,6 +253,10 @@ class Program:
             self.runtime.run()
             print("done.", flush=True)
 
+            if self.benchmark:
+                if self.runtime.get_id("f_tic") is None or self.runtime.get_id("f_toc") is None:
+                    raise ValueError("Benchmarking requested but not enabled in the program.")
+
             if not self.metadata.memcpy_mode and self.benchmark:
                 self.runtime.launch("f_tic", nonblock=False)
 

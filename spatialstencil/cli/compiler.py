@@ -14,8 +14,9 @@ import subprocess
 @click.option('--offset-x', '-x', default=0, type=int, help='Offset for rectangular region in x direction')
 @click.option('--offset-y', '-y', default=0, type=int, help='Offset for rectangular region in y direction')
 @click.option('--generate-only', '-g', is_flag=True, help='Only generate the output files without compiling them')
+@click.option('--disable-benchmarking', is_flag=True, help='Disable benchmarking code generation (and memory overhead)')
 def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], offset_x: int, offset_y: int,
-                       generate_only: bool):
+                       generate_only: bool, disable_benchmarking: bool):
     # Parse parameters into dictionary
     kernel_parameters = {}
     for p in param:
@@ -75,7 +76,7 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         using_memcpy_mode = False
 
     # Lower the spatial IR to CSL
-    csl_files = s2c.lower_spatial_ir_to_csl(kernel)
+    csl_files = s2c.lower_spatial_ir_to_csl(kernel, disable_benchmarking=disable_benchmarking)
 
     # Create output folder if it doesn't exist
     os.makedirs(output_folder, exist_ok=True)

@@ -15,12 +15,16 @@ from spatialstencil.syntax.csl.statements import name_to_csl, dtype_as_csl, expr
 UniqueDSDDict = dict[str, list[tuple[str, cslstruct.DataStructureDescriptor]]]
 
 
-def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = (0, 0)) -> list[CodeFile]:
+def lower_spatial_ir_to_csl(kernel: spir.Kernel,
+                            rect_offset: tuple[int, int] = (0, 0),
+                            disable_benchmarking: bool = False) -> list[CodeFile]:
     """
     Lowers a routed Spatial IR kernel into Cerebras CSL code.
 
     :param kernel: The Spatial IR kernel to lower.
     :param rect_offset: The offset of the output rectangle to use.
+    :param disable_benchmarking: If True, disables benchmarking code generation (and memory overhead).
+                                 Use in memory-limited scenarios.
     :return: List of code-file objects that can be written to files. See ``write_code_to_files``.
     """
     # PRECONDITION: Rectangles of dataflow/compute/place do not intersect (comes from Spatial IR)
@@ -73,7 +77,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
         # Create a unique CSL code file based on rectangle offset
         csl_name = f'code_{rect.x_range[0]}_{rect.y_range[0]}.csl'
         rect_code, color_map = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode,
-                                                  stream_rects)
+                                                  stream_rects, disable_benchmarking)
         color_maps.append(color_map)
         csl_codes.append(CodeFile(csl_name, rect_code))
 
@@ -174,7 +178,8 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
             f'    @export_name("{argument.identifier.name}", {dtype_as_csl(argument.dtype, export=True)}, true);\n')
 
     # Generate benchmarking code
-    _generate_benchmarking_code_in_layout(layout_code)
+    if not disable_benchmarking:
+        _generate_benchmarking_code_in_layout(layout_code)
 
     layout_code.write(f'''
     // Kernel
@@ -186,9 +191,13 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
     return csl_codes
 
 
-def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_instructions: list[str],
-                       scalar_arguments: list[str], use_memcpy_mode: bool,
-                       stream_extents: analysis.StreamExtents) -> tuple[str, dict[str, int]]:
+def generate_rectangle(kernel: spir.Kernel,
+                       rect: Rectangle[PEBlock],
+                       routing_instructions: list[str],
+                       scalar_arguments: list[str],
+                       use_memcpy_mode: bool,
+                       stream_extents: analysis.StreamExtents,
+                       disable_benchmarking: bool = False) -> tuple[str, dict[str, int]]:
     # Code generation carets
     header = StringIO()
     current_code = StringIO()
@@ -289,7 +298,8 @@ task exit_task() void {{
 }}''')
 
     # Write benchmarking code
-    _generate_benchmarking_code(header, current_code, footer)
+    if not disable_benchmarking:
+        _generate_benchmarking_code(header, current_code, footer)
 
     # Finalize footer
     footer.write(f'''
