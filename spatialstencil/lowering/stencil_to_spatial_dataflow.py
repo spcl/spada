@@ -44,7 +44,7 @@ class ProgramDataflow:
                  domain_shift: tuple,
                  versioning: Versioning[spa.Identifier],
                  grid_var_type: ScalarType = ScalarType.u16, 
-                 channel_strategy: CHANNEL_STRATEGY = CHANNEL_STRATEGY.trivial):
+                 channel_strategy: CHANNEL_STRATEGY = CHANNEL_STRATEGY.none):
         self.versioning = versioning
         self.domain_shift = domain_shift
         self._stream_map = defaultdict(lambda: defaultdict(dict))

@@ -1,5 +1,6 @@
 import copy
 
+from spatialstencil.lowering.stenticl_to_spatial_coloring import KernelColoring
 import spatialstencil.syntax.stencil_ir.irnodes as sast
 import spatialstencil.syntax.spatial_ir.irnodes as spa
 from spatialstencil.lowering.stencil_to_spatial_compute import ProgramCompute, AbstractStatement
@@ -80,6 +81,9 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
 
     # Pass that applies rectangle splitting to all phases across block types
     kernel = canonicalize_subgrids(kernel)
+    
+    coloring = KernelColoring(versioning)
+    kernel = coloring.split_blocks(kernel)
 
     return kernel
 
