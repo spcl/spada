@@ -2,6 +2,8 @@ import unittest
 from pathlib import Path
 from typing import Tuple
 
+import pytest
+
 from spatialstencil.lowering.stencil_to_spatial_compute import HorizontalStencilTransformer
 from spatialstencil.lowering.stencil_to_spatial_dataflow import CHANNEL_STRATEGY, ProgramDataflow
 from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
@@ -83,7 +85,31 @@ def test_lowering_finishes():
         assert subgrids_dont_overlap(spatial_program)
         assert len(spatial_program.as_ir())
 
+@pytest.mark.skip(reason="Multiple returns are unsupported for now")
+def test_lowering_finishes():
+    # For every file, run the parser, infer_extents, infer_domains,
+    # lower_stencil_to_spatial, and print the result
+    # This a basic check that the lowering finishes without errors
 
+    files = [
+        Path(__file__).parent / Path('../../samples/spst/multiple_returns_ext.spst'),
+    ]
+
+    for file in files:
+        with open(file, 'r') as f:
+            program = parser.parse_file(f)
+
+        print(f"Lowering {file.name}")
+        type_inference.infer_field_extents(program)
+        domain = Cartesian(x=Interval(0, 128), y=Interval(0, 128), z=Interval(0, 80))
+        type_inference.infer_field_domains(program, domain)
+
+        spatial_program = lower_stencil_to_spatial(program, CHANNEL_STRATEGY.none)
+
+        assert subgrids_dont_overlap(spatial_program)
+        assert len(spatial_program.as_ir())
+        
+        
 def test_horizontal_stencil_transformer():
 
     versioning = Versioning[Identifier](Identifier.__class__)
