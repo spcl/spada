@@ -391,7 +391,7 @@ def _collect_colors_globally(kernel: spir.Kernel, rectangles: list[Rectangle[PEB
         if channel in channel_is_read:
             if channel not in channel_to_color:
                 channel_to_color[channel] = csl.COLORS[color_offset]
-            color_offset += 1
+                color_offset += 1
 
     return channel_to_color
 
