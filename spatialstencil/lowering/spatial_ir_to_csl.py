@@ -232,6 +232,10 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     _collect_and_generate_fields(rect.metadata.place, header, footer, kernel, use_memcpy_mode)
     dtypes = _collect_identifier_types(rect.metadata, kernel.arguments)
 
+    # Preprocess potential data tasks to convert to loops if possible
+    if use_memcpy_mode:
+        canonicalization.convert_foreach_data_tasks_to_loops(rect, dtypes, kernel.arguments)
+
     # Convert compute block subgraphs into tasks:
     #    * Make task DAG out of computations
     #    * Any node that has two or more incoming edges (i.e., requires wait) initiates a new task
@@ -679,9 +683,13 @@ def _collect_unique_dsds(
                 if extents is not None:  # Use buffer size
                     extents = extents if isinstance(extents, int) else extents.eval()
                 else:  # Infer from receive count
-                    extents = functools.reduce(
-                        lambda a, b: a * b,
-                        [s.eval() if not isinstance(s, int) else s for s in dtypes[stmt.local_array].shape], 1)
+                    if isinstance(dtypes[stmt.local_array], spir.ScalarType):
+                        # Scalar receive
+                        extents = 1
+                    else:
+                        extents = functools.reduce(
+                            lambda a, b: a * b,
+                            [s.eval() if not isinstance(s, int) else s for s in dtypes[stmt.local_array].shape], 1)
                 fabric_color = f'{name_to_csl(stream_name)}_color'
                 dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
                                           csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)])
@@ -694,9 +702,13 @@ def _collect_unique_dsds(
                 if extents is not None:  # Use buffer size
                     extents = extents if isinstance(extents, int) else extents.eval()
                 else:  # Infer from send count
-                    extents = functools.reduce(
-                        lambda a, b: a * b,
-                        [s.eval() if not isinstance(s, int) else s for s in dtypes[stmt.local_array].shape], 1)
+                    if isinstance(dtypes[stmt.local_array], spir.ScalarType):
+                        # Scalar send
+                        extents = 1
+                    else:
+                        extents = functools.reduce(
+                            lambda a, b: a * b,
+                            [s.eval() if not isinstance(s, int) else s for s in dtypes[stmt.local_array].shape], 1)
                 fabric_color = f'{name_to_csl(stream_name)}_color'
                 dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
                                           csl.OUTPUT_QUEUE_IDS[output_queue_id_ctr % len(csl.OUTPUT_QUEUE_IDS)])

@@ -376,3 +376,71 @@ def remove_memcpy_stream_operators(kernel: spir.Kernel, rectangles: list[Rectang
     #              argument with its internal name.
     for rect in rectangles:
         rect.metadata.compute = _MemCpyStreamOperatorRemover(stream_args).visit(rect.metadata.compute)
+
+
+class _ForeachDataTaskToLoopConverter(spir.NodeTransformer):
+
+    def __init__(self, dtypes: dict[spir.Identifier, spir.IRType], kernel_arguments: list[spir.KernelArgument]):
+        super().__init__()
+        self.dtypes = dtypes
+        self.kernel_arguments = set(k.identifier for k in kernel_arguments)
+
+    def visit_ForeachStatement(self, node: spir.ForeachStatement):
+        from spatialstencil.syntax.csl import dsd_ops
+        if dsd_ops._get_id(node.receive_stream.stream_name) not in self.kernel_arguments:
+            return self.generic_visit(node)
+        if dsd_ops.get_dsd_op(self.dtypes, node) is not None:
+            return self.generic_visit(node)
+
+        body_statements = [self.visit(stmt) for stmt in node.body]
+        loop_variables = [copy.deepcopy(var) for var in node.variables]
+        loop_ranges = [copy.deepcopy(rng) for rng in node.parameter_range]
+        stream_target = copy.deepcopy(node.receive_stream.stream_name)
+        if loop_ranges:
+            index_exprs = []
+            for var in loop_variables:
+                idx_identifier = copy.deepcopy(var.identifier)
+                index_expr = spir.Expression(idx_identifier)
+                index_expr.lineinfo = getattr(idx_identifier, 'lineinfo', node.lineinfo)
+                index_exprs.append(index_expr)
+
+            if isinstance(stream_target, spir.ArraySlice):
+                stream_target.indices.extend(index_exprs)
+            elif isinstance(stream_target, spir.Identifier):
+                stream_target = spir.ArraySlice(stream_target, index_exprs)
+            else:
+                raise TypeError(
+                    f'Unsupported stream target type "{type(stream_target).__name__}" in foreach to loop conversion')
+
+        stream_target.lineinfo = getattr(stream_target, 'lineinfo', node.lineinfo)
+
+        receive_destination = copy.deepcopy(node.stream_variable.identifier)
+        receive_destination.lineinfo = getattr(receive_destination, 'lineinfo', node.lineinfo)
+        receive_statement = spir.ReceiveStatement(receive_destination, stream_target)
+        receive_statement.lineinfo = node.lineinfo
+
+        loop_body = [receive_statement] + body_statements
+
+        loop_statement = spir.ForStatement(loop_variables, loop_ranges, loop_body)
+        loop_statement.lineinfo = node.lineinfo
+
+        # If the foreach was running asynchronously, wrap the loop in an async block
+        if node.completion_name is not None:
+            async_block = spir.AsyncBlock(copy.deepcopy(node.completion_name), [loop_statement])
+            async_block.lineinfo = node.lineinfo
+            return async_block
+
+        return loop_statement
+
+
+def convert_foreach_data_tasks_to_loops(rect: Rectangle[PEBlock], dtypes: dict[spir.Identifier, spir.IRType],
+                                        kernel_arguments: list[spir.KernelArgument]) -> None:
+    """
+    Converts foreach blocks on input arguments to (async) loop blocks in memcpy mode.
+    This pass is performed because memcpy mode will already copy the memory in and out outside the kernel code.
+
+    :param rect: A single PE block rectangle to modify.
+    :param dtypes: A mapping of identifier to its type in the given rectangle.
+    :param kernel_arguments: The list of kernel arguments, used to determine which identifiers are arguments.
+    """
+    rect.metadata.compute = _ForeachDataTaskToLoopConverter(dtypes, kernel_arguments).visit(rect.metadata.compute)

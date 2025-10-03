@@ -872,7 +872,8 @@ def test_map_lowering_to_for_loop(multidimensional):
 
 
 @pytest.mark.parametrize('streaming', [False, True])
-def test_foreach_with_parameter_range(streaming):
+@pytest.mark.parametrize('asynchronous', [False, True])
+def test_foreach_with_parameter_range(streaming, asynchronous):
     """Test foreach with parameter range (variant 1)."""
     suffix = ', 4' if not streaming else ''
     spatial_ir_code = f'''
@@ -883,9 +884,10 @@ def test_foreach_with_parameter_range(streaming):
         compute u16 i, u16 j in [0:N, 0:1] {{
             accumulator = 0.0;
 
-            await foreach u16 k, f32 value in [0:4], receive(input[i]) {{
+            {'completion c = ' if asynchronous else 'await'} foreach u16 k, f32 value in [0:4], receive(input[i]) {{
                 accumulator = accumulator + value;
             }};
+            {'await c;' if asynchronous else ''}
         }}
     }}
     '''
@@ -900,13 +902,22 @@ def test_foreach_with_parameter_range(streaming):
     assert len(csl_files) > 0
 
     # Look for data task operations
-    data_task_found = False
-    for f in csl_files:
-        if 'data_task' in f.code and 'accumulator + value' in f.code and '4' in f.code:
-            data_task_found = True
-            break
+    if streaming:
+        data_task_found = False
+        for f in csl_files:
+            if 'data_task' in f.code and 'accumulator + value' in f.code and '4' in f.code:
+                data_task_found = True
+                break
 
-    assert data_task_found, "Expected data task operations not found in generated CSL"
+        assert data_task_found, "Expected data task operations not found in generated CSL"
+    else:
+        loop_found = False
+        for f in csl_files:
+            if 'for' in f.code and 'accumulator + value' in f.code and 'input[k]' in f.code:
+                loop_found = True
+                break
+
+        assert loop_found, "Expected for loop operations not found in generated CSL"
 
 
 def test_foreach_without_parameter_range():
@@ -1013,8 +1024,10 @@ if __name__ == '__main__':
     test_map_lifting_to_dsd_op(True)
     test_map_lowering_to_for_loop(False)
     test_map_lowering_to_for_loop(True)
-    test_foreach_with_parameter_range(False)
-    test_foreach_with_parameter_range(True)
+    test_foreach_with_parameter_range(False, False)
+    test_foreach_with_parameter_range(False, True)
+    test_foreach_with_parameter_range(True, False)
+    test_foreach_with_parameter_range(True, True)
     test_foreach_without_parameter_range()
     test_foreach_lifting_to_dsd_op(False)
     test_foreach_lifting_to_dsd_op(True)

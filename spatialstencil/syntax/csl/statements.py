@@ -93,14 +93,34 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice, destination: spir.Ident
 
     # One element copy
     if src_identifier.as_ir() not in dsds or dst_identifier.as_ir() not in dsds:
-        if isinstance(dtypes[src_identifier], spir.ArrayType):
-            src_expr = src_identifier.as_ir() + '[0]'
-        else:
-            src_expr = src_identifier.as_ir()
-        if isinstance(dtypes[dst_identifier], spir.ArrayType):
-            dst_expr = dst_identifier.as_ir() + '[0]'
-        else:
-            dst_expr = dst_identifier.as_ir()
+
+        def _format_indexed_access(value: spir.Identifier | spir.ArraySlice, identifier: spir.Identifier) -> str:
+            dtype = dtypes.get(identifier)
+            if isinstance(dtype, spir.ArrayType):
+                dims_to_ignore = len(dtype.shape)
+            else:
+                dims_to_ignore = 0
+            if isinstance(value, spir.ArraySlice):
+                indices: list[str] = []
+                for idx in value.indices[dims_to_ignore:]:
+                    if isinstance(idx, spir.Expression):
+                        indices.append(emit_expression(idx, dsds, dtypes))
+                    elif isinstance(idx, spir.RangeExpression):
+                        indices.append(idx.as_ir())
+                    else:
+                        indices.append(str(idx))
+                if not indices and isinstance(dtype, spir.ArrayType):
+                    indices = ['0']
+                if indices:
+                    return f"{identifier.as_ir()}[{', '.join(indices)}]"
+                return identifier.as_ir()
+
+            if isinstance(dtype, spir.ArrayType):
+                return f"{identifier.as_ir()}[0]"
+            return identifier.as_ir()
+
+        src_expr = _format_indexed_access(source, src_identifier)
+        dst_expr = _format_indexed_access(destination, dst_identifier)
         return f"{dst_expr} = {src_expr};"
 
     # Get the DSD operation for the copy operation
