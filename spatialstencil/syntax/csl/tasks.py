@@ -294,8 +294,11 @@ def create_csl_tasks(completion_dag: nx.DiGraph, block: spir.ComputeBlock, dtype
         if task.statements[-1] != "TERMINATOR" and task.outgoing[-1][0] != -1:
             task.statements.append("TERMINATOR")
             task.outgoing.append((-1, InterTaskEdge.ACTIVATE if i == 0 else InterTaskEdge.UNBLOCK))
-        elif task.outgoing[-1][0] == -1 and i != 0:  # Modify existing UNBLOCK edge if there is more than one sink
-            task.outgoing[-1] = (-1, InterTaskEdge.UNBLOCK)
+        elif task.outgoing[-1][0] == -1:  # Modify existing UNBLOCK edge if there is more than one sink
+            if i == 0 and task.outgoing[-1][1] != InterTaskEdge.ACTIVATE:
+                task.outgoing[-1] = (-1, InterTaskEdge.ACTIVATE)
+            elif i != 0:
+                task.outgoing[-1] = (-1, InterTaskEdge.UNBLOCK)
 
     return result
 
