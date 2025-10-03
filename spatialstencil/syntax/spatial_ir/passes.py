@@ -150,7 +150,7 @@ def mark_readonly_writeonly_arguments(kernel: spa.Kernel) -> spa.Kernel:
     """Marks readonly and writeonly arguments based on their usage in the kernel. Modifies the kernel in place and returns it.
     """
     
-    visitor = ArgumnetUseVisitor()
+    visitor = ArgumentUseVisitor()
     visitor.visit(kernel)
     
     readonly = visitor.get_readonly_arguments()
