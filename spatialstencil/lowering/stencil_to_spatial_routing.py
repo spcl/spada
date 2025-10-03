@@ -3,6 +3,7 @@ import copy
 from enum import Enum, auto
 from spatialstencil.lowering.versioning import Versioning
 import spatialstencil.syntax.spatial_ir.irnodes as spa
+from spatialstencil.syntax.spatial_ir.canonicalization import canonicalize_phases, inline_phases
 
 class CHANNEL_STRATEGY(Enum):
     none = auto()
@@ -45,8 +46,9 @@ class KernelRouting:
 
         transformer = SplitTransformer(active_dimensions, self.versioning)
         
-        # Sort the kernel to ensure we visit compute blocks last
-        # TODO
+        # Canonicalize: Implicitly sorts the kernel to ensure we visit compute blocks last
+        kernel = canonicalize_phases(kernel)
+        kernel = inline_phases(kernel)
         
         # Split the kernel in preparation for coloring
         transformed_kernel = transformer.visit(kernel)
@@ -154,6 +156,11 @@ class DxDyVisitor(spa.NodeVisitor):
         self.max_dy = max(self.max_dy, abs(s.dy.eval()))
     
 class SplitTransformer(spa.NodeTransformer):
+    """
+    Splits the blocks of a kernel according to a checkerboard pattern.
+    Each active dimension is split in 2.
+    This results in 1, 2, or 4 blocks.
+    """
     
     ## Keep track of the mapping from original stream names to their split streams (even & odd stream)
     stream_map: dict[spa.Identifier, list[spa.RelativeStreamDeclaration]]
