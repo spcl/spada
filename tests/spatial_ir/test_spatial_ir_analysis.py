@@ -136,6 +136,7 @@ def test_limit_indegree():
     topo_after = [n for n in nx.topological_sort(dag) if n.statement_id >= 0]
     assert topo_before == topo_after  # Approximate path preservation assertion
 
+
 @pytest.mark.parametrize('strided', (False, True))
 def test_detect_stream_argument_extents_1d_subset(strided):
     """
@@ -264,6 +265,8 @@ def test_detect_stream_argument_extents_matching_indices():
     # Each stream should have exactly one rectangle extent
     assert len(stream_extents.extents[a_identifier]) == 1
     assert len(stream_extents.extents[out_identifier]) == 1
+    assert stream_extents.is_transposed[a_identifier] is False
+    assert stream_extents.is_transposed[out_identifier] is False
 
     # The rectangle should be [0:10, 0:10] after concretization
     rect_a = stream_extents.extents[a_identifier][0]
@@ -280,7 +283,7 @@ def test_detect_stream_argument_extents_matching_indices():
     assert rect_out.metadata.compute is not None
 
 
-def test_detect_stream_argument_extents_array_slice_mismatch():
+def test_detect_stream_argument_extents_array_slice_transposed():
     """
     Test detect_stream_argument_extents raises an error when array slice indices 
     don't match compute block variables in the correct order.
@@ -291,7 +294,7 @@ def test_detect_stream_argument_extents_array_slice_mismatch():
             f32 local_a;
         }
         compute u16 i, u16 j in [0:N, 0:N] {
-            await receive(local_a, a[j, i]);  // Using 'j, i' instead of 'i, j' - should cause mismatch
+            await receive(local_a, a[j, i]);  // Using 'j, i' instead of 'i, j'
             await send(local_a, out[i, j]);
         }
     }
@@ -307,8 +310,40 @@ def test_detect_stream_argument_extents_array_slice_mismatch():
     # Create rectangles from the processed kernel
     rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
 
-    # This should raise a ValueError due to index mismatch
-    with pytest.raises(ValueError, match="index order"):
+    extents = analysis.detect_stream_argument_extents(rectangles, kernel)
+    assert extents.is_transposed[spa.Identifier('a', 0)] is True
+    assert extents.is_transposed[spa.Identifier('out', 0)] is False
+
+
+def test_detect_stream_argument_extents_array_slice_mismatch():
+    """
+    Test detect_stream_argument_extents raises an error when array slice indices 
+    don't match compute block variables in the correct order.
+    """
+    ir = '''
+    kernel @test<N>(stream<f32>[N, N] readonly a, stream<f32>[N, N] writeonly out) {
+        place u16 i, u16 j in [0:N, 0:N] {
+            f32 local_a;
+        }
+        compute u16 i, u16 j in [0:N, 0:N] {
+            await receive(local_a, a[j, i]);  // Using both 'j, i' and 'i, j' - should cause mismatch
+            await receive(local_a, a[i, j]);
+            await send(local_a, out[i, j]);
+        }
+    }
+    '''
+    kernel = parser.parse_string(ir)
+
+    # Concretize the parameter N to a concrete value
+    kernel = passes.concretize_parameters(kernel, N=10)
+
+    kernel = canonicalization.canonicalize_phases(kernel)
+    kernel = canonicalization.inline_phases(kernel)
+
+    # Create rectangles from the processed kernel
+    rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+
+    with pytest.raises(ValueError, match="multiple index orders"):
         analysis.detect_stream_argument_extents(rectangles, kernel)
 
 
@@ -445,7 +480,7 @@ def test_detect_stream_argument_extents_subset_rectangle(bad_broadcast):
 def test_detect_stream_argument_extents_disjoint_rectangles():
     """
     Test detect_stream_argument_extents with disjoint rectangles for the same stream argument.
-    This should raise a ValueError when proper validation is implemented.
+    Because of the indexing, the analysis should still detect the full extent ``[0:1, 0:10]``.
     """
     ir = '''
     kernel @test<>(stream<f32>[10] readonly a, stream<f32>[10] writeonly out) {
@@ -462,6 +497,62 @@ def test_detect_stream_argument_extents_disjoint_rectangles():
         compute u16 i, u16 j in [0:1, 8:10] {
             await receive(local_a2, a[j]);
             await send(local_a2, out[j]);
+        }
+    }
+    '''
+    kernel = parser.parse_string(ir)
+
+    kernel = canonicalization.canonicalize_phases(kernel)
+    kernel = canonicalization.inline_phases(kernel)
+
+    # Create rectangles from the processed kernel
+    rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+
+    stream_extents = analysis.detect_stream_argument_extents(rectangles, kernel)
+
+    # Verify that stream arguments are detected correctly
+    assert len(stream_extents.extents) == 2
+
+    # Check stream identifiers
+    a_identifier = spa.Identifier('a', 0)
+    out_identifier = spa.Identifier('out', 0)
+
+    assert a_identifier in stream_extents.extents
+    assert out_identifier in stream_extents.extents
+
+    # 'a' stream should be used in [0:5, 0:10] rectangle
+    assert len(stream_extents.extents[a_identifier]) == 1
+    rect_a = stream_extents.extents[a_identifier][0]
+    assert rect_a.x_range == (0, 1, 1)
+    assert rect_a.y_range == (0, 10, 1)
+
+    # 'out' stream should be used in [0:5, 0:10] rectangle
+    assert len(stream_extents.extents[out_identifier]) == 1
+    out_rect = stream_extents.extents[out_identifier][0]
+    assert out_rect.x_range == (0, 1, 1)
+    assert out_rect.y_range == (0, 10, 1)
+
+
+def test_detect_stream_argument_extents_disjoint_rectangles_multidim():
+    """
+    Test detect_stream_argument_extents with disjoint rectangles for the same stream argument.
+    This test should fail because the rectangles cannot be reconciled into a single extent.
+    """
+    ir = '''
+    kernel @test<>(stream<f32>[15, 10] readonly a, stream<f32>[10, 10] writeonly out) {
+        place u16 i, u16 j in [0:10, 0:5] {
+            f32 local_a;
+        }
+        compute u16 i, u16 j in [0:10, 0:5] {
+            await receive(local_a, a[i, j]);
+            await send(local_a, out[i, j]);
+        }
+        place u16 i, u16 j in [15:20, 8:10] {
+            f32 local_a2;
+        }
+        compute u16 i, u16 j in [15:20, 8:10] {
+            await receive(local_a2, a[i, j]);
+            await send(local_a2, out[i, j]);
         }
     }
     '''
@@ -578,6 +669,130 @@ def test_detect_stream_argument_extents_adjacent_rectangles_union():
     assert rect_out.metadata.compute is not None
 
 
+def test_two_stream_argument_rectangles():
+    """
+    Stress test for shifted index expressions sharing the same compute block.
+    1. ``a[i - 1, j - 2]`` is accessed within [5:10, 7:12] -> effective extent [4:9, 5:10].
+    2. ``b[i - 5, j - 7]`` spans multiple rectangles that must unify into [5:10, 5:15].
+    3. ``c[i + 1, j + 2]`` extends beyond the original rectangle and is also used elsewhere.
+    4. ``extra[i + 8, j + 8]`` demonstrates arrays larger than the compute rectangle itself.
+    5. ``out[i - 1, j - 2]`` mirrors ``a`` and should report the same extent.
+    """
+    ir = '''
+    kernel @test<>(
+        stream<f32>[10, 10] readonly a,
+        stream<f32>[16, 16] readonly b,
+        stream<f32>[10, 10] readonly c,
+        stream<f32>[16, 16] writeonly out) {
+        place u16 i, u16 j in [5:10, 7:12] {
+            f32 local_a;
+            f32 local_b;
+            f32 local_c;
+            f32 local_out;
+        }
+        compute u16 i, u16 j in [5:10, 7:12] {
+            // a[4, 5] is defined in (5,7) -> a[0, 0] is defined in (1,2) -> extent has to be (1:11, 2:12)
+            await receive(local_a, a[i - 1, j - 2]);
+            // b[0, 0] is defined in (5,7) -> extent has to be (5:21, 7:23)
+            await receive(local_b, b[i - 5, j - 7]);
+            // c[6, 9] is defined in (5,7) -> c[0, 0] is defined in (-1, -2) -> extent has to be (-1:9, -2:8)
+            await receive(local_c, c[i + 1, j + 2]);
+            local_out = local_a + local_b;
+            local_out = local_out + local_c;
+            await send(local_out, out[i - 1, j - 2]);
+        }
+        place u16 i, u16 j in [5:10, 13:15] {
+            f32 local_b2;
+        }
+        compute u16 i, u16 j in [5:10, 13:15] {
+            await receive(local_b2, b[i - 5, j - 13]);
+        }
+    }
+    '''
+    kernel = parser.parse_string(ir)
+
+    kernel = passes.concretize_parameters(kernel)
+    kernel = canonicalization.canonicalize_phases(kernel)
+    kernel = canonicalization.inline_phases(kernel)
+
+    rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    stream_extents = analysis.detect_stream_argument_extents(rectangles, kernel)
+
+    assert len(stream_extents.extents) == 4
+
+    a_identifier = spa.Identifier('a', 0)
+    b_identifier = spa.Identifier('b', 0)
+    c_identifier = spa.Identifier('c', 0)
+    out_identifier = spa.Identifier('out', 0)
+
+    expectations = {
+        a_identifier: ((1, 11, 1), (2, 12, 1)),
+        b_identifier: ((5, 21, 1), (7, 23, 1)),
+        c_identifier: ((-1, 9, 1), (-2, 8, 1)),
+        out_identifier: ((1, 17, 1), (2, 18, 1)),
+    }
+
+    for identifier, (expected_x, expected_y) in expectations.items():
+        assert identifier in stream_extents.extents
+        assert len(stream_extents.extents[identifier]) == 1
+        rect = stream_extents.extents[identifier][0]
+        assert rect.x_range == expected_x
+        assert rect.y_range == expected_y
+        assert stream_extents.is_transposed[identifier] is False
+
+
+@pytest.mark.parametrize('shifted', (False, True))
+def test_transposed_stream_extents(shifted):
+    """
+    Tests detection of transposed mappings between arrays and PEs.
+    """
+    i_start = 0 if not shifted else 3
+    i_end = i_start + 4
+    j_start = 0 if not shifted else 5
+    j_end = j_start + 5
+
+    ir = f'''
+    kernel @test<>(stream<f32>[16, 16] readonly a, stream<f32>[16, 16] writeonly out) {{
+        place u16 i, u16 j in [{i_start}:{i_end}, {j_start}:{j_end}] {{
+            f32 local_a;
+            f32 local_out;
+        }}
+        compute u16 i, u16 j in [{i_start}:{i_end}, {j_start}:{j_end}] {{
+            await receive(local_a, a[j, i]);
+            local_out = local_a;
+            await send(local_out, out[j, i]);
+        }}
+    }}
+    '''
+    kernel = parser.parse_string(ir)
+    kernel = canonicalization.canonicalize_phases(kernel)
+    kernel = canonicalization.inline_phases(kernel)
+
+    rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    stream_extents = analysis.detect_stream_argument_extents(rectangles, kernel)
+
+    a_identifier = spa.Identifier('a', 0)
+    out_identifier = spa.Identifier('out', 0)
+
+    assert a_identifier in stream_extents.extents
+    assert out_identifier in stream_extents.extents
+    assert len(stream_extents.extents[a_identifier]) == 1
+    assert len(stream_extents.extents[out_identifier]) == 1
+
+    rect_a = stream_extents.extents[a_identifier][0]
+    rect_out = stream_extents.extents[out_identifier][0]
+
+    expected_x_range = (i_start, i_end, 1)
+    expected_y_range = (j_start, j_end, 1)
+
+    assert rect_a.x_range == expected_x_range
+    assert rect_a.y_range == expected_y_range
+    assert rect_out.x_range == expected_x_range
+    assert rect_out.y_range == expected_y_range
+    assert stream_extents.is_transposed[a_identifier] is True
+    assert stream_extents.is_transposed[out_identifier] is True
+
+
 if __name__ == '__main__':
     test_completion_dag_simple()
     test_completion_dag_concurrent()
@@ -587,10 +802,15 @@ if __name__ == '__main__':
     test_detect_stream_argument_extents_matching_indices()
     test_detect_stream_argument_extents_1d_subset(False)
     test_detect_stream_argument_extents_1d_subset(True)
+    test_detect_stream_argument_extents_array_slice_transposed()
     test_detect_stream_argument_extents_array_slice_mismatch()
     test_detect_stream_argument_extents_single_pe_output()
     test_detect_stream_argument_extents_subset_rectangle(False)
     test_detect_stream_argument_extents_subset_rectangle(True)
     test_detect_stream_argument_extents_disjoint_rectangles()
+    test_detect_stream_argument_extents_disjoint_rectangles_multidim()
     test_detect_stream_argument_extents_invalid_index()
     test_detect_stream_argument_extents_adjacent_rectangles_union()
+    test_two_stream_argument_rectangles()
+    test_transposed_stream_extents(False)
+    test_transposed_stream_extents(True)
