@@ -6,6 +6,22 @@ from gt4py import computation, interval, PARALLEL, FORWARD, BACKWARD
 Field3D = np.ndarray
 
 
+def one_d_diff(in_field: Field3D, out_field: Field3D):
+    with computation(PARALLEL), interval(...):
+        out_field = 2 * in_field[0, 0, 0] - in_field[-1, 0, 0]
+
+def laplacian(in_field: Field3D, out_field: Field3D):
+    with computation(PARALLEL), interval(...):
+        out_field = - 4.0 * in_field[0, 0, 0] + (
+            in_field[1, 0, 0] + in_field[-1, 0, 0] + in_field[0, 1, 0] + in_field[0, -1, 0])
+
+def pure_vertical(in_field: Field3D, out_field: Field3D):
+    with computation(FORWARD):
+        with interval(0, 1):
+            in_field = in_field[0, 0, 0]
+        with interval(1, None):
+            in_field = in_field[0, 0, 0] - 0.5 * in_field[0, 0, -1]
+
 # See https://github.com/GridTools/gt4py/blob/1caca893034a18d5df1522ed251486659f846589/tests/test_integration/stencil_definitions.py#L194
 def horizontal_diffusion(in_field: Field3D, out_field: Field3D, coeff: Field3D):
     with computation(PARALLEL), interval(...):
@@ -160,7 +176,7 @@ def hdiffsmag(arg0: Field3D, arg1: Field3D, arg2: Field3D, arg3: Field3D, arg4: 
         i25 = arg0[1, 0, 0]
         i26 = arg0[0, 0, 0]
         i27 = i24 + i25
-        i28 = i26 * cst_3
+        i28 = cst_3 * i26 
         i29 = i27 + i28
         i30 = arg0[0, 1, 0]
         i31 = arg0[0, -1, 0]
@@ -177,7 +193,7 @@ def hdiffsmag(arg0: Field3D, arg1: Field3D, arg2: Field3D, arg3: Field3D, arg4: 
         i25 = arg1[1, 0, 0]
         i26 = arg1[0, 0, 0]
         i27 = i24 + i25
-        i28 = i26 * cst_3
+        i28 = cst_3 * i26
         i29 = i27 + i28
         i30 = arg1[0, 1, 0]
         i31 = arg1[0, -1, 0]

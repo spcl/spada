@@ -252,10 +252,10 @@ a stream for receiving from the PE at the relative position `(i-dx, j-dy)` at th
     For example,
     ```rust
     dataflow i16 i, i16 j in [0:I, 0:J] {
-        stream<f32> eastwards = relative_stream(1, 0);
-        stream<f32> westwards = relative_stream(-1, 0);
-        stream<f32> northwards = relative_stream(0, -1);
-        stream<f32> southwards = relative_stream(0, 1);
+        stream<f32> eastwards = relative_stream(1, 0)
+        stream<f32> westwards = relative_stream(-1, 0)
+        stream<f32> northwards = relative_stream(0, -1)
+        stream<f32> southwards = relative_stream(0, 1)
     }
     ```
     describes four communication streams to the east, west, north, and south of each PE.
@@ -263,7 +263,7 @@ a stream for receiving from the PE at the relative position `(i-dx, j-dy)` at th
     For example,
     ```rust
     dataflow i16 i, i16 j in [0:I, 0:J] {
-        stream<i32> two_north = relative_stream(0, -2);
+        stream<i32> two_north = relative_stream(0, -2)
     }
     ```
     describes a communication stream that sends `i32` data two PEs to the north. 
@@ -289,9 +289,9 @@ The routing configuration is set up as follows:
 ```
 stream<T> stream_name = relative_stream(dx, dy) {
     // Optional routing declaration
-    hops = [(dx_1, dy_1), (dx_2, dy_2), ... , (dx_n, dy_n)];
-    channel = channel_id;
-};
+    hops = [(dx_1, dy_1), (dx_2, dy_2), ... , (dx_n, dy_n)],
+    channel = channel_id
+}
 ```
 where `hops` is a list of relative hops that the data takes between the sender and receiver.
 Each hop is given by a pair of constant literals, the sum of their absolute value must be 1.
@@ -305,9 +305,9 @@ Note that the start and end PEs also count as hops implicitly.
     ```rust
     dataflow i16 i, i16 j in [0:I, 0:J] {
         stream<f32> eastwards = relative_stream(1, 0) {
-            hops = [(1, 0)];
-            channel = 0;
-        };
+            hops = [(1, 0)],
+            channel = 0
+        }
     }
     ```
 
@@ -684,6 +684,9 @@ A `for` loop does not return completions, it executes sequentially and in-order.
 
     *Failure to uniquely match nested `send`s and `receives` results
     in incorrect stream edges and raises a compilation error.*
+
+### If-else: TODO
+
 
 
 ### Computing asynchronously with `async`

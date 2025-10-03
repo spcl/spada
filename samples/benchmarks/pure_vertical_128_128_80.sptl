@@ -1,0 +1,39 @@
+kernel @pure_vertical<>(stream<f32, 1>[128, 128] _in_field, stream<f32, 80>[128, 128] _kernel_out_0) {
+  place u16 i, u16 j in [0:128 , 0:128] {
+    f32[1] in_field_0_0_0
+    f32[80] in_field_0_0_0#1
+  }
+  compute u16 i#1, u16 j#1 in [0:128 , 0:128] {
+    await receive(in_field_0_0_0, _in_field[i#1, j#1])
+    await receive(in_field_0_0_0#1, _in_field[i#1, j#1])
+  }
+  phase {
+    place u16 i#2, u16 j#2 in [0:128 , 0:128] {
+      f32[1] in_field_0_0_0#2
+    }
+    compute u16 i#3, u16 j#3 in [0:128 , 0:128] {
+      for i32 k in [0] {
+        in_field_0_0_0#2[k] = in_field_0_0_0[k]
+        in_field_0_0_0#1[k] = in_field_0_0_0#2[k]
+      }
+    }
+  }
+  phase {
+    place u16 i#4, u16 j#4 in [0:128 , 0:128] {
+      f32[80] in_field_0_0_0#3
+      f32[80] _temp_0_0_0
+    }
+    compute u16 i#5, u16 j#5 in [0:128 , 0:128] {
+      for i32 k#1 in [1:80] {
+        _temp_0_0_0[k#1] = (0.5 * in_field_0_0_0#1[(k#1 - 1)])
+        in_field_0_0_0#3[k#1] = (in_field_0_0_0#1[k#1] - _temp_0_0_0[k#1])
+        in_field_0_0_0#1[k#1] = in_field_0_0_0#3[k#1]
+      }
+    }
+  }
+  phase {
+    compute u32 i#6, u32 j#6 in [0:128 , 0:128] {
+      await send(in_field_0_0_0#1, kernel_out_0[(i#6 - 0), (j#6 - 0)])
+    }
+  }
+}

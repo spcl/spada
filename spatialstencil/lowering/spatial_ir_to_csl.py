@@ -15,12 +15,16 @@ from spatialstencil.syntax.csl.statements import name_to_csl, dtype_as_csl, expr
 UniqueDSDDict = dict[str, list[tuple[str, cslstruct.DataStructureDescriptor]]]
 
 
-def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = (0, 0)) -> list[CodeFile]:
+def lower_spatial_ir_to_csl(kernel: spir.Kernel,
+                            rect_offset: tuple[int, int] = (0, 0),
+                            disable_benchmarking: bool = False) -> list[CodeFile]:
     """
     Lowers a routed Spatial IR kernel into Cerebras CSL code.
 
     :param kernel: The Spatial IR kernel to lower.
     :param rect_offset: The offset of the output rectangle to use.
+    :param disable_benchmarking: If True, disables benchmarking code generation (and memory overhead).
+                                 Use in memory-limited scenarios.
     :return: List of code-file objects that can be written to files. See ``write_code_to_files``.
     """
     # PRECONDITION: Rectangles of dataflow/compute/place do not intersect (comes from Spatial IR)
@@ -76,7 +80,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel, rect_offset: tuple[int, int] = 
         # Create a unique CSL code file based on rectangle offset
         csl_name = f'code_{rect.x_range[0]}_{rect.y_range[0]}.csl'
         rect_code, color_map = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode,
-                                                  stream_rects, channel_to_color)
+                                                  stream_rects, channel_to_color, disable_benchmarking)
         color_maps.append(color_map)
         csl_codes.append(CodeFile(csl_name, rect_code))
 
@@ -176,6 +180,10 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
         layout_code.write(
             f'    @export_name("{argument.identifier.name}", {dtype_as_csl(argument.dtype, export=True)}, true);\n')
 
+    # Generate benchmarking code
+    if not disable_benchmarking:
+        _generate_benchmarking_code_in_layout(layout_code)
+
     layout_code.write(f'''
     // Kernel
     @export_name("{kernel.name}", fn({", ".join(scalar_argument_types)})void);
@@ -186,9 +194,14 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
     return csl_codes
 
 
-def generate_rectangle(kernel: spir.Kernel, rect: Rectangle[PEBlock], routing_instructions: list[str],
-                       scalar_arguments: list[str], use_memcpy_mode: bool, stream_extents: analysis.StreamExtents,
-                       channel_to_color: dict[int, int]) -> tuple[str, dict[str, int]]:
+def generate_rectangle(kernel: spir.Kernel,
+                       rect: Rectangle[PEBlock],
+                       routing_instructions: list[str],
+                       scalar_arguments: list[str],
+                       use_memcpy_mode: bool,
+                       stream_extents: analysis.StreamExtents,
+                       channel_to_color: dict[int, int],
+                       disable_benchmarking: bool = False) -> tuple[str, dict[str, int]]:
     # Code generation carets
     header = StringIO()
     current_code = StringIO()
@@ -305,6 +318,10 @@ task exit_task() void {{
     // On completion, unblock command stream
     sys_mod.unblock_cmd_stream();
 }}''')
+
+    # Write benchmarking code
+    if not disable_benchmarking:
+        _generate_benchmarking_code(header, current_code, footer)
 
     # Finalize footer
     footer.write(f'''
@@ -1069,6 +1086,56 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
                 current_code.write(f'    @activate({task_id});\n')
             elif itedge == tdag.InterTaskEdge.UNBLOCK:
                 current_code.write(f'    @unblock({task_id});\n')
+
+
+def _generate_benchmarking_code(header: StringIO, current_code: StringIO, footer: StringIO):
+    """
+    Generates benchmarking code in the header, current code, and footer.
+    
+    :param header: A code generator stream for a file's header (where the declarations are).
+    :param current_code: The caret to the code generator at the current position (global).
+    :param footer: A code generator stream for a file's footer (the comptime block where the array would be exported).
+    """
+    # Generate tsc counters, functions, and imports in header
+    header.write("""// Benchmarking counters
+const timestamp = @import_module("<time>");
+var __benchmark_start = @zeros([3]u16);
+var __benchmark_start_ptr = &__benchmark_start;
+var __benchmark_stop = @zeros([3]u16);
+var __benchmark_stop_ptr = &__benchmark_stop;
+
+fn f_tic() void {
+    timestamp.enable_tsc();
+    timestamp.get_timestamp(&__benchmark_start);
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_toc() void {
+      timestamp.get_timestamp(&__benchmark_stop);
+      timestamp.disable_tsc();
+      sys_mod.unblock_cmd_stream();
+}""")
+
+    # Generate exports for function names and counters in footer
+    footer.write('\n    // Benchmarking exports\n')
+    footer.write('    @export_symbol(f_tic);\n')
+    footer.write('    @export_symbol(f_toc);\n')
+    footer.write('    @export_symbol(__benchmark_start_ptr, "__benchmark_start");\n')
+    footer.write('    @export_symbol(__benchmark_stop_ptr, "__benchmark_stop");\n')
+
+
+def _generate_benchmarking_code_in_layout(layout_code: StringIO):
+    """
+    Generates benchmarking code in the layout file's footer.
+
+    :param layout_code: A code generator stream for the layout code block.
+    """
+    # Generate exports for function names and counters in layout block
+    layout_code.write('\n    // Benchmarking exports\n')
+    layout_code.write('    @export_name("f_tic", fn()void);\n')
+    layout_code.write('    @export_name("f_toc", fn()void);\n')
+    layout_code.write('    @export_name("__benchmark_start", *[3]u16,  true);\n')
+    layout_code.write('    @export_name("__benchmark_stop", *[3]u16,  true);\n')
 
 
 def _collect_identifier_types(rect: PEBlock,

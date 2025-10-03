@@ -1,10 +1,10 @@
 /**
- * Simple chain reduction
+ * Simple chain reduction of a scalar value
  **/
  kernel @reduce<N>(stream<f32, 1>[N] readonly inp, stream<f32, 1> writeonly out) {
     // Start
     place u16 i, u16 j in [N-1:N, 0:1] {
-        f32 local
+        f32[1] local
     }
     dataflow u16 i, u16 j in [N-1:N, 0:1] {
         stream<f32> westwards = relative_stream(-1, 0) {

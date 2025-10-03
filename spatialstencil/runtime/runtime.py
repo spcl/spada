@@ -148,6 +148,48 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
     )
 
 
+def copy_back_benchmark_data(runtime: crt.SdkRuntime, metadata: ProgramMetadata) -> np.ndarray:
+    """
+    Copy back benchmarking data from the device.
+    
+    :param runtime: The Cerebras SDK runtime object to perform the copy operation
+    :param metadata: Program metadata containing input/output information
+    :return: Numpy array containing cycle counts
+    """
+    cycle_start = np.zeros(metadata.kernel_dims + [3], dtype=np.uint32)
+    cycle_stop = np.zeros(metadata.kernel_dims + [3], dtype=np.uint32)
+    cycle_counts = np.zeros(metadata.kernel_dims, dtype=np.uint64)
+    runtime.memcpy_d2h(
+        cycle_start.ravel(),
+        runtime.get_id("__benchmark_start"),
+        0,
+        0,
+        *cycle_start.shape,
+        streaming=False,
+        data_type=crt.MemcpyDataType.MEMCPY_16BIT,
+        order=crt.MemcpyOrder.ROW_MAJOR,
+        nonblock=False)
+    runtime.memcpy_d2h(
+        cycle_stop.ravel(),
+        runtime.get_id("__benchmark_stop"),
+        0,
+        0,
+        *cycle_stop.shape,
+        streaming=False,
+        data_type=crt.MemcpyDataType.MEMCPY_16BIT,
+        order=crt.MemcpyOrder.ROW_MAJOR,
+        nonblock=False)
+    # Convert 3x16-bit timestamp to the 48-bit little endian integer
+    cycle_start = (
+        cycle_start[:, :, 0].astype(np.uint64) | (cycle_start[:, :, 1].astype(np.uint64) << 16) |
+        (cycle_start[:, :, 2].astype(np.uint64) << 32))
+    cycle_stop = (
+        cycle_stop[:, :, 0].astype(np.uint64) | (cycle_stop[:, :, 1].astype(np.uint64) << 16) |
+        (cycle_stop[:, :, 2].astype(np.uint64) << 32))
+    cycle_counts = cycle_stop - cycle_start
+    return cycle_counts
+
+
 ########################################################
 # Program Class
 ########################################################
@@ -156,14 +198,16 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
 class Program:
     """A program that can be run on a device."""
 
-    def __init__(self, folder: str):
+    def __init__(self, folder: str, benchmark: bool = False):
         """
         Initialize the Program with a folder containing the compiled program.
-        
+
         :param folder: Path to the folder containing the program files
+        :param benchmark: Whether to run in benchmark mode (not implemented)
         """
         self.folder = Path(folder)
         self.out_folder = self.folder / "out"
+        self.benchmark = benchmark
 
         # Load metadata
         metadata_path = self.folder / "metadata.json"
@@ -209,6 +253,13 @@ class Program:
             self.runtime.run()
             print("done.", flush=True)
 
+            if self.benchmark:
+                if self.runtime.get_id("f_tic") is None or self.runtime.get_id("f_toc") is None:
+                    raise ValueError("Benchmarking requested but not enabled in the program.")
+
+            if not self.metadata.memcpy_mode and self.benchmark:
+                self.runtime.launch("f_tic", nonblock=False)
+
             # Copy data to device
             for name, data in kwargs.items():
                 if name not in self.inputs:
@@ -231,8 +282,12 @@ class Program:
             # Run the program
             if self.metadata.memcpy_mode:
                 print("Launching kernel...", flush=True, end='')
+                if self.benchmark:
+                    self.runtime.launch("f_tic", nonblock=False)
                 self.runtime.launch(self.metadata.kernel_name, nonblock=False)
-                print("kernel complete.", flush=True)
+                if self.benchmark:
+                    self.runtime.launch("f_toc", nonblock=False)
+                print("kernel launched.", flush=True)
 
             # Copy outputs back from device
             results = {}
@@ -248,7 +303,21 @@ class Program:
                 copy_unflatten(output_name, output_data, shape, self.runtime, self.metadata)
                 results[output_name] = output_data
 
-            print("Copy-back complete. Stopping runtime...", flush=True, end='')
+            if not self.metadata.memcpy_mode and self.benchmark:
+                self.runtime.launch("f_toc", nonblock=False)
+
+            print("Copy-back complete.", flush=True)
+
+            if self.benchmark:
+                cycle_counts = copy_back_benchmark_data(self.runtime, self.metadata)
+                np.save("perf_cycles.npy", cycle_counts)
+                # Print min, max, median cycle counts in a more readable format
+                print(f"Cycle count stats:\n"
+                      f"  Min:    {np.min(cycle_counts):,}\n"
+                      f"  Max:    {np.max(cycle_counts):,}\n"
+                      f"  Median: {np.median(cycle_counts).astype(np.uint64):,}")
+
+            print("Stopping runtime...", flush=True, end='')
         finally:
             self.runtime.stop()
         print("done.", flush=True)
@@ -262,11 +331,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run a compiled program with numpy array inputs")
     parser.add_argument("program_folder", help="Path to the program folder")
     parser.add_argument("input_files", nargs="+", help="Input .npy files for the program")
+    parser.add_argument("--benchmark", action="store_true", help="Run in benchmark mode")
 
     args = parser.parse_args()
 
     # Load the program
-    program = Program(args.program_folder)
+    program = Program(args.program_folder, args.benchmark)
 
     # Load input arrays from .npy files
     inputs = []

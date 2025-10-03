@@ -19,10 +19,10 @@ class ProgramPlacement:
     _storage_map: dict[sast.Identifier, dict[sast.Offset, tuple[spa.Identifier, spa.ArrayType]]]
 
     def __init__(self,
-                 domains: DomainCollector,
+                 domain_shift: tuple,
                  versioning: Versioning[spa.Identifier],
                  subgrid_var_type: ScalarType = ScalarType.u16,):
-        self.domains = domains
+        self.domain_shift = domain_shift
         self.versioning = versioning
         self._storage_map = defaultdict(dict)
         self.subgrid_var_type = subgrid_var_type
@@ -33,7 +33,7 @@ class ProgramPlacement:
                       program: sast.Program) -> list[spa.PlaceBlock]:
         # Allocate a field for each argument of the program
         # the field is placed in the domain of the argument
-        fields = self._place_inputs(program, self.domains)
+        fields = self._place_inputs(program)
         fields.extend(self._place_outputs(program))
 
         # Go over each computation and collect the union of the domain for each variable NAME
@@ -75,9 +75,16 @@ class ProgramPlacement:
             if isinstance(op, sast.StatementBlock):
                 # Note: all outputs must have the same domain
                 out_t = op.operation_type.destination[0]
+                src_t = op.operation_type.source[0]
                 assert isinstance(out_t, sast.ViewType)
                 assert isinstance(out_t.domain, sast.Cartesian)
+                
                 domain = out_t.domain.add(self.get_shift())
+                # Add a halo for the dummy receives (necessary to avoid deadlocks)
+                # For a scalar src type, not necessary
+                if isinstance(src_t, sast.ViewType) or isinstance(src_t, sast.FieldType):
+                    for ext in src_t.extent.extents:
+                        domain = domain.union(domain.add((-ext[0], -ext[1], 0)))
                 # Place the outputs of the statement block
                 for out in op.outputs:
                     # Allocate a field for the output
@@ -122,8 +129,7 @@ class ProgramPlacement:
             self._program_scope_fields[out.name] = out
         return fields
 
-    def _place_inputs(self, scope: sast.Program | sast.ComputationBlock,
-                      domains: DomainCollector) -> list[AbstractFieldDeclaration]:
+    def _place_inputs(self, scope: sast.Program | sast.ComputationBlock) -> list[AbstractFieldDeclaration]:
         # Allocate a field for each argument of the program
         # the field is placed in the domain of the argument
         place_blocks = []
@@ -152,7 +158,7 @@ class ProgramPlacement:
         Get the translation shift of the domains.
         :return:
         """
-        return self.domains.get_shift()
+        return self.domain_shift
 
     def get_storage(self,
                     identifier: sast.Identifier,
@@ -189,6 +195,7 @@ class ProgramPlacement:
             self._set_storage(identifier, offset, spa_identifier, field_type)
 
             meta = spa.FieldDeclaration(field_type, spa_identifier)
+            
             place = AbstractFieldDeclaration((domain.x[0], domain.x[1]), (domain.y[0], domain.y[1]), meta)
             result.append(place)
 
