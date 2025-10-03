@@ -476,7 +476,7 @@ def _allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Ke
             # Add to mapping
             result[name + "_OUT"] = csl.COLORS[this_color]
             # Declare color
-            header.write(f'const {name}_color_out: color = @get_color(pe_{cdir} % 2 + {result[name + "_OUT"]});\n')
+            header.write(f'const {name}_color_out: color = @get_color({result[name + "_OUT"]});\n')
 
         if inbound:
             # Look up channel in color map
@@ -486,7 +486,7 @@ def _allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Ke
             result[name + "_IN"] = csl.COLORS[this_color]
             # Declare color
             header.write(
-                f'const {name}_color_in: color = @get_color((1 - (pe_{cdir} % 2)) + {result[name + "_IN"]});\n')
+                f'const {name}_color_in: color = @get_color({result[name + "_IN"]});\n')
 
     if result:
         header.write('\n')
@@ -867,12 +867,11 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
         for stream in rect.metadata.dataflow.statements:
             if stream.stream_name not in sends_recvs:  # Skip unused streams
                 continue
-            pe_off = "pe_x" if "EAST" in _route_dir(*stream.routing.hops[0].offset) else "pe_y"
             sent, received = sends_recvs[stream.stream_name]
             if received:
-                color_name_inbound = f'@get_color((1 - ({pe_off} % 2)) + {color_map[name_to_csl(stream.stream_name) + "_IN"]})'
+                color_name_inbound = f'@get_color({color_map[name_to_csl(stream.stream_name) + "_IN"]})'
             if sent:
-                color_name_outbound = f'@get_color({pe_off} % 2 + {color_map[name_to_csl(stream.stream_name) + "_OUT"]})'
+                color_name_outbound = f'@get_color({color_map[name_to_csl(stream.stream_name) + "_OUT"]})'
 
             if len(stream.routing.hops) == 1:  # Inbound and outbound generated together
                 route = _route_dir(*stream.routing.hops[0].offset)
@@ -884,7 +883,7 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
                         routing_instructions.add(routing_inst)
                 if received:
                     routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                        color_name_inbound, route[1], 'RAMP')
+                        color_name_inbound, route[0], 'RAMP')
                     if routing_inst not in routing_instructions:
                         inst += routing_inst
                         routing_instructions.add(routing_inst)

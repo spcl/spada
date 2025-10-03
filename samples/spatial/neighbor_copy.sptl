@@ -8,22 +8,22 @@ kernel @copy_right<K>(stream<f32, K>[2, 1] readonly inp, stream<f32, K>[2, 1] wr
     f32[K] output;
   }
   dataflow u16 i#2, u16 j#2 in [0:1, 0:1] {
-    stream<f32, K> east = relative_stream(1, 0) {
-    hops = [(1, 0)],
-    channel = 0
+    stream<f32, K> eastwards = relative_stream(1, 0) {
+      hops = [(1, 0)],
+      channel = 0
     }
   }
   dataflow u16 i#3, u16 j#3 in [1:2, 0:1] {
-    stream<f32, K> west = relative_stream(-1, 0) {
-    hops = [(-1, 0)],
-    channel = 0
+    stream<f32, K> eastwards = relative_stream(1, 0) {
+      hops = [(1, 0)],
+      channel = 0
     }
   }
   compute u16 i#4, u16 j#4 in [0:1, 0:1] {
     await foreach i32 k, f32 x in [0:K], receive(inp[i#4]) {
       tmp[k] = x
     }
-    await send(tmp, east);
+    await send(tmp, eastwards);
     for i32 k in [0:K] {
       output[k] = 1.0 + tmp[k];
     }
@@ -33,7 +33,7 @@ kernel @copy_right<K>(stream<f32, K>[2, 1] readonly inp, stream<f32, K>[2, 1] wr
     await foreach i32 k, f32 x in [0:K], receive(inp[i#5]) {
       tmp[k] = x
     }
-    await receive(tmp, west);
+    await receive(tmp, eastwards);
     for i32 k in [0:K] {
       output[k] = 1.0 + tmp[k];
     }
