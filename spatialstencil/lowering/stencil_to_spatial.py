@@ -1,5 +1,6 @@
 import copy
 
+from spatialstencil.lowering.stencil_to_spatial_routing import ChannelStrategy, KernelRouting
 import spatialstencil.syntax.stencil_ir.irnodes as sast
 import spatialstencil.syntax.spatial_ir.irnodes as spa
 from spatialstencil.lowering.stencil_to_spatial_compute import ProgramCompute, AbstractStatement
@@ -16,8 +17,9 @@ from spatialstencil.syntax.stencil_ir.canonicalize_expression import Canonicaliz
 from spatialstencil.syntax.stencil_ir.refactor_forward_backward_stencils import RefactorForwardBackwardStencils
 from spatialstencil.syntax.stencil_ir.type_inference import infer_scalar_types, infer_types
 from spatialstencil.syntax.stencil_ir.ssa import SSAVisitor
+from spatialstencil.syntax.spatial_ir.passes import mark_readonly_writeonly_arguments
 
-def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
+def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: ChannelStrategy = ChannelStrategy.TRIVIAL) -> spa.Kernel:
     """Lower a stencil to a spatial program.
 
     Args:
@@ -80,6 +82,11 @@ def lower_stencil_to_spatial(stencil: sast.Program) -> spa.Kernel:
 
     # Pass that applies rectangle splitting to all phases across block types
     kernel = canonicalize_subgrids(kernel)
+    
+    coloring = KernelRouting(versioning)
+    kernel = coloring.generate_routing(kernel, channel_strategy)
+
+    kernel = mark_readonly_writeonly_arguments(kernel)
 
     return kernel
 
@@ -110,16 +117,18 @@ def _get_domain_shift(stencil: sast.Program) -> tuple:
 def kernel_arguments(stencil: sast.Program) -> list[spa.KernelArgument]:
     arguments = []
     for inp, inp_t in zip(stencil.inputs, stencil.operation_type.source):
-        arguments.append(_construct_arg(inp.name, inp_t))
+        arguments.append(_construct_arg(_input_name(inp.name), inp_t))
 
     for i, out_t in enumerate(stencil.operation_type.destination):
         arguments.append(_construct_arg(_ith_output_name(i), out_t))
 
     return arguments
 
+def _input_name(original_name: str) -> str:
+    return f"_{original_name}"
 
 def _ith_output_name(i: int) -> str:
-    return f'kernel_out_{i}'
+    return f'__kernel_out_{i}'
 
 
 def _construct_arg(name: str, arg_t: sast.FieldType | ScalarType) -> spa.KernelArgument:
@@ -133,11 +142,11 @@ def _construct_arg(name: str, arg_t: sast.FieldType | ScalarType) -> spa.KernelA
         stream_type = spa.StreamType(arg_t.dtype, spa.Expression(spa.ConstantLiteral(array_size_z, spa.ScalarType.i16)))
 
         array_type = spa.ArrayType(stream_type, [array_size_x, array_size_y])
-        identifier = spa.Identifier(f'_{name}', 0)
+        identifier = spa.Identifier(name, 0)
         return spa.KernelArgument(array_type, identifier)
     else:
         assert isinstance(arg_t, ScalarType)
-        identifier = spa.Identifier(f'_{name}', 0)
+        identifier = spa.Identifier(name, 0)
         return spa.KernelArgument(arg_t, identifier)
 
 

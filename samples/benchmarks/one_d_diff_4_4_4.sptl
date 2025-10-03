@@ -1,0 +1,168 @@
+kernel @one_d_diff<>(stream<f32, 4>[6, 4] readonly _in_field, stream<f32, 4>[4, 4] writeonly __kernel_out_0) {
+  place u16 i, u16 j in [1:5:2 , 0:4] {
+    f32[4] out_field_0_0_0
+    f32[4] in_field_0_0_0
+    f32[4] out_field_0_0_0#1
+    f32[4] _temp_0_0_0
+    f32[4] _temp_0_0_0#1
+  }
+  place u16 i, u16 j in [2:5:2 , 0:4] {
+    f32[4] out_field_0_0_0
+    f32[4] in_field_0_0_0
+    f32[4] out_field_0_0_0#1
+    f32[4] _temp_0_0_0
+    f32[4] _temp_0_0_0#1
+  }
+  place u16 i#1, u16 j#1 in [0:1:2 , 0:4] {
+    f32[4] in_field_0_0_0
+    f32[4] out_field_0_0_0#1
+    f32[4] _temp_0_0_0
+    f32[4] _temp_0_0_0#1
+  }
+  place u16 i#2, u16 j#2 in [5:6:2 , 0:4] {
+    f32[4] in_field_0_0_0
+    f32[4] out_field_0_0_0#1
+    f32[4] _temp_0_0_0
+    f32[4] _temp_0_0_0#1
+  }
+  dataflow u16 i#7, u16 j#7 in [1:5:2 , 0:4] {
+    stream<f32> _stream_in_field#2 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 0
+    }
+    stream<f32> _stream_in_field#3 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 1
+    }
+    stream<f32> _stream_in_field#4 = relative_stream(-1, 0) {
+      hops = [(-1, 0)], 
+      channel = 2
+    }
+    stream<f32> _stream_in_field#5 = relative_stream(-1, 0) {
+      hops = [(-1, 0)], 
+      channel = 3
+    }
+  }
+  dataflow u16 i#7, u16 j#7 in [2:5:2 , 0:4] {
+    stream<f32> _stream_in_field#2 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 0
+    }
+    stream<f32> _stream_in_field#3 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 1
+    }
+    stream<f32> _stream_in_field#4 = relative_stream(-1, 0) {
+      hops = [(-1, 0)], 
+      channel = 2
+    }
+    stream<f32> _stream_in_field#5 = relative_stream(-1, 0) {
+      hops = [(-1, 0)], 
+      channel = 3
+    }
+  }
+  dataflow u16 i#7, u16 j#7 in [0:1:2 , 0:4] {
+    stream<f32> _stream_in_field#2 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 0
+    }
+    stream<f32> _stream_in_field#3 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 1
+    }
+    stream<f32> _stream_in_field#4 = relative_stream(-1, 0) {
+      hops = [(-1, 0)], 
+      channel = 2
+    }
+    stream<f32> _stream_in_field#5 = relative_stream(-1, 0) {
+      hops = [(-1, 0)], 
+      channel = 3
+    }
+  }
+  dataflow u16 i#7, u16 j#7 in [5:6:2 , 0:4] {
+    stream<f32> _stream_in_field#2 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 0
+    }
+    stream<f32> _stream_in_field#3 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 1
+    }
+    stream<f32> _stream_in_field#4 = relative_stream(-1, 0) {
+      hops = [(-1, 0)], 
+      channel = 2
+    }
+    stream<f32> _stream_in_field#5 = relative_stream(-1, 0) {
+      hops = [(-1, 0)], 
+      channel = 3
+    }
+  }
+  compute u16 i#3, u16 j#3 in [1:5:2 , 0:4] {
+    await receive(in_field_0_0_0, _in_field[i#3, j#3])
+    awaitall
+    await map i32 k in [0:4] {
+      _temp_0_0_0[k] = (2 * in_field_0_0_0[k])
+    }
+    completion _recv_comp = foreach i32 k#1, f32 x in [0:4], receive(_stream_in_field#5) {
+      _temp_0_0_0#1[k#1] = (_temp_0_0_0 - x)
+    }
+    completion _send_comp = send(in_field_0_0_0, _stream_in_field#4)
+    await _send_comp
+    await _recv_comp
+    completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:4], receive(_stream_in_field#2) {
+      out_field_0_0_0#1[k#2] = (_temp_0_0_0#1 - x#1)
+    }
+    completion _send_comp#1 = send(in_field_0_0_0, _stream_in_field#3)
+    await _send_comp#1
+    await _recv_comp#1
+    await map i32 k#3 in [0:4] {
+      out_field_0_0_0[k#3] = out_field_0_0_0#1[k#3]
+    }
+    awaitall
+    await send(out_field_0_0_0, __kernel_out_0[(i#3 - 1), (j#3 - 0)])
+  }
+  compute u16 i#3, u16 j#3 in [2:5:2 , 0:4] {
+    await receive(in_field_0_0_0, _in_field[i#3, j#3])
+    awaitall
+    await map i32 k in [0:4] {
+      _temp_0_0_0[k] = (2 * in_field_0_0_0[k])
+    }
+    completion _recv_comp = foreach i32 k#1, f32 x in [0:4], receive(_stream_in_field#4) {
+      _temp_0_0_0#1[k#1] = (_temp_0_0_0 - x)
+    }
+    completion _send_comp = send(in_field_0_0_0, _stream_in_field#5)
+    await _send_comp
+    await _recv_comp
+    completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:4], receive(_stream_in_field#3) {
+      out_field_0_0_0#1[k#2] = (_temp_0_0_0#1 - x#1)
+    }
+    completion _send_comp#1 = send(in_field_0_0_0, _stream_in_field#2)
+    await _send_comp#1
+    await _recv_comp#1
+    await map i32 k#3 in [0:4] {
+      out_field_0_0_0[k#3] = out_field_0_0_0#1[k#3]
+    }
+    awaitall
+    await send(out_field_0_0_0, __kernel_out_0[(i#3 - 1), (j#3 - 0)])
+  }
+  compute u16 i#4, u16 j#4 in [0:1:2 , 0:4] {
+    await receive(in_field_0_0_0, _in_field[i#4, j#4])
+    awaitall
+    completion _recv_comp = foreach i32 k#1, f32 x in [0:4], receive(_stream_in_field#4) {
+      _temp_0_0_0#1[k#1] = (_temp_0_0_0 - x)
+    }
+    await _recv_comp
+    completion _send_comp#1 = send(in_field_0_0_0, _stream_in_field#2)
+    await _send_comp#1
+  }
+  compute u16 i#5, u16 j#5 in [5:6:2 , 0:4] {
+    await receive(in_field_0_0_0, _in_field[i#5, j#5])
+    awaitall
+    completion _send_comp = send(in_field_0_0_0, _stream_in_field#4)
+    await _send_comp
+    completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:4], receive(_stream_in_field#2) {
+      out_field_0_0_0#1[k#2] = (_temp_0_0_0#1 - x#1)
+    }
+    await _recv_comp#1
+  }
+}

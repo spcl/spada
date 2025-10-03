@@ -2,7 +2,6 @@ import copy
 from spatialstencil.syntax.spatial_ir import irnodes as spa
 from spatialstencil.syntax.stencil_ir.type_inference import _result_type_of
 
-
 class Concretizer(spa.NodeTransformer):
 
     def __init__(self, parameters: dict[str, int]):
@@ -145,3 +144,82 @@ def constexpr_propagation(kernel: spa.Kernel) -> spa.Kernel:
     Evaluates constant expressions in a kernel.
     """
     return ConstExprPropagation().visit(kernel)
+
+
+def mark_readonly_writeonly_arguments(kernel: spa.Kernel) -> spa.Kernel:
+    """Marks readonly and writeonly arguments based on their usage in the kernel. Modifies the kernel in place and returns it.
+    """
+    
+    visitor = ArgumentUseVisitor()
+    visitor.visit(kernel)
+    
+    readonly = visitor.get_readonly_arguments()
+    writeonly = visitor.get_writeonly_arguments()
+    
+    for arg in kernel.arguments:
+        arg.readonly = arg.identifier in readonly
+        arg.writeonly = arg.identifier in writeonly
+    
+    return kernel
+
+
+class ArgumentUseVisitor(spa.NodeVisitor):
+    """
+    Visits a kernel and collects all uses of each argument:
+    
+    - is it being read?
+    - is it being written to?
+    
+    Then, we can get the readonly and writeonly arguments from this.
+    """
+    
+    _arguments: set[spa.Identifier]
+    
+    read_arguments: set[spa.Identifier]
+    written_arguments: set[spa.Identifier]
+    
+    def __init__(self):
+        super().__init__()
+        self._arguments = set()
+        self.read_arguments = set()
+        self.written_arguments = set()
+        
+    def visit_Kernel(self, kernel: spa.Kernel):
+        
+        for arg in kernel.arguments:
+            self._arguments.add(arg.identifier)
+        
+        self.generic_visit(kernel)
+        
+    def visit_SendStatement(self, stmt: spa.SendStatement):
+        # A send to an argument means it is "written to"
+        if isinstance(stmt.stream_name, spa.ArraySlice):
+            name = stmt.stream_name.array
+            if name in self._arguments:
+                self.written_arguments.add(name)
+        else:
+            if stmt.stream_name in self._arguments:
+                self.written_arguments.add(stmt.stream_name)
+        
+    def visit_ReceiveStatement(self, stmt: spa.ReceiveStatement):
+        # A receive from an argument means it is "read"
+        self._regisiter_read(stmt)
+                
+    def visit_ReceiveGenerator(self, gen: spa.ReceiveGenerator):
+        # A receive from an argument means it is "read"
+       self._regisiter_read(gen)
+    
+    def _regisiter_read(self, s: spa.ReceiveGenerator | spa.ReceiveGenerator):
+        if isinstance(s.stream_name, spa.ArraySlice):
+            name = s.stream_name.array
+            if name in self._arguments:
+                self.read_arguments.add(name)
+        else:
+            if s.stream_name in self._arguments:
+                self.read_arguments.add(s.stream_name)
+    
+    def get_readonly_arguments(self):
+        return [arg for arg in self.read_arguments if arg not in self.written_arguments]
+    
+    def get_writeonly_arguments(self):
+        return [arg for arg in self.written_arguments if arg not in self.read_arguments]
