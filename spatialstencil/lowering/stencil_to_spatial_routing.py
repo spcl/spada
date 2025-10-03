@@ -160,6 +160,24 @@ class SplitTransformer(spa.NodeTransformer):
     Splits the blocks of a kernel according to a checkerboard pattern.
     Each active dimension is split in 2.
     This results in 1, 2, or 4 blocks.
+    
+    Each stream s is duplicated into s_even and s_odd. The key insight: messages from 
+    even-coordinate PEs travel only through even-coordinate intermediate PEs, while messages 
+    from odd-coordinate PEs traverse only odd-coordinate PEs. This spatial separation 
+    eliminates all routing conflicts.
+
+    Note: even/odd streams are implemented using versioning of the stream identifier.
+
+    Stream Selection:
+    At each send or receive operation on stream s = relative_stream(dx, dy), we replace s 
+    with either s_even or s_odd deterministically:
+
+        1. Identify the communication dimension: x if |dx| > 0, otherwise y
+        2. Compute block parity: p = i mod 2 for x-communication, p = j mod 2 for y-communication
+        3. Determine direction: σ = 1 if dx > 0 (or dy > 0), otherwise σ = 0
+        4. If receiving, flip direction: σ = 1 - σ (logical reversal)
+        5. Select: use s_even if p = σ, otherwise s_odd
+    
     """
     
     ## Keep track of the mapping from original stream names to their split streams (even & odd stream)
