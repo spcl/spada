@@ -152,20 +152,20 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
     @set_rectangle{rect_size};''')
 
     for rect in rectangles:
-        xs, xe, ys, ye = rect.x_range[0], rect.x_range[1], rect.y_range[0], rect.y_range[1]
+        xb, xe, xs, yb, ye, ys = *rect.x_range, *rect.y_range
         code_filename = f'code_{xs}_{ys}.csl'
         # Add global offsets as necessary
-        xs += rect_offset[0]
+        xb += rect_offset[0]
         xe += rect_offset[0]
-        ys += rect_offset[1]
+        yb += rect_offset[1]
         ye += rect_offset[1]
 
         # Emit rectangle code setup
         layout_code.write(f'''
-    for (@range(i16, {xs}, {xe}, 1)) |pe_x| {{
-        for (@range(i16, {ys}, {ye}, 1)) |pe_y| {{
+    for (@range(i16, {xb}, {xe}, {xs})) |pe_x| {{
+        for (@range(i16, {yb}, {ye}, {ys})) |pe_y| {{
             @set_tile_code(pe_x, pe_y, "{code_filename}", .{{ .memcpy_params = memcpy.get_params(pe_x), .pe_x = pe_x, .pe_y = pe_y }});
-{routes_per_rectangle[(xs, ys)]}
+{routes_per_rectangle[(xb, yb)]}
         }}
     }}\n''')
 

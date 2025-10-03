@@ -195,8 +195,8 @@ class ProgramPlacement:
             self._set_storage(identifier, offset, spa_identifier, field_type)
 
             meta = spa.FieldDeclaration(field_type, spa_identifier)
-            
-            place = AbstractFieldDeclaration((domain.x[0], domain.x[1]), (domain.y[0], domain.y[1]), meta)
+
+            place = AbstractFieldDeclaration((domain.x[0], domain.x[1], 1), (domain.y[0], domain.y[1], 1), meta)
             result.append(place)
 
         return result

@@ -350,11 +350,13 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
             # Union the rectangles into a single rectangle
             x_min = min(r.x_range[0] for r in extents)
             x_max = max(r.x_range[1] for r in extents)
+            x_step = min(r.x_range[2] for r in extents)
             y_min = min(r.y_range[0] for r in extents)
             y_max = max(r.y_range[1] for r in extents)
+            y_step = min(r.y_range[2] for r in extents)
 
             # Create a new unified rectangle using the metadata from the first rectangle
-            unified_rect = Rectangle(x_range=(x_min, x_max), y_range=(y_min, y_max), metadata=extents[0].metadata)
+            unified_rect = Rectangle(x_range=(x_min, x_max, x_step), y_range=(y_min, y_max, y_step), metadata=extents[0].metadata)
 
             # Replace the list with just the unified rectangle
             stream_extents.extents[stream_name] = [unified_rect]

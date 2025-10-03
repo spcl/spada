@@ -34,10 +34,10 @@ class TestStencilIR(unittest.TestCase):
 
     def test_rectangle_splitting(self):
 
-        rect1 = RectWithId(x_range=(0, 3), y_range=(0, 3), metadata=1)
-        rect2 = RectWithId(x_range=(1, 5), y_range=(1, 5), metadata=2)
-        rect3 = RectWithId(x_range=(-1, 7), y_range=(-1, 7), metadata=3)
-        rect4 = RectWithId(x_range=(2, 5), y_range=(-1, 3), metadata=4)
+        rect1 = RectWithId(x_range=(0, 3, 1), y_range=(0, 3, 1), metadata=1)
+        rect2 = RectWithId(x_range=(1, 5, 1), y_range=(1, 5, 1), metadata=2)
+        rect3 = RectWithId(x_range=(-1, 7, 1), y_range=(-1, 7, 1), metadata=3)
+        rect4 = RectWithId(x_range=(2, 5, 1), y_range=(-1, 3, 1), metadata=4)
 
         rects = [rect1, rect2, rect3, rect4]
 
@@ -45,9 +45,9 @@ class TestStencilIR(unittest.TestCase):
 
         self.check_rectangle_split_result(rects, split)
 
-        rect5 = RectWithId(x_range=(0, 3), y_range=(10, 13), metadata=5)
-        rect6 = RectWithId(x_range=(0, 3), y_range=(10, 13), metadata=6)
-        rect7 = RectWithId(x_range=(0, 3), y_range=(0, 13), metadata=7)
+        rect5 = RectWithId(x_range=(0, 3, 1), y_range=(10, 13, 1), metadata=5)
+        rect6 = RectWithId(x_range=(0, 3, 1), y_range=(10, 13, 1), metadata=6)
+        rect7 = RectWithId(x_range=(0, 3, 1), y_range=(0, 13, 1), metadata=7)
 
         rects2 = [rect2, rect3, rect4, rect1, rect5, rect6, rect7]
         split2 = split_rectangles(rects2)
