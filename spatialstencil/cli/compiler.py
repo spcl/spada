@@ -54,11 +54,6 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
             arg.dtype.shape = [dim.eval() if isinstance(dim, spa.Expression) else int(dim) for dim in arg.dtype.shape]
         # Check if the argument is a stream and has a memcpy mode
         if isinstance(arg.dtype, spa.ArrayType) and isinstance(arg.dtype.base_type, spa.StreamType):
-            # Ensure all stream arguments are readonly or writeonly
-            if not (arg.readonly or arg.writeonly):
-                raise ValueError(f"Argument '{arg.identifier.name}' must be either readonly or writeonly, "
-                                 f"but it is neither. Please check the kernel definition.")
-
             if arg.dtype.base_type.buffer_size is not None:
                 if using_memcpy_mode is None:
                     using_memcpy_mode = True
