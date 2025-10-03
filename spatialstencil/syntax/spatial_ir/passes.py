@@ -1,4 +1,5 @@
 import copy
+import warnings
 from spatialstencil.syntax.spatial_ir import irnodes as spa
 from spatialstencil.syntax.stencil_ir.type_inference import _result_type_of
 
@@ -55,7 +56,7 @@ def concretize_parameters(kernel: spa.Kernel, **parameters: int) -> spa.Kernel:
     param_names = [p.name for p in kernel.parameters]
     for param in parameters.keys():
         if param not in param_names:
-            raise NameError(f'Parameter {param} is not a parameter of kernel {kernel.name}')
+            warnings.warn(f'Parameter {param} is not a parameter of kernel {kernel.name}')
 
     return Concretizer(parameters).visit(kernel)
 
