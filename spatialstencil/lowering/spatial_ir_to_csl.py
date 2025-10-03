@@ -153,7 +153,7 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
 
     for rect in rectangles:
         xb, xe, xs, yb, ye, ys = *rect.x_range, *rect.y_range
-        code_filename = f'code_{xs}_{ys}.csl'
+        code_filename = f'code_{xb}_{yb}.csl'
         # Add global offsets as necessary
         xb += rect_offset[0]
         xe += rect_offset[0]
