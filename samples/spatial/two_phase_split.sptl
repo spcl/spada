@@ -1,5 +1,5 @@
-kernel @two_phase<K> (stream<f32>[4] readonly in,
-                          stream<f32> readonly out ) {
+kernel @two_phase<K> (stream<f32, K>[4] readonly in,
+                      stream<f32, K> writeonly out) {
 
     place i16 i, i16 j in [0, 0] {
         f32[K] a

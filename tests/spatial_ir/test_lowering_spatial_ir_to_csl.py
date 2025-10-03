@@ -73,7 +73,7 @@ def test_forward_sum():
     print(kernel.as_ir())
     csl_files = lower_spatial_ir_to_csl(kernel)
     for f in csl_files:
-        
+
         print('=============')
         print(f.filename, ':')
         print(f.code)
