@@ -226,8 +226,9 @@ class StreamExtents:
         self.extents: dict[spir.Identifier, list[Rectangle]] = {}
         self.argnames: set[spir.Identifier] = set(arg.identifier for arg in kernel.arguments)
         self.is_transposed: dict[spir.Identifier, bool] = {arg.identifier: None for arg in kernel.arguments}
+        self.offsets: dict[spir.Identifier, list[tuple[int, int]]] = {arg.identifier: [] for arg in kernel.arguments}
 
-    def add_extent(self, arg: spir.Identifier, rect: Rectangle):
+    def add_extent(self, arg: spir.Identifier, rect: Rectangle, offsets: tuple[int, int]):
         """
         Adds a rectangle extent for the given stream argument.
         If the argument is not already in the extents, it initializes it.
@@ -236,7 +237,9 @@ class StreamExtents:
             return  # Ignore arguments not in the kernel
         if arg not in self.extents:
             self.extents[arg] = []
+
         self.extents[arg].append(rect)
+        self.offsets[arg].append(offsets)
 
     def is_valid(self, arg: spir.Identifier, rect: Rectangle) -> bool:
         return arg in self.extents and any(rect.is_subset_of(r) for r in self.extents[arg])
@@ -251,8 +254,20 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
     Each stream argument has to correspond to a single contiguous rectangle (even if it appears as a union
     of rectangles). In case of disjoint rectangles, an exception is raised.
     """
+    # TODO: Reimplement extents as follows:
+    # 1. Collect all offsets in send/receive expressions (use index variable to map 1D offsets to 2D offsets properly)
+    # 2. If multiple offsets coincide, raise an exception
+    # 3. Collect all rectangles where each argument is used
+    # 4. If rectangles are disjoint for a given argument, raise an exception
+    # 5. Union all rectangles for each argument
+    # 6. Intersect offsets with union of rectangles to minimize the range to the used area
+    # 7. Return the extents
+    # Right now this is not implemented correctly and may lead to incorrect extents.
+
     # Collect all extents from all rectangles
     stream_extents = StreamExtents(kernel)
+    arg_shapes, output_args = get_kernel_stream_arguments(kernel)
+    arg_shapes.update(output_args)
     for rect in rectangles:
         compute_block: spir.ComputeBlock = rect.metadata.compute
         # Create a mapping of variable names to their positions in the compute block
@@ -275,13 +290,46 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
                         # we need to check that the used indices correspond to valid compute block variables
 
                         # Check that each index in the array slice corresponds to a valid compute block variable
+                        offsets = [0] * len(var_name_to_position)
                         for index_expr in stream_name.indices:
                             index_name = index_expr.value
+                            offset = 0
+                            if isinstance(index_name, spir.BinaryOperator):
+                                # NOTE: Shifted expressions avoid situations in which the rectangle becomes skewed/not
+                                #       axis-aligned after applying the affine transformation on the rectangle.
+                                expr = index_name
+                                if expr.op not in ('+', '-'):
+                                    raise ValueError(
+                                        f"Array slice {stream_name.as_ir()} uses a non-affine or unsupported affine index expression '{expr.as_ir()}'. "
+                                        f"Only simple variable names or shifted expressions with '+' or '-' are supported.\n  In {stream_name.lineinfo}"
+                                    )
+
+                                # If the affine expression is multivariate (e.g., runtime-defined shift), fail
+                                if isinstance(expr.left.value, spir.Identifier) and isinstance(
+                                        expr.right.value, spir.Identifier):
+                                    raise ValueError(
+                                        f"Array slice {stream_name.as_ir()} uses a runtime-defined index expression '{expr.as_ir()}'. "
+                                        f"Only shifted expressions of the form <var> +/- <const> are supported.\n  In {stream_name.lineinfo}"
+                                    )
+                                if isinstance(expr.left.value, spir.Identifier):
+                                    index_name = expr.left.value
+                                    offset = expr.right.eval() if expr.op == '+' else -expr.right.eval()
+                                elif isinstance(expr.right.value, spir.Identifier):
+                                    index_name = expr.right.value
+                                    offset = expr.left.eval() if expr.op == '+' else -expr.left.eval()
+                                else:
+                                    # Both sides are non-identifiers (e.g., constants or complex expressions)
+                                    raise ValueError(
+                                        f"Array slice {stream_name.as_ir()} uses an index expression '{expr.as_ir()}' that may cause race conditions. "
+                                        f"Only shifted expressions of the form <var> +/- <const> are supported.\n  In {stream_name.lineinfo}"
+                                    )
+
                             if not isinstance(index_name, spir.Identifier) or index_name not in var_name_to_position:
                                 raise ValueError(
                                     f"Array slice {stream_name.as_ir()} uses index '{index_name.as_ir()}', "
                                     f"but compute block variables are {[var.identifier.as_ir() for var in compute_block.variables]}. "
                                     f"Index is not available in this compute block.\n  In {stream_name.lineinfo}")
+                            offsets[var_name_to_position[index_name]] = offset
                             position_order.append(var_name_to_position[index_name])
                         # If position order is monotonically decreasing, we can mark the array mapping as column major
                         if all(position_order[i] >= position_order[i + 1] for i in range(len(position_order) - 1)):
@@ -322,7 +370,7 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
                                     f"{(subgrid[2 * i + 1] - subgrid[2 * i])}. Unused index subgrids must have "
                                     f"dimension 1.\n  In {stream_name.lineinfo}")
 
-                    stream_extents.add_extent(stream_name, rect)
+                    stream_extents.add_extent(stream_name, rect, offsets)
 
     # Check for disjoint rectangles and validate that each stream argument maps to a contiguous region
     for stream_name, extents in stream_extents.extents.items():
