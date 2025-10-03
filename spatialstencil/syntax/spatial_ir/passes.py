@@ -163,7 +163,7 @@ def mark_readonly_writeonly_arguments(kernel: spa.Kernel) -> spa.Kernel:
     return kernel
 
 
-class ArgumnetUseVisitor(spa.NodeVisitor):
+class ArgumentUseVisitor(spa.NodeVisitor):
     """
     Visits a kernel and collects all uses of each argument:
     
