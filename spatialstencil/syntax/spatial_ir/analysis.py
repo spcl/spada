@@ -225,7 +225,7 @@ class StreamExtents:
     def __init__(self, kernel: spir.Kernel):
         self.extents: dict[spir.Identifier, list[Rectangle]] = {}
         self.argnames: set[spir.Identifier] = set(arg.identifier for arg in kernel.arguments)
-        self.is_transposed: dict[spir.Identifier, bool] = {arg.identifier: False for arg in kernel.arguments}
+        self.is_transposed: dict[spir.Identifier, bool] = {arg.identifier: None for arg in kernel.arguments}
 
     def add_extent(self, arg: spir.Identifier, rect: Rectangle):
         """
@@ -285,14 +285,27 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
                             position_order.append(var_name_to_position[index_name])
                         # If position order is monotonically decreasing, we can mark the array mapping as column major
                         if all(position_order[i] >= position_order[i + 1] for i in range(len(position_order) - 1)):
+                            if stream_extents.is_transposed[stream_name.array] is not None:
+                                if not stream_extents.is_transposed[stream_name.array]:
+                                    raise ValueError(
+                                        f"Array slice {stream_name.as_ir()} uses multiple index orders that do not "
+                                        f"match.\n  In {stream_name.lineinfo}")
                             stream_extents.is_transposed[stream_name.array] = True
                         else:
                             # If position order is not monotonically increasing nor decreasing, raise an error
-                            if not all(position_order[i] <= position_order[i + 1] for i in range(len(position_order) - 1)):
+                            if not all(
+                                    position_order[i] <= position_order[i + 1] for i in range(len(position_order) - 1)):
                                 raise ValueError(
                                     f"Array slice {stream_name.as_ir()} uses an index order that does not match "
                                     f"the compute block variables {[var.identifier.as_ir() for var in compute_block.variables]}"
                                     f".\n  In {stream_name.lineinfo}")
+                            # Mark as row-major
+                            if stream_extents.is_transposed[stream_name.array] is not None:
+                                if stream_extents.is_transposed[stream_name.array]:
+                                    raise ValueError(
+                                        f"Array slice {stream_name.as_ir()} uses multiple index orders that do not "
+                                        f"match.\n  In {stream_name.lineinfo}")
+                            stream_extents.is_transposed[stream_name.array] = False
 
                         stream_name = stream_name.array
 
@@ -345,8 +358,8 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
                 else:
                     # If we reach here, it means no adjacent rectangle was found
                     raise ValueError(f"Stream argument '{stream_name.as_ir()}' is used in disjoint rectangles. "
-                                     f"Found rectangles at {current_rect.x_range}×{current_rect.y_range} and "
-                                     f"{next_rect.x_range}×{next_rect.y_range}, which are not contiguous. "
+                                     f"Found rectangles at {current_rect.x_range}x{current_rect.y_range} and "
+                                     f"{next_rect.x_range}x{next_rect.y_range}, which are not contiguous. "
                                      f"Stream arguments must correspond to a single contiguous rectangular region.")
 
     # Union all rectangles for each stream argument
@@ -361,7 +374,8 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
             y_step = min(r.y_range[2] for r in extents)
 
             # Create a new unified rectangle using the metadata from the first rectangle
-            unified_rect = Rectangle(x_range=(x_min, x_max, x_step), y_range=(y_min, y_max, y_step), metadata=extents[0].metadata)
+            unified_rect = Rectangle(
+                x_range=(x_min, x_max, x_step), y_range=(y_min, y_max, y_step), metadata=extents[0].metadata)
 
             # Replace the list with just the unified rectangle
             stream_extents.extents[stream_name] = [unified_rect]
