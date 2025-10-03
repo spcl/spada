@@ -26,9 +26,6 @@ class StreamMetadata:
 
 AbstractStream = Rectangle[StreamMetadata]
 
-class CHANNEL_STRATEGY(Enum):
-    none = auto()
-    trivial = auto()
 
 class ProgramDataflow:
 
@@ -37,8 +34,6 @@ class ProgramDataflow:
     # Maps [input_field][output_field][offset] -> stream
     # the destination field is the first 
     _stream_map: dict[sast.Identifier, dict[sast.Identifier, dict[sast.Offset, spa.Identifier]]]
-
-    channel_strategy: CHANNEL_STRATEGY
 
     def __init__(self,
                  domain_shift: tuple,

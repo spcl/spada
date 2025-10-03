@@ -5,9 +5,9 @@ from spatialstencil.lowering.versioning import Versioning
 import spatialstencil.syntax.spatial_ir.irnodes as spa
 from spatialstencil.syntax.spatial_ir.canonicalization import canonicalize_phases, inline_phases
 
-class CHANNEL_STRATEGY(Enum):
-    none = auto()
-    trivial = auto()
+class ChannelStrategy(Enum):
+    NONE = 0
+    TRIVIAL = 1
 
 class KernelRouting:
     """
@@ -55,7 +55,7 @@ class KernelRouting:
 
         return transformed_kernel
 
-    def generate_routing(self, kernel: spa.Kernel, channel_strategy: CHANNEL_STRATEGY = CHANNEL_STRATEGY.trivial) -> spa.Kernel:
+    def generate_routing(self, kernel: spa.Kernel, channel_strategy: ChannelStrategy = ChannelStrategy.TRIVIAL) -> spa.Kernel:
         """Generates routing blocks, possibly splitting and restructuring the kernel blocks
 
         Args:
@@ -64,7 +64,7 @@ class KernelRouting:
         Returns:
             spa.Kernel: _description_
         """
-        if channel_strategy.name != CHANNEL_STRATEGY.none.name:
+        if channel_strategy is not ChannelStrategy.NONE:
             kernel = self.split_blocks(kernel)
         
         # Gather the stream declarations
@@ -75,7 +75,7 @@ class KernelRouting:
         channel_map: dict[spa.Identifier, int] = dict()
         hops_map: dict[str, list[tuple[int, int]]] = dict()
 
-        if channel_strategy.name == CHANNEL_STRATEGY.trivial.name:
+        if channel_strategy.name == ChannelStrategy.TRIVIAL.name:
             color = 0
             for stream in stream_visitor.streams.keys():
                 channel_map[stream] = color

@@ -4,8 +4,9 @@ from typing import Tuple
 
 import pytest
 
+from spatialstencil.lowering.stencil_to_spatial_routing import ChannelStrategy
 from spatialstencil.lowering.stencil_to_spatial_compute import HorizontalStencilTransformer
-from spatialstencil.lowering.stencil_to_spatial_dataflow import CHANNEL_STRATEGY, ProgramDataflow
+from spatialstencil.lowering.stencil_to_spatial_dataflow import ProgramDataflow
 from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
 from spatialstencil.lowering.versioning import Versioning
 from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle
@@ -104,7 +105,7 @@ def test_lowering_finishes():
         domain = Cartesian(x=Interval(0, 128), y=Interval(0, 128), z=Interval(0, 80))
         type_inference.infer_field_domains(program, domain)
 
-        spatial_program = lower_stencil_to_spatial(program, CHANNEL_STRATEGY.none)
+        spatial_program = lower_stencil_to_spatial(program, channel_strategy=ChannelStrategy.NONE)
 
         assert subgrids_dont_overlap(spatial_program)
         assert len(spatial_program.as_ir())
@@ -181,7 +182,7 @@ def test_vertical_stencil_finishes():
         domain = Cartesian(x=Interval(0, 128), y=Interval(0, 128), z=Interval(0, 80))
         type_inference.infer_types(program, domain=domain)
 
-        spatial_program = lower_stencil_to_spatial(program, CHANNEL_STRATEGY.none)
+        spatial_program = lower_stencil_to_spatial(program, ChannelStrategy.NONE)
 
         assert subgrids_dont_overlap(spatial_program)
         assert len(spatial_program.as_ir())
@@ -197,7 +198,7 @@ def test_scalar_arguments():
         domain = Cartesian(x=Interval(0, 128), y=Interval(0, 128), z=Interval(0, 80))
         type_inference.infer_types(program, domain=domain)
 
-        spatial_program = lower_stencil_to_spatial(program, CHANNEL_STRATEGY.none)
+        spatial_program = lower_stencil_to_spatial(program, ChannelStrategy.NONE)
 
         assert len(spatial_program.as_ir())
 
@@ -217,7 +218,7 @@ def test_vadv():
         domain = Cartesian(x=Interval(0, 128), y=Interval(0, 128), z=Interval(0, 80))
         type_inference.infer_types(program, domain=domain)
 
-        spatial_program = lower_stencil_to_spatial(program, CHANNEL_STRATEGY.none)
+        spatial_program = lower_stencil_to_spatial(program, ChannelStrategy.NONE)
 
         assert len(spatial_program.as_ir())
 
