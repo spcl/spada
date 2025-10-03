@@ -4,6 +4,7 @@ Converts routed Spatial IR code to Cerebras CSL.
 
 from collections import defaultdict
 import copy
+import functools
 from io import StringIO
 from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, analysis, passes
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
@@ -485,8 +486,7 @@ def _allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Ke
             # Add to mapping
             result[name + "_IN"] = csl.COLORS[this_color]
             # Declare color
-            header.write(
-                f'const {name}_color_in: color = @get_color({result[name + "_IN"]});\n')
+            header.write(f'const {name}_color_in: color = @get_color({result[name + "_IN"]});\n')
 
     if result:
         header.write('\n')
@@ -634,7 +634,7 @@ def _collect_unique_dsds(
     stream_args: set[spir.Identifier] = set()
     for df_statement in rect.dataflow.statements:
         if isinstance(df_statement, spir.RelativeStreamDeclaration):
-            buffer_size = df_statement.dtype.buffer_size or 1
+            buffer_size = df_statement.dtype.buffer_size or None
             stream_candidates[df_statement.stream_name.as_ir()] = (df_statement, buffer_size)
     for place_statement in rect.place.statements:
         if isinstance(place_statement, spir.FieldDeclaration):
@@ -676,7 +676,12 @@ def _collect_unique_dsds(
                 dsd_type = cslstruct.DSDType.fabin
                 dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
                 extents = stream_candidates[stream_name.as_ir()][1]
-                extents = extents if isinstance(extents, int) else extents.eval()
+                if extents is not None:  # Use buffer size
+                    extents = extents if isinstance(extents, int) else extents.eval()
+                else:  # Infer from receive count
+                    extents = functools.reduce(
+                        lambda a, b: a * b,
+                        [s.eval() if not isinstance(s, int) else s for s in dtypes[stmt.local_array].shape], 1)
                 fabric_color = f'{name_to_csl(stream_name)}_color'
                 dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
                                           csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)])
@@ -686,7 +691,12 @@ def _collect_unique_dsds(
                 dsd_type = cslstruct.DSDType.fabout
                 dsd_name = f'{name_to_csl(stream_name)}_out_dsd'
                 extents = stream_candidates[stream_name.as_ir()][1]
-                extents = extents if isinstance(extents, int) else extents.eval()
+                if extents is not None:  # Use buffer size
+                    extents = extents if isinstance(extents, int) else extents.eval()
+                else:  # Infer from send count
+                    extents = functools.reduce(
+                        lambda a, b: a * b,
+                        [s.eval() if not isinstance(s, int) else s for s in dtypes[stmt.local_array].shape], 1)
                 fabric_color = f'{name_to_csl(stream_name)}_color'
                 dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
                                           csl.OUTPUT_QUEUE_IDS[output_queue_id_ctr % len(csl.OUTPUT_QUEUE_IDS)])
@@ -735,7 +745,16 @@ def _collect_unique_dsds(
                     else:
                         dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
                         extents = stream_candidates[stream_name.as_ir()][1]
-                        extents = extents if isinstance(extents, int) else extents.eval()
+                        if extents is not None:  # Use buffer size
+                            extents = extents if isinstance(extents, int) else extents.eval()
+                        else:  # Infer from foreach range
+                            if len(stmt.parameter_range) != 1:
+                                raise SyntaxError(
+                                    f'Expected one-dimensional foreach range for stream "{stream_name.as_ir()}", got {stmt.parameter_range}.\n  In line {stmt.lineinfo}'
+                                )
+                            start, end, step = stmt.parameter_range[0].start, stmt.parameter_range[
+                                0].stop, stmt.parameter_range[0].step
+                            extents = (end.eval() - start.eval()) // (step.eval() if step is not None else 1)
                         fabric_color = f'{name_to_csl(stream_name)}_color'
                         dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents,
                                                   csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)])
