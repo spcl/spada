@@ -6,8 +6,8 @@ T = TypeVar('T')
 
 @dataclass(frozen=True)
 class Rectangle(Generic[T]):
-    x_range: tuple[int, int]
-    y_range: tuple[int, int]
+    x_range: tuple[int, int, int]
+    y_range: tuple[int, int, int]
     metadata: T
 
     def __post_init__(self):
@@ -15,8 +15,10 @@ class Rectangle(Generic[T]):
         assert self.y_range[0] <= self.y_range[1]
         assert isinstance(self.x_range[0], int)
         assert isinstance(self.x_range[1], int)
+        assert isinstance(self.x_range[2], int)
         assert isinstance(self.y_range[0], int)
         assert isinstance(self.y_range[1], int)
+        assert isinstance(self.y_range[2], int)
 
     def contains_point(self, x: int, y: int) -> bool:
         """
@@ -64,7 +66,7 @@ class Rectangle(Generic[T]):
 # RECTANGLE SPLITTING
 ###
 
-def _ranges_overlap(range1: tuple[int, int], range2: tuple[int, int]) -> bool:
+def _ranges_overlap(range1: tuple[int, int, int], range2: tuple[int, int, int]) -> bool:
     """
     Check if two ranges overlap, considering exclusive upper bound.
 
@@ -108,8 +110,8 @@ def split_rectangle(rect1: Rectangle, rect2: Rectangle) -> list[Rectangle]:
     new_rectangles = []
 
     # Get the intersection area
-    x_overlap = (max(rect1.x_range[0], rect2.x_range[0]), min(rect1.x_range[1], rect2.x_range[1]))
-    y_overlap = (max(rect1.y_range[0], rect2.y_range[0]), min(rect1.y_range[1], rect2.y_range[1]))
+    x_overlap = (max(rect1.x_range[0], rect2.x_range[0]), min(rect1.x_range[1], rect2.x_range[1]), min(rect1.x_range[2], rect2.x_range[2]))
+    y_overlap = (max(rect1.y_range[0], rect2.y_range[0]), min(rect1.y_range[1], rect2.y_range[1]), min(rect1.y_range[2], rect2.y_range[2]))
 
     # Only add the overlap rectangles if the ranges are not empty
     if x_overlap[0] < x_overlap[1] and y_overlap[0] < y_overlap[1]:
@@ -123,14 +125,14 @@ def split_rectangle(rect1: Rectangle, rect2: Rectangle) -> list[Rectangle]:
     # Now create the remaining parts of rect1 that do not overlap
     if rect1.x_range[0] < x_overlap[0]:
         new_rectangles.append(Rectangle(
-            x_range=(rect1.x_range[0], x_overlap[0]),
+            x_range=(rect1.x_range[0], x_overlap[0], rect1.x_range[2]),
             y_range=rect1.y_range,
             metadata=rect1.metadata
         ))
 
     if rect1.x_range[1] > x_overlap[1]:
         new_rectangles.append(Rectangle(
-            x_range=(x_overlap[1], rect1.x_range[1]),
+            x_range=(x_overlap[1], rect1.x_range[1], x_overlap[2]),
             y_range=rect1.y_range,
             metadata=rect1.metadata
         ))
@@ -138,14 +140,14 @@ def split_rectangle(rect1: Rectangle, rect2: Rectangle) -> list[Rectangle]:
     if rect1.y_range[0] < y_overlap[0]:
         new_rectangles.append(Rectangle(
             x_range=x_overlap,
-            y_range=(rect1.y_range[0], y_overlap[0]),
+            y_range=(rect1.y_range[0], y_overlap[0], rect1.y_range[2]),
             metadata=rect1.metadata
         ))
 
     if rect1.y_range[1] > y_overlap[1]:
         new_rectangles.append(Rectangle(
             x_range=x_overlap,
-            y_range=(y_overlap[1], rect1.y_range[1]),
+            y_range=(y_overlap[1], rect1.y_range[1], y_overlap[2]),
             metadata=rect1.metadata
         ))
 

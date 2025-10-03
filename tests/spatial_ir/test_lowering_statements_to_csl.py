@@ -72,6 +72,38 @@ def test_receive_statement_array():
     assert code_found, "Expected array receive operation not found in generated CSL"
 
 
+def test_receive_statement_array_strided():
+    """Test receive statement with array types."""
+    spatial_ir_code = '''
+    kernel @test_receive_array_strided<N>(stream<f32, 4>[N] readonly input, stream<f32, 4>[N] writeonly output) {
+        place u16 i, u16 j in [0:1, 0:N:3] {
+            f32[4] local_array;
+        }
+        compute u16 i, u16 j in [0:1, 0:N:3] {
+            await receive(local_array, input[j]);
+        }
+    }
+    '''
+
+    kernel = create_inline_spatial_ir(spatial_ir_code)
+    kernel = passes.concretize_parameters(kernel, N=8)
+    kernel = passes.constexpr_propagation(kernel)
+
+    csl_files = lower_spatial_ir_to_csl(kernel)
+
+    # Check that CSL files were generated
+    assert len(csl_files) > 0
+
+    # Look for array operations in the generated CSL
+    for f in csl_files:
+        if 'layout' in f.code:
+            break
+    else:
+        assert False, "Expected layout definition not found in generated CSL"
+
+    assert '@range(i16, 0, 8, 3)' in f.code, "Expected strided range not found in generated CSL"
+
+
 def test_send_statement_scalar():
     """Test send statement with scalar types."""
     spatial_ir_code = '''
@@ -956,6 +988,7 @@ def test_foreach_lifting_to_dsd_op(with_binop):
 if __name__ == '__main__':
     test_receive_statement_scalar()
     test_receive_statement_array()
+    test_receive_statement_array_strided()
     test_send_statement_scalar()
     test_send_statement_array()
     test_send_statement_with_different_types()

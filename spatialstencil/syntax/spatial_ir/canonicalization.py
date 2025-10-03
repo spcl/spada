@@ -132,8 +132,10 @@ def consolidate_rectangles_to_equivalence_classes(kernel: spir.Kernel) -> list[R
     """
     # After inline_phases, there should be one block of each type for each rectangle
     result: dict[tuple[int, int, int, int], PEBlock] = defaultdict(lambda: PEBlock(None, None, None))
+    rect_to_stride: dict[tuple[int, int, int, int], tuple[int, int]] = {}
     for block in kernel.body:
         rect = block.get_grid_rect()
+        rect_to_stride[rect] = block.get_grid_stride()
         if isinstance(block, spir.PlaceBlock):
             assert result[rect].place is None
             result[rect].place = block
@@ -146,14 +148,21 @@ def consolidate_rectangles_to_equivalence_classes(kernel: spir.Kernel) -> list[R
 
     # Fill in remainder of PEBlock with empty scopes (e.g., blocks without dataflow)
     for rect, pe in result.items():
+        subgrid = spir.SubgridExpression.from_tuple(
+            (rect[0], rect[1], rect_to_stride[rect][0]),
+            (rect[2], rect[3], rect_to_stride[rect][1]),
+        )
         if pe.place is None:
-            pe.place = spir.PlaceBlock(_make_vars(), spir.SubgridExpression.from_tuple(rect[0:2], rect[2:4]), [])
+            pe.place = spir.PlaceBlock(_make_vars(), copy.deepcopy(subgrid), [])
         if pe.dataflow is None:
-            pe.dataflow = spir.DataflowBlock(_make_vars(), spir.SubgridExpression.from_tuple(rect[0:2], rect[2:4]), [])
+            pe.dataflow = spir.DataflowBlock(_make_vars(), copy.deepcopy(subgrid), [])
         if pe.compute is None:
-            pe.compute = spir.ComputeBlock(_make_vars(), spir.SubgridExpression.from_tuple(rect[0:2], rect[2:4]), [])
+            pe.compute = spir.ComputeBlock(_make_vars(), copy.deepcopy(subgrid), [])
 
-    return [Rectangle((k[0], k[1]), (k[2], k[3]), v) for k, v in sorted(result.items())]
+    return [
+        Rectangle((k[0], k[1], rect_to_stride[k][0]), (k[2], k[3], rect_to_stride[k][1]), v)
+        for k, v in sorted(result.items())
+    ]
 
 
 def _make_vars():
@@ -263,6 +272,7 @@ class _MakeArraySlices(spir.NodeTransformer):
             return new_node
         return self.generic_visit(node)
 
+
 class _ArrayAssignmentLowerer(spir.NodeTransformer):
 
     def __init__(self, place: spir.PlaceBlock):
@@ -338,9 +348,11 @@ class _MemCpyStreamOperatorRemover(spir.NodeTransformer):
         return self.generic_visit(node)
 
     def visit_ForeachStatement(self, node: spir.ForeachStatement):
-        if isinstance(node.receive_stream.stream_name, spir.Identifier) and node.receive_stream.stream_name in self.stream_args:
+        if isinstance(node.receive_stream.stream_name,
+                      spir.Identifier) and node.receive_stream.stream_name in self.stream_args:
             return None
-        if isinstance(node.receive_stream.stream_name, spir.ArraySlice) and node.receive_stream.stream_name.array in self.stream_args:
+        if isinstance(node.receive_stream.stream_name,
+                      spir.ArraySlice) and node.receive_stream.stream_name.array in self.stream_args:
             return None
         return self.generic_visit(node)
 
@@ -359,7 +371,7 @@ def remove_memcpy_stream_operators(kernel: spir.Kernel, rectangles: list[Rectang
             stream_args.add(arg.identifier)
         elif isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType):
             stream_args.add(arg.identifier)
-        
+
     # TODO(later): Verify that each stream argument is used once, and then replace every occurrence of the stream
     #              argument with its internal name.
     for rect in rectangles:

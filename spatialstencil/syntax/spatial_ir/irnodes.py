@@ -389,7 +389,7 @@ class RangeExpression(SpatialNode):
         if self.step:
             return self.start.eval(), self.stop.eval(), self.step.eval()
         elif self.stop:
-            return self.start.eval(), self.stop.eval()
+            return self.start.eval(), self.stop.eval(), 1
         else:
             return self.start.eval(),
 
@@ -403,13 +403,22 @@ class SubgridExpression(SpatialNode):
     y_range: RangeExpression
 
     @staticmethod
-    def from_tuple(x: tuple[int, int], y: tuple[int, int]) -> 'SubgridExpression':
+    def from_tuple(x: tuple[int, int, int], y: tuple[int, int, int]) -> 'SubgridExpression':
         range_x = Expression(ConstantLiteral(x[0], ScalarType.i32))
         range_x_end = Expression(ConstantLiteral(x[1], ScalarType.i32))
         range_y = Expression(ConstantLiteral(y[0], ScalarType.i32))
         range_y_end = Expression(ConstantLiteral(y[1], ScalarType.i32))
+        if len(x) == 3:
+            step_x = Expression(ConstantLiteral(x[2], ScalarType.i32))
+        else:
+            step_x = None
+        if len(y) == 3:
+            step_y = Expression(ConstantLiteral(y[2], ScalarType.i32))
+        else:
+            step_y = None
 
-        subgrid = SubgridExpression(RangeExpression(range_x, range_x_end), RangeExpression(range_y, range_y_end))
+        subgrid = SubgridExpression(
+            RangeExpression(range_x, range_x_end, step_x), RangeExpression(range_y, range_y_end, step_y))
         return subgrid
 
     def validate(self) -> None:
@@ -441,6 +450,22 @@ class SubgridExpression(SpatialNode):
             raise TypeError(f'Cannot obtain concrete grid size. y range value "{stop_y.as_ir()}" is not integral')
 
         return start_x, stop_x, start_y, stop_y
+
+    def get_grid_stride(self) -> tuple[int, int]:
+        """
+        Get the concrete grid strides defined by the subgrid expression.
+
+        :return: A tuple of (x_stride, y_stride)
+        """
+        x_stride = self.x_range.step.eval() if self.x_range.step else 1
+        y_stride = self.y_range.step.eval() if self.y_range.step else 1
+        if not isinstance(x_stride, int):
+            raise TypeError(
+                f'Cannot obtain concrete grid stride. x range step value "{x_stride.as_ir()}" is not integral')
+        if not isinstance(y_stride, int):
+            raise TypeError(
+                f'Cannot obtain concrete grid stride. y range step value "{y_stride.as_ir()}" is not integral')
+        return x_stride, y_stride
 
     def as_ir(self, indent: int = 0) -> str:
         return f'[{self.x_range.as_ir()} , {self.y_range.as_ir()}]'
@@ -482,6 +507,9 @@ class PlaceBlock(SpatialNode):
 
     def get_grid_rect(self) -> tuple[int, int, int, int]:
         return self.subgrid.get_grid_rect()
+
+    def get_grid_stride(self) -> tuple[int, int]:
+        return self.subgrid.get_grid_stride()
 
     def validate(self) -> None:
         assert isinstance(self.subgrid, SubgridExpression)
@@ -585,6 +613,9 @@ class DataflowBlock(SpatialNode):
 
     def get_grid_rect(self) -> tuple[int, int, int, int]:
         return self.subgrid.get_grid_rect()
+
+    def get_grid_stride(self) -> tuple[int, int]:
+        return self.subgrid.get_grid_stride()
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -921,6 +952,9 @@ class ComputeBlock(SpatialNode):
         """
         return self.subgrid.get_grid_rect()
 
+    def get_grid_stride(self) -> tuple[int, int]:
+        return self.subgrid.get_grid_stride()
+
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         vars_str = ", ".join(var.as_ir() for var in self.variables)
@@ -965,6 +999,25 @@ class Phase(SpatialNode):
             grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
 
         return tuple(grid_rect)
+
+    def get_grid_stride(self) -> tuple[int, int]:
+        """
+        Returns the PE grid stride for this phase.
+        
+        :return: Rectangle strides as a tuple of (x stride, y stride).
+        """
+        grid_stride = (1, 1)
+        for block in self.place:
+            block_stride = block.get_grid_stride()
+            grid_stride = (min(block_stride[0], grid_stride[0]), min(block_stride[1], grid_stride[1]))
+        for block in self.dataflow:
+            block_stride = block.get_grid_stride()
+            grid_stride = (min(block_stride[0], grid_stride[0]), min(block_stride[1], grid_stride[1]))
+        for block in self.compute:
+            block_stride = block.get_grid_stride()
+            grid_stride = (min(block_stride[0], grid_stride[0]), min(block_stride[1], grid_stride[1]))
+
+        return tuple(grid_stride)
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -1053,6 +1106,19 @@ class Kernel(SpatialNode):
             grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
 
         return tuple(grid_rect)
+
+    def get_grid_stride(self) -> tuple[int, int]:
+        """
+        Returns the PE grid stride for this kernel.
+        
+        :return: Rectangle strides as a tuple of (x stride, y stride).
+        """
+        grid_stride = (1, 1)
+        for block in self.body:
+            block_stride = block.get_grid_stride()
+            grid_stride = (min(block_stride[0], grid_stride[0]), min(block_stride[1], grid_stride[1]))
+
+        return tuple(grid_stride)
 
     def as_ir(self, indent: int = 0) -> str:
         param_str = ", ".join(p.as_ir() for p in self.parameters)

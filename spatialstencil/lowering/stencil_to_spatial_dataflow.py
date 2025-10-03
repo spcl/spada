@@ -230,9 +230,11 @@ class ProgramDataflow:
         # We need a buffer of +- the extent around the domain
         send_domain = out_t.domain.union(out_t.domain.add((dx, dy, 0)))
         x_range = (send_domain.x[0] + self.domain_shift[0],
-                   send_domain.x[1] + self.domain_shift[0])
+                   send_domain.x[1] + self.domain_shift[0],
+                   1)
         y_range = (send_domain.y[0] + self.domain_shift[1],
-                   send_domain.y[1] + self.domain_shift[1])
+                   send_domain.y[1] + self.domain_shift[1],
+                   1)
 
         assert x_range[0] >= 0
         assert x_range[1] >= x_range[0]
@@ -248,9 +250,11 @@ class ProgramDataflow:
         # We need a buffer of +- the extent around the domain
         send_domain = out_t.domain.union(out_t.domain.add((-dx, -dy, 0)))
         x_range = (send_domain.x[0] + self.domain_shift[0],
-                   send_domain.x[1] + self.domain_shift[0])
+                   send_domain.x[1] + self.domain_shift[0],
+                   1)
         y_range = (send_domain.y[0] + self.domain_shift[1],
-                   send_domain.y[1] + self.domain_shift[1])
+                   send_domain.y[1] + self.domain_shift[1],
+                   1)
 
         assert x_range[0] >= 0
         assert x_range[1] >= x_range[0]
@@ -266,9 +270,11 @@ class ProgramDataflow:
         # We need a buffer of +- the extent around the domain
         send_domain = out_t.domain.union(out_t.domain.add((dx, dy, 0))).union(out_t.domain.add((-dx, -dy, 0)))
         x_range = (send_domain.x[0] + self.domain_shift[0],
-                   send_domain.x[1] + self.domain_shift[0])
+                   send_domain.x[1] + self.domain_shift[0],
+                   1)
         y_range = (send_domain.y[0] + self.domain_shift[1],
-                   send_domain.y[1] + self.domain_shift[1])
+                   send_domain.y[1] + self.domain_shift[1],
+                   1)
 
         assert x_range[0] >= 0
         assert x_range[1] >= x_range[0]

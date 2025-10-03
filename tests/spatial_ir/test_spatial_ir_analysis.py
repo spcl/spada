@@ -136,8 +136,8 @@ def test_limit_indegree():
     topo_after = [n for n in nx.topological_sort(dag) if n.statement_id >= 0]
     assert topo_before == topo_after  # Approximate path preservation assertion
 
-
-def test_detect_stream_argument_extents_1d_subset():
+@pytest.mark.parametrize('strided', (False, True))
+def test_detect_stream_argument_extents_1d_subset(strided):
     """
     Test detect_stream_argument_extents with 1D rectangle subsets using second index of 2D array.
     This tests for cases like:
@@ -146,16 +146,16 @@ def test_detect_stream_argument_extents_1d_subset():
     This test defines the expected behavior when the TODO is implemented.
     Currently it will fail due to the ValueError from the TODO limitation.
     """
-    ir = '''
-    kernel @test<N>(stream<f32>[N] readonly a, stream<f32>[N] writeonly out) {
-        place u16 i, u16 j in [0:1, 0:N] {
+    ir = f'''
+    kernel @test<N>(stream<f32>[N] readonly a, stream<f32>[N] writeonly out) {{
+        place u16 i, u16 j in [0:1, 0:N{':2' if strided else ''}] {{
             f32 local_a;
-        }
-        compute u16 i, u16 j in [0:1, 0:N] {
+        }}
+        compute u16 i, u16 j in [0:1, 0:N{':2' if strided else ''}] {{
             await receive(local_a, a[j]);
             await send(local_a, out[j]);
-        }
-    }
+        }}
+    }}
     '''
     kernel = parser.parse_string(ir)
 
@@ -191,10 +191,16 @@ def test_detect_stream_argument_extents_1d_subset():
         rect_out = stream_extents.extents[out_identifier][0]
 
         # Both streams should map to the same rectangle since they're used in the same compute block
-        assert rect_a.x_range == (0, 1)
-        assert rect_a.y_range == (0, 10)
-        assert rect_out.x_range == (0, 1)
-        assert rect_out.y_range == (0, 10)
+        if not strided:
+            assert rect_a.x_range == (0, 1, 1)
+            assert rect_a.y_range == (0, 10, 1)
+            assert rect_out.x_range == (0, 1, 1)
+            assert rect_out.y_range == (0, 10, 1)
+        else:
+            assert rect_a.x_range == (0, 1, 1)
+            assert rect_a.y_range == (0, 10, 2)
+            assert rect_out.x_range == (0, 1, 1)
+            assert rect_out.y_range == (0, 10, 2)
 
         # The rectangle metadata should contain the correct compute block
         assert rect_a.metadata.compute is not None
@@ -264,10 +270,10 @@ def test_detect_stream_argument_extents_matching_indices():
     rect_out = stream_extents.extents[out_identifier][0]
 
     # Both streams should map to the same rectangle since they're used in the same compute block
-    assert rect_a.x_range == (0, 10)
-    assert rect_a.y_range == (0, 10)
-    assert rect_out.x_range == (0, 10)
-    assert rect_out.y_range == (0, 10)
+    assert rect_a.x_range == (0, 10, 1)
+    assert rect_a.y_range == (0, 10, 1)
+    assert rect_out.x_range == (0, 10, 1)
+    assert rect_out.y_range == (0, 10, 1)
 
     # The rectangle metadata should contain the correct compute block
     assert rect_a.metadata.compute is not None
@@ -354,14 +360,14 @@ def test_detect_stream_argument_extents_single_pe_output():
     # 'a' stream should be used across the full [0:10, 0:10] rectangle
     assert len(stream_extents.extents[a_identifier]) == 1
     rect_a = stream_extents.extents[a_identifier][0]
-    assert rect_a.x_range == (0, 10)
-    assert rect_a.y_range == (0, 10)
+    assert rect_a.x_range == (0, 10, 1)
+    assert rect_a.y_range == (0, 10, 1)
 
     # 'out' stream should only be used in the single PE [9:10, 9:10]
     assert len(stream_extents.extents[out_identifier]) == 1
     rect_out = stream_extents.extents[out_identifier][0]
-    assert rect_out.x_range == (9, 10)
-    assert rect_out.y_range == (9, 10)
+    assert rect_out.x_range == (9, 10, 1)
+    assert rect_out.y_range == (9, 10, 1)
 
 
 @pytest.mark.parametrize('bad_broadcast', (False, True))
@@ -420,20 +426,20 @@ def test_detect_stream_argument_extents_subset_rectangle(bad_broadcast):
     # 'a' stream should be used in [0:5, 0:10] rectangle
     assert len(stream_extents.extents[a_identifier]) == 1
     rect_a = stream_extents.extents[a_identifier][0]
-    assert rect_a.x_range == (0, extent_end)
-    assert rect_a.y_range == (0, 10)
+    assert rect_a.x_range == (0, extent_end, 1)
+    assert rect_a.y_range == (0, 10, 1)
 
     # 'b' stream should be used in [5:10, 0:10] rectangle
     assert len(stream_extents.extents[b_identifier]) == 1
     rect_b = stream_extents.extents[b_identifier][0]
-    assert rect_b.x_range == (5, extent_end_2)
-    assert rect_b.y_range == (0, 10)
+    assert rect_b.x_range == (5, extent_end_2, 1)
+    assert rect_b.y_range == (0, 10, 1)
 
     # 'out' stream should be used in [0:5, 0:10] rectangle
     assert len(stream_extents.extents[out_identifier]) == 1
     out_rect = stream_extents.extents[out_identifier][0]
-    assert out_rect.x_range == (0, extent_end)
-    assert out_rect.y_range == (0, 10)
+    assert out_rect.x_range == (0, extent_end, 1)
+    assert out_rect.y_range == (0, 10, 1)
 
 
 def test_detect_stream_argument_extents_disjoint_rectangles():
@@ -535,10 +541,10 @@ def test_detect_stream_argument_extents_adjacent_rectangles_union():
     # Verify we have 2 adjacent rectangles before unification
     assert len(rectangles) == 2
     rectangles.sort(key=lambda r: r.y_range[0])
-    assert rectangles[0].x_range == (0, 1)
-    assert rectangles[0].y_range == (0, 5)
-    assert rectangles[1].x_range == (0, 1)
-    assert rectangles[1].y_range == (5, 10)
+    assert rectangles[0].x_range == (0, 1, 1)
+    assert rectangles[0].y_range == (0, 5, 1)
+    assert rectangles[1].x_range == (0, 1, 1)
+    assert rectangles[1].y_range == (5, 10, 1)
 
     # Test the function - should unify the adjacent rectangles
     stream_extents = analysis.detect_stream_argument_extents(rectangles, kernel)
@@ -562,10 +568,10 @@ def test_detect_stream_argument_extents_adjacent_rectangles_union():
     rect_out = stream_extents.extents[out_identifier][0]
 
     # Both streams should map to the unified rectangle covering the full range
-    assert rect_a.x_range == (0, 1)
-    assert rect_a.y_range == (0, 10)  # Unified from [0:5] and [5:10]
-    assert rect_out.x_range == (0, 1)
-    assert rect_out.y_range == (0, 10)  # Unified from [0:5] and [5:10]
+    assert rect_a.x_range == (0, 1, 1)
+    assert rect_a.y_range == (0, 10, 1)  # Unified from [0:5] and [5:10]
+    assert rect_out.x_range == (0, 1, 1)
+    assert rect_out.y_range == (0, 10, 1)  # Unified from [0:5] and [5:10]
 
     # The rectangle metadata should contain the correct compute block
     assert rect_a.metadata.compute is not None
@@ -579,7 +585,8 @@ if __name__ == '__main__':
     test_completion_dag_multiphase(True)
     test_limit_indegree()
     test_detect_stream_argument_extents_matching_indices()
-    test_detect_stream_argument_extents_1d_subset()
+    test_detect_stream_argument_extents_1d_subset(False)
+    test_detect_stream_argument_extents_1d_subset(True)
     test_detect_stream_argument_extents_array_slice_mismatch()
     test_detect_stream_argument_extents_single_pe_output()
     test_detect_stream_argument_extents_subset_rectangle(False)
