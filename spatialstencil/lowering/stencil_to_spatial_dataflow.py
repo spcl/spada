@@ -26,9 +26,6 @@ class StreamMetadata:
 
 AbstractStream = Rectangle[StreamMetadata]
 
-class CHANNEL_STRATEGY(Enum):
-    none = auto()
-    trivial = auto()
 
 class ProgramDataflow:
 
@@ -38,18 +35,14 @@ class ProgramDataflow:
     # the destination field is the first 
     _stream_map: dict[sast.Identifier, dict[sast.Identifier, dict[sast.Offset, spa.Identifier]]]
 
-    channel_strategy: CHANNEL_STRATEGY
-
     def __init__(self,
                  domain_shift: tuple,
                  versioning: Versioning[spa.Identifier],
-                 grid_var_type: ScalarType = ScalarType.u16, 
-                 channel_strategy: CHANNEL_STRATEGY = CHANNEL_STRATEGY.trivial):
+                 grid_var_type: ScalarType = ScalarType.u16):
         self.versioning = versioning
         self.domain_shift = domain_shift
         self._stream_map = defaultdict(lambda: defaultdict(dict))
         self.grid_var_t = grid_var_type
-        self.channel_strategy = channel_strategy
 
     def get_stream(self,
                    input_id: sast.Identifier,
@@ -143,44 +136,10 @@ class ProgramDataflow:
         return blocks
 
 
-    @staticmethod
-    def _shortest_path_routing(dx: int, dy: int) -> list[spa.RoutingHop]:
-
-        if dx > 0:
-            result = [spa.RoutingHop((1, 0)) for _ in range(dx)]
-        else:
-            result = [spa.RoutingHop((-1, 0)) for _ in range(-dx)]
-
-        if dy > 0:
-            result.extend([spa.RoutingHop((0, 1)) for _ in range(dy)])
-        else:
-            result.extend([spa.RoutingHop((0, -1)) for _ in range(-dy)])
-
-        return result
-
     def _abstract_declarations_to_block(self, abstract_streams: list[AbstractStream]) -> list[spa.DataflowBlock]:
 
         abstract_streams = split_rectangles(abstract_streams)
         grouped = group_rectangles_by_domain(abstract_streams)
-        
-        channel_dictionary: dict[str, int] = dict()
-        hops_dictionary: dict[str, list[tuple[int, int]]] = dict()
-        if self.channel_strategy == CHANNEL_STRATEGY.trivial:
-            # Assign a new channel to each stream
-            # by creating a map from stream ids to integers
-            current_channel = 0
-            for stream in abstract_streams:
-                if stream.metadata.identifier not in channel_dictionary:
-                    channel_dictionary[stream.metadata.identifier] = current_channel
-                    current_channel += 1
-            
-            # Compute shortest path heuristic
-            for stream in abstract_streams:
-                if stream.metadata.identifier not in hops_dictionary:
-                    hops_dictionary[stream.metadata.identifier] = self._shortest_path_routing(stream.metadata.dx, stream.metadata.dy)
-            
-        elif self.channel_strategy == CHANNEL_STRATEGY.none:
-            pass
 
         blocks = []
         # Generate dataflow blocks from the abstract declarations
@@ -192,21 +151,11 @@ class ProgramDataflow:
 
             for rect in group:
 
-                if rect.metadata.identifier in channel_dictionary:
-                    assert rect.metadata.identifier in hops_dictionary
-                    routing = spa.RoutingDeclaration(
-                        channel = channel_dictionary[rect.metadata.identifier],
-                        hops = hops_dictionary[rect.metadata.identifier].copy()
-                    )
-                else:
-                    routing = None
-
                 stream = spa.RelativeStreamDeclaration(
                     dtype=rect.metadata.stream_type,
                     stream_name=rect.metadata.identifier,
                     dx=spa.Expression(spa.ConstantLiteral(rect.metadata.dx, dtype=ScalarType.i32)),
                     dy=spa.Expression(spa.ConstantLiteral(rect.metadata.dy, dtype=ScalarType.i32)),
-                    routing=routing
                 )
                 declarations.append(stream)
 

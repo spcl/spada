@@ -8,7 +8,7 @@ Field3D = np.ndarray
 
 def one_d_diff(in_field: Field3D, out_field: Field3D):
     with computation(PARALLEL), interval(...):
-        out_field = 2 * in_field[0, 0, 0] - in_field[-1, 0, 0]
+        out_field = 2 * in_field[0, 0, 0] - in_field[1, 0, 0] - in_field[-1, 0, 0]
 
 def laplacian(in_field: Field3D, out_field: Field3D):
     with computation(PARALLEL), interval(...):
@@ -33,7 +33,7 @@ def horizontal_diffusion(in_field: Field3D, out_field: Field3D, coeff: Field3D):
         fly_field = 0 if (res * (in_field[0, 1, 0] - in_field[0, 0, 0])) > 0 else res
         out_field = in_field[0, 0, 0] - coeff[0, 0, 0] * (
             flx_field[0, 0, 0] - flx_field[-1, 0, 0] + fly_field[0, 0, 0] - fly_field[0, -1, 0])
-
+                         
 
 # See https://github.com/GridTools/gt4py/blob/1caca893034a18d5df1522ed251486659f846589/tests/test_integration/stencil_definitions.py#L111
 def vertical_advection(
