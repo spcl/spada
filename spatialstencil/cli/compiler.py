@@ -108,6 +108,7 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         arg["rect_offset"] = [
             stream_extents.extents[arg_id][0].x_range[0], stream_extents.extents[arg_id][0].y_range[0]
         ]
+        arg["column_major"] = stream_extents.is_transposed[arg_id]
     metadata = {
         "kernel_name": kernel.name,
         "inputs": input_args,

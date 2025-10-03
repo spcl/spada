@@ -225,6 +225,7 @@ class StreamExtents:
     def __init__(self, kernel: spir.Kernel):
         self.extents: dict[spir.Identifier, list[Rectangle]] = {}
         self.argnames: set[spir.Identifier] = set(arg.identifier for arg in kernel.arguments)
+        self.is_transposed: dict[spir.Identifier, bool] = {arg.identifier: False for arg in kernel.arguments}
 
     def add_extent(self, arg: spir.Identifier, rect: Rectangle):
         """
@@ -282,12 +283,16 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
                                     f"but compute block variables are {[var.identifier.as_ir() for var in compute_block.variables]}. "
                                     f"Index is not available in this compute block.\n  In {stream_name.lineinfo}")
                             position_order.append(var_name_to_position[index_name])
-                        # If position order is not monotonically increasing, raise an error
-                        if not all(position_order[i] <= position_order[i + 1] for i in range(len(position_order) - 1)):
-                            raise ValueError(
-                                f"Array slice {stream_name.as_ir()} uses an index order that does not match "
-                                f"the compute block variables {[var.identifier.as_ir() for var in compute_block.variables]}"
-                                f".\n  In {stream_name.lineinfo}")
+                        # If position order is monotonically decreasing, we can mark the array mapping as column major
+                        if all(position_order[i] >= position_order[i + 1] for i in range(len(position_order) - 1)):
+                            stream_extents.is_transposed[stream_name.array] = True
+                        else:
+                            # If position order is not monotonically increasing nor decreasing, raise an error
+                            if not all(position_order[i] <= position_order[i + 1] for i in range(len(position_order) - 1)):
+                                raise ValueError(
+                                    f"Array slice {stream_name.as_ir()} uses an index order that does not match "
+                                    f"the compute block variables {[var.identifier.as_ir() for var in compute_block.variables]}"
+                                    f".\n  In {stream_name.lineinfo}")
 
                         stream_name = stream_name.array
 

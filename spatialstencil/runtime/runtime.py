@@ -26,6 +26,7 @@ class ArrayType:
     dtype: str  # One of f32, f16, i32, u32, etc.
     buffer_size: Union[int, None] = None  # Optional buffer size for streams
     rect_offset: List[int] = field(default_factory=lambda: [0, 0])  # Optional rectangle offset for streams
+    column_major: bool = False  # Whether the array should be copied in column-major order
 
 
 dtype_to_numpy = {
@@ -113,7 +114,7 @@ def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.Sdk
         shape[2],
         streaming=not metadata.memcpy_mode,  # Use streaming if not in memcpy mode
         data_type=crt.MemcpyDataType.MEMCPY_32BIT if data.dtype == np.float32 else crt.MemcpyDataType.MEMCPY_16BIT,
-        order=crt.MemcpyOrder.ROW_MAJOR,
+        order=crt.MemcpyOrder.ROW_MAJOR if not metadata.inputs[name].column_major else crt.MemcpyOrder.COL_MAJOR,
         nonblock=True,  # Non-blocking copy
     )
 
@@ -143,7 +144,7 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
         shape[2],
         streaming=not metadata.memcpy_mode,  # Use streaming if not in memcpy mode
         data_type=crt.MemcpyDataType.MEMCPY_32BIT if data.dtype == np.float32 else crt.MemcpyDataType.MEMCPY_16BIT,
-        order=crt.MemcpyOrder.ROW_MAJOR,
+        order=crt.MemcpyOrder.ROW_MAJOR if not metadata.outputs[name].column_major else crt.MemcpyOrder.COL_MAJOR,
         nonblock=False,  # Blocking copy to ensure data is ready after copy
     )
 
