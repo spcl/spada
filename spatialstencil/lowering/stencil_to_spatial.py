@@ -17,6 +17,7 @@ from spatialstencil.syntax.stencil_ir.canonicalize_expression import Canonicaliz
 from spatialstencil.syntax.stencil_ir.refactor_forward_backward_stencils import RefactorForwardBackwardStencils
 from spatialstencil.syntax.stencil_ir.type_inference import infer_scalar_types, infer_types
 from spatialstencil.syntax.stencil_ir.ssa import SSAVisitor
+from spatialstencil.syntax.spatial_ir.passes import mark_readonly_writeonly_arguments
 
 def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: CHANNEL_STRATEGY = CHANNEL_STRATEGY.trivial) -> spa.Kernel:
     """Lower a stencil to a spatial program.
@@ -84,6 +85,8 @@ def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: CHANNEL_ST
     
     coloring = KernelRouting(versioning)
     kernel = coloring.generate_routing(kernel, channel_strategy)
+
+    kernel = mark_readonly_writeonly_arguments(kernel)
 
     return kernel
 

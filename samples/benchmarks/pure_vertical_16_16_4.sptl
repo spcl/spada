@@ -1,4 +1,4 @@
-kernel @pure_vertical<>(stream<f32, 1>[16, 16] _in_field, stream<f32, 4>[16, 16] __kernel_out_0) {
+kernel @pure_vertical<>(stream<f32, 1>[16, 16] readonly _in_field, stream<f32, 4>[16, 16] writeonly __kernel_out_0) {
   place u16 i, u16 j in [0:16 , 0:16] {
     f32[1] in_field_0_0_0
     f32[4] in_field_0_0_0#1

@@ -1,4 +1,4 @@
-kernel @vertical_advection<>(stream<f32, 1>[1, 1] _dtr_stage, stream<f32, 4>[16, 16] _u_pos, stream<f32, 5>[16, 16] _u_stage, stream<f32, 4>[16, 16] _utens, stream<f32, 4>[16, 16] _utens_stage, stream<f32, 4>[17, 16] _wcon, stream<f32, 4>[16, 16] __kernel_out_0) {
+kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f32, 4>[16, 16] readonly _u_pos, stream<f32, 5>[16, 16] readonly _u_stage, stream<f32, 4>[16, 16] readonly _utens, stream<f32, 4>[16, 16] readonly _utens_stage, stream<f32, 4>[17, 16] readonly _wcon, stream<f32, 4>[16, 16] writeonly __kernel_out_0) {
   place u16 i, u16 j in [17:18:2 , 0:16] {
     f32[5] wcon_0_0_0
   }

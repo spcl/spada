@@ -1,4 +1,4 @@
-kernel @one_d_diff<>(stream<f32, 80>[130, 128] _in_field, stream<f32, 80>[128, 128] __kernel_out_0) {
+kernel @one_d_diff<>(stream<f32, 80>[130, 128] readonly _in_field, stream<f32, 80>[128, 128] writeonly __kernel_out_0) {
   place u16 i, u16 j in [1:129:2 , 0:128] {
     f32[80] out_field_0_0_0
     f32[80] in_field_0_0_0
