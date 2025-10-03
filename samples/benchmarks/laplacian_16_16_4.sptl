@@ -1,4 +1,4 @@
-kernel @laplacian<>(stream<f32, 4>[18, 18] _in_field, stream<f32, 4>[16, 16] _kernel_out_0) {
+kernel @laplacian<>(stream<f32, 4>[18, 18] _in_field, stream<f32, 4>[16, 16] __kernel_out_0) {
   place u16 i, u16 j in [1:17:2 , 1:17:2] {
     f32[4] out_field_0_0_0
     f32[4] in_field_0_0_0
@@ -715,16 +715,16 @@ kernel @laplacian<>(stream<f32, 4>[18, 18] _in_field, stream<f32, 4>[16, 16] _ke
   }
   phase {
     compute u32 i#21, u32 j#21 in [1:17:2 , 1:17:2] {
-      await send(out_field_0_0_0, kernel_out_0[(i#21 - 1), (j#21 - 1)])
+      await send(out_field_0_0_0, __kernel_out_0[(i#21 - 1), (j#21 - 1)])
     }
     compute u32 i#21, u32 j#21 in [1:17:2 , 2:17:2] {
-      await send(out_field_0_0_0, kernel_out_0[(i#21 - 1), (j#21 - 1)])
+      await send(out_field_0_0_0, __kernel_out_0[(i#21 - 1), (j#21 - 1)])
     }
     compute u32 i#21, u32 j#21 in [2:17:2 , 1:17:2] {
-      await send(out_field_0_0_0, kernel_out_0[(i#21 - 1), (j#21 - 1)])
+      await send(out_field_0_0_0, __kernel_out_0[(i#21 - 1), (j#21 - 1)])
     }
     compute u32 i#21, u32 j#21 in [2:17:2 , 2:17:2] {
-      await send(out_field_0_0_0, kernel_out_0[(i#21 - 1), (j#21 - 1)])
+      await send(out_field_0_0_0, __kernel_out_0[(i#21 - 1), (j#21 - 1)])
     }
   }
 }

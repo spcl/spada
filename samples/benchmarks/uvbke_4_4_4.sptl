@@ -1,4 +1,4 @@
-kernel @uvbke<>(stream<f32, 4>[4, 5] _arg0, stream<f32, 4>[5, 4] _arg1, stream<f32, 4>[4, 4] _arg2, stream<f32, 4>[4, 4] _arg3, stream<f32, 4>[4, 4] _kernel_out_0, stream<f32, 4>[4, 4] _kernel_out_1) {
+kernel @uvbke<>(stream<f32, 4>[4, 5] _arg0, stream<f32, 4>[5, 4] _arg1, stream<f32, 4>[4, 4] _arg2, stream<f32, 4>[4, 4] _arg3, stream<f32, 4>[4, 4] __kernel_out_0, stream<f32, 4>[4, 4] __kernel_out_1) {
   place u16 i, u16 j in [1:5:2 , 1:5:2] {
     f32[4] arg2_0_0_0
     f32[4] arg3_0_0_0
@@ -727,28 +727,28 @@ kernel @uvbke<>(stream<f32, 4>[4, 5] _arg0, stream<f32, 4>[5, 4] _arg1, stream<f
   }
   phase {
     compute u32 i#19, u32 j#19 in [1:5:2 , 1:5:2] {
-      await send(arg4_0_0_0, kernel_out_0[(i#19 - 1), (j#19 - 1)])
+      await send(arg4_0_0_0, __kernel_out_0[(i#19 - 1), (j#19 - 1)])
     }
     compute u32 i#19, u32 j#19 in [1:5:2 , 2:5:2] {
-      await send(arg4_0_0_0, kernel_out_0[(i#19 - 1), (j#19 - 1)])
+      await send(arg4_0_0_0, __kernel_out_0[(i#19 - 1), (j#19 - 1)])
     }
     compute u32 i#19, u32 j#19 in [2:5:2 , 1:5:2] {
-      await send(arg4_0_0_0, kernel_out_0[(i#19 - 1), (j#19 - 1)])
+      await send(arg4_0_0_0, __kernel_out_0[(i#19 - 1), (j#19 - 1)])
     }
     compute u32 i#19, u32 j#19 in [2:5:2 , 2:5:2] {
-      await send(arg4_0_0_0, kernel_out_0[(i#19 - 1), (j#19 - 1)])
+      await send(arg4_0_0_0, __kernel_out_0[(i#19 - 1), (j#19 - 1)])
     }
     compute u32 i#20, u32 j#20 in [1:5:2 , 1:5:2] {
-      await send(arg5_0_0_0, kernel_out_1[(i#20 - 1), (j#20 - 1)])
+      await send(arg5_0_0_0, __kernel_out_1[(i#20 - 1), (j#20 - 1)])
     }
     compute u32 i#20, u32 j#20 in [1:5:2 , 2:5:2] {
-      await send(arg5_0_0_0, kernel_out_1[(i#20 - 1), (j#20 - 1)])
+      await send(arg5_0_0_0, __kernel_out_1[(i#20 - 1), (j#20 - 1)])
     }
     compute u32 i#20, u32 j#20 in [2:5:2 , 1:5:2] {
-      await send(arg5_0_0_0, kernel_out_1[(i#20 - 1), (j#20 - 1)])
+      await send(arg5_0_0_0, __kernel_out_1[(i#20 - 1), (j#20 - 1)])
     }
     compute u32 i#20, u32 j#20 in [2:5:2 , 2:5:2] {
-      await send(arg5_0_0_0, kernel_out_1[(i#20 - 1), (j#20 - 1)])
+      await send(arg5_0_0_0, __kernel_out_1[(i#20 - 1), (j#20 - 1)])
     }
   }
 }

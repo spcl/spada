@@ -1,4 +1,4 @@
-kernel @vertical_advection<>(stream<f32, 1>[1, 1] _dtr_stage, stream<f32, 80>[128, 128] _u_pos, stream<f32, 81>[128, 128] _u_stage, stream<f32, 80>[128, 128] _utens, stream<f32, 80>[128, 128] _utens_stage, stream<f32, 80>[129, 128] _wcon, stream<f32, 80>[128, 128] _kernel_out_0) {
+kernel @vertical_advection<>(stream<f32, 1>[1, 1] _dtr_stage, stream<f32, 80>[128, 128] _u_pos, stream<f32, 81>[128, 128] _u_stage, stream<f32, 80>[128, 128] _utens, stream<f32, 80>[128, 128] _utens_stage, stream<f32, 80>[129, 128] _wcon, stream<f32, 80>[128, 128] __kernel_out_0) {
   place u16 i, u16 j in [129:130:2 , 0:128] {
     f32[81] wcon_0_0_0
   }
@@ -974,16 +974,16 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] _dtr_stage, stream<f32, 80>[12
   }
   phase {
     compute u32 i#23, u32 j#23 in [1:2:2 , 0:1] {
-      await send(utens_stage_0_0_0#1, kernel_out_0[(i#23 - 1), (j#23 - 0)])
+      await send(utens_stage_0_0_0#1, __kernel_out_0[(i#23 - 1), (j#23 - 0)])
     }
     compute u32 i#23, u32 j#23 in [2:129:2 , 0:128] {
-      await send(utens_stage_0_0_0#1, kernel_out_0[(i#23 - 1), (j#23 - 0)])
+      await send(utens_stage_0_0_0#1, __kernel_out_0[(i#23 - 1), (j#23 - 0)])
     }
     compute u32 i#23, u32 j#23 in [3:129:2 , 0:128] {
-      await send(utens_stage_0_0_0#1, kernel_out_0[(i#23 - 1), (j#23 - 0)])
+      await send(utens_stage_0_0_0#1, __kernel_out_0[(i#23 - 1), (j#23 - 0)])
     }
     compute u32 i#23, u32 j#23 in [1:2:2 , 1:128] {
-      await send(utens_stage_0_0_0#1, kernel_out_0[(i#23 - 1), (j#23 - 0)])
+      await send(utens_stage_0_0_0#1, __kernel_out_0[(i#23 - 1), (j#23 - 0)])
     }
   }
 }

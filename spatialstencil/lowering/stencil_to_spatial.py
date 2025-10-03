@@ -114,16 +114,18 @@ def _get_domain_shift(stencil: sast.Program) -> tuple:
 def kernel_arguments(stencil: sast.Program) -> list[spa.KernelArgument]:
     arguments = []
     for inp, inp_t in zip(stencil.inputs, stencil.operation_type.source):
-        arguments.append(_construct_arg(inp.name, inp_t))
+        arguments.append(_construct_arg(_input_name(inp.name), inp_t))
 
     for i, out_t in enumerate(stencil.operation_type.destination):
         arguments.append(_construct_arg(_ith_output_name(i), out_t))
 
     return arguments
 
+def _input_name(original_name: str) -> str:
+    return f"_{original_name}"
 
 def _ith_output_name(i: int) -> str:
-    return f'kernel_out_{i}'
+    return f'__kernel_out_{i}'
 
 
 def _construct_arg(name: str, arg_t: sast.FieldType | ScalarType) -> spa.KernelArgument:
@@ -137,11 +139,11 @@ def _construct_arg(name: str, arg_t: sast.FieldType | ScalarType) -> spa.KernelA
         stream_type = spa.StreamType(arg_t.dtype, spa.Expression(spa.ConstantLiteral(array_size_z, spa.ScalarType.i16)))
 
         array_type = spa.ArrayType(stream_type, [array_size_x, array_size_y])
-        identifier = spa.Identifier(f'_{name}', 0)
+        identifier = spa.Identifier(name, 0)
         return spa.KernelArgument(array_type, identifier)
     else:
         assert isinstance(arg_t, ScalarType)
-        identifier = spa.Identifier(f'_{name}', 0)
+        identifier = spa.Identifier(name, 0)
         return spa.KernelArgument(arg_t, identifier)
 
 
