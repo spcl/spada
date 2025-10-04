@@ -71,4 +71,5 @@ jobs:
 
     - name: Test CSL with simulator
       run: |
-        PYTHONPATH=`pwd` ./tests/csl_runtime/run_tests.sh
+        pip install -e .
+        ./tests/csl_runtime/run_tests.sh
