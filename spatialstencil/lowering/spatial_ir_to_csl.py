@@ -44,7 +44,6 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     kernel = canonicalization.canonicalize_phases(kernel)
     kernel = canonicalization.reduce_streams(kernel)
     kernel = canonicalization.inline_phases(kernel)
-    print(kernel.as_ir())
 
     # Check if we are streaming or using memcpy mode
     use_memcpy_mode = analysis.kernel_uses_memcpy_mode(kernel)

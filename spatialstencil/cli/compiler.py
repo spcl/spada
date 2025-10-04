@@ -42,7 +42,8 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
                          'Please provide values for them using --param option. For example: -p I=128 -p J=128 -p K=80')
 
     # Concretize parameters and propagate constant expressions
-    print("Concretizing parameters:", kernel_parameters)
+    if kernel_parameters:
+        print("Concretizing parameters:", kernel_parameters)
     kernel = passes.concretize_parameters(kernel, **kernel_parameters)
     kernel = passes.constexpr_propagation(kernel)
 
