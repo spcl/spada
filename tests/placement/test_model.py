@@ -62,7 +62,7 @@ class TestModel(unittest.TestCase):
         # Create the StencilGraph
         stencil_graph = StencilGraph(edges, domain_type, [domain_type] * 3, names, versions, stencils)
 
-        stencil_graph.plot("test_stencil_wedge.png")
+        # stencil_graph.plot("test_stencil_wedge.png")
 
         return stencil_graph
 
@@ -145,7 +145,7 @@ class TestModel(unittest.TestCase):
 
         placement = FieldPartition(np.array([[0, 0], [0, 0], [0, 0]], dtype=np.int32)).place_interleaved()
         self.assertEqual(0, cost_model.depth_of_placement(placement))
-        graph.plot("test_stencil_3path_v.png")
+        # graph.plot("test_stencil_3path_v.png")
 
     def test_contention(self):
         graph = self.demo_graph_wedge()
@@ -158,7 +158,7 @@ class TestModel(unittest.TestCase):
         self.assertEqual(2 * graph.domain().z_length(), cost_model.contention_of_placement(placement))
 
         graph = self.demo_graph_3path(vertical=False)
-        graph.plot("test_stencil_3path_h.png")
+        # graph.plot("test_stencil_3path_h.png")
         cost_model = CostModel(graph)
         placement = FieldPartition(np.array([[0, 0], [0, 0], [0, 0]], dtype=np.int32)).place_interleaved()
         self.assertEqual(0, cost_model.contention_of_placement(placement))
