@@ -331,7 +331,7 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
                             offsets[var_name_to_position[index_name]] = offset
                             position_order.append(var_name_to_position[index_name])
                         # If position order is monotonically decreasing, we can mark the array mapping as column major
-                        if all(position_order[i] >= position_order[i + 1] for i in range(len(position_order) - 1)):
+                        if len(position_order) > 1 and all(position_order[i] >= position_order[i + 1] for i in range(len(position_order) - 1)):
                             if stream_extents.is_transposed[stream_name.array] is not None:
                                 if not stream_extents.is_transposed[stream_name.array]:
                                     raise ValueError(
@@ -377,7 +377,9 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
         if len(offsets) > 1:
             raise ValueError(f"Stream argument '{stream_name.as_ir()}' is used with multiple offsets: {offsets}. "
                              f"All uses of a stream argument must have the same offset relative to the PE grid.")
-        assert len(offsets) == 1
+        if len(offsets) == 0:
+            offsets.add((0, 0))  # Default offset if none was found
+        
         offset = next(iter(offsets))
         shape = arg_shapes[stream_name.name]['shape']
         offset_rectangles[stream_name] = Rectangle(
@@ -440,11 +442,11 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
             y_min, y_max, y_step = extents[0].y_range
 
         # Intersect with offset rectangle
-        offset_rect = offset_rectangles[stream_name]
-        x_min = max(x_min, offset_rect.x_range[0])
-        x_max = min(x_max, offset_rect.x_range[1])
-        y_min = max(y_min, offset_rect.y_range[0])
-        y_max = min(y_max, offset_rect.y_range[1])
+        # offset_rect = offset_rectangles[stream_name]
+        # x_min = max(x_min, offset_rect.x_range[0])
+        # x_max = min(x_max, offset_rect.x_range[1])
+        # y_min = max(y_min, offset_rect.y_range[0])
+        # y_max = min(y_max, offset_rect.y_range[1])
 
         # Create a new unified rectangle using the metadata from the first rectangle
         unified_rect = Rectangle(

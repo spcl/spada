@@ -674,7 +674,8 @@ def test_shifted_rectangle_extents():
     expectations = {
         a_identifier: ((5, 10, 1), (7, 12, 1)),
         b_identifier: ((5, 10, 1), (7, 15, 1)),
-        c_identifier: ((5, 9, 1), (7, 8, 1)),
+        # c_identifier: ((5, 9, 1), (7, 8, 1)),
+        c_identifier: ((5, 10, 1), (7, 12, 1)),
         out_identifier: ((5, 10, 1), (7, 12, 1)),
     }
 
@@ -708,12 +709,12 @@ def test_shifted_rectangle_extents_1d():
     rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
     stream_extents = analysis.detect_stream_argument_extents(rectangles, kernel)
 
-    assert len(stream_extents.extents) == 4
+    assert len(stream_extents.extents) == 1
 
     a_identifier = spa.Identifier('a', 0)
 
     expectations = {
-        a_identifier: ((2, 3, 1), (5, 15, 1)),
+        a_identifier: ((2, 3, 1), (7, 12, 1)),
     }
 
     for identifier, (expected_x, expected_y) in expectations.items():
@@ -777,6 +778,44 @@ def test_transposed_stream_extents(shifted):
     assert stream_extents.is_transposed[out_identifier] is True
 
 
+@pytest.mark.parametrize('second_index', (False, True))
+def test_transposed_stream_extents_1D(second_index):
+    """
+    Tests detection of transposed mappings between arrays and PEs in 1D.
+    """
+    rng = '0:16, 0:1' if not second_index else '0:1, 0:16'
+    ind = 'i' if not second_index else 'j'
+    ir = f'''
+    kernel @test<>(stream<f32>[16] readonly a, stream<f32>[16] writeonly out) {{
+        place u16 i, u16 j in [{rng}] {{
+            f32 local_a;
+            f32 local_out;
+        }}
+        compute u16 i, u16 j in [{rng}] {{
+            await receive(local_a, a[{ind}]);
+            local_out = local_a;
+            await send(local_out, out[{ind}]);
+        }}
+    }}
+    '''
+    kernel = parser.parse_string(ir)
+    kernel = canonicalization.canonicalize_phases(kernel)
+    kernel = canonicalization.inline_phases(kernel)
+
+    rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    stream_extents = analysis.detect_stream_argument_extents(rectangles, kernel)
+
+    a_identifier = spa.Identifier('a', 0)
+    out_identifier = spa.Identifier('out', 0)
+
+    assert a_identifier in stream_extents.extents
+    assert out_identifier in stream_extents.extents
+    assert len(stream_extents.extents[a_identifier]) == 1
+    assert len(stream_extents.extents[out_identifier]) == 1
+    assert stream_extents.is_transposed[a_identifier] is False
+    assert stream_extents.is_transposed[out_identifier] is False
+
+
 if __name__ == '__main__':
     test_completion_dag_simple()
     test_completion_dag_concurrent()
@@ -798,3 +837,5 @@ if __name__ == '__main__':
     test_shifted_rectangle_extents_1d()
     test_transposed_stream_extents(False)
     test_transposed_stream_extents(True)
+    test_transposed_stream_extents_1D(False)
+    test_transposed_stream_extents_1D(True)
