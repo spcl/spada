@@ -274,8 +274,6 @@ class Program:
 
                 # Validate shape if specified in metadata
                 expected_shape = tuple(self.inputs[name].shape + [self.inputs[name].buffer_size or 1])
-                assert list(expected_shape[0:2]) == self.metadata.kernel_dims, \
-                    f"Input {name} shape {expected_shape[0:2]} does not match kernel dimensions {self.metadata.kernel_dims}"
                 if data.shape != expected_shape:
                     raise ValueError(f"Input {name} has wrong shape. Expected {expected_shape}, got {data.shape}")
 
@@ -333,8 +331,9 @@ if __name__ == "__main__":
     # Set up argument parser
     parser = argparse.ArgumentParser(description="Run a compiled program with numpy array inputs")
     parser.add_argument("program_folder", help="Path to the program folder")
-    parser.add_argument("input_files", nargs="+", help="Input .npy files for the program")
+    parser.add_argument("input_files", nargs="*", help="Input .npy files for the program")
     parser.add_argument("--benchmark", action="store_true", help="Run in benchmark mode")
+    parser.add_argument("--randomize", action="store_true", help="Randomize input data instead of loading from files")
 
     args = parser.parse_args()
 
@@ -343,13 +342,21 @@ if __name__ == "__main__":
 
     # Load input arrays from .npy files
     inputs = []
-    for input_file in args.input_files:
-        data = np.load(input_file)
-        if len(data.shape) not in (2, 3):
-            raise ValueError(f"Input data from {input_file} must be 2D or 3D. Got shape {data.shape}.")
-        if len(data.shape) == 2:
-            data = data.reshape((data.shape[0], data.shape[1], 1))  # Ensure at least 3 dimensions
-        inputs.append(data)
+    if args.randomize:
+        for name, info in program.inputs.items():
+            shape = info.shape + [info.buffer_size or 1]
+            dtype = dtype_to_numpy.get(info.dtype, np.float32)
+            print(f"Randomizing input {name} with shape {shape} and dtype {dtype}")
+            data = np.random.rand(*shape).astype(dtype)
+            inputs.append(data)
+    else:
+        for input_file in args.input_files:
+            data = np.load(input_file)
+            if len(data.shape) not in (2, 3):
+                raise ValueError(f"Input data from {input_file} must be 2D or 3D. Got shape {data.shape}.")
+            if len(data.shape) == 2:
+                data = data.reshape((data.shape[0], data.shape[1], 1))  # Ensure at least 3 dimensions
+            inputs.append(data)
 
     # Run the program with loaded inputs
     outputs = program(*inputs)
