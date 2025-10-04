@@ -241,7 +241,8 @@ def _rectangles_equal(rect1: Rectangle, rect2: Rectangle) -> bool:
 def split_rectangle(rect1: Rectangle[T], rect2: Rectangle) -> list[Rectangle[T]]:
     """
     Split rect1 by rect2 and return the non-overlapping parts, preserving metadata.
-    Assumes all strides are equal.
+    Assumes x-strides are equal to each other and y-strides are equal to each other.
+    If not the case, please apply checkerboarding first.
     
     The result consists of the intersection (if any) plus up to 4 rectangles:
     - Top: above the intersection (spans full width of rect1)

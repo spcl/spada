@@ -92,6 +92,42 @@ class TestStencilIR(unittest.TestCase):
         self.check_rectangle_split_result(rects, split)
 
 
+
+    def test_rectangle_splitting_strided_3(self):
+
+        rect1 = RectWithId(x_range=(3, 14, 1), y_range=(0, 3, 2), metadata=1)
+        rect2 = RectWithId(x_range=(0, 5, 1), y_range=(1, 12, 2), metadata=2)
+
+        rect3 = RectWithId(x_range=(-1, 7, 1), y_range=(-1, 7, 2), metadata=3)
+        rect4 = RectWithId(x_range=(2, 3, 1), y_range=(-1, 3, 2), metadata=4)
+        rect5 = RectWithId(x_range=(-3, 8, 1), y_range=(-2, 5, 2), metadata=5)
+        
+        rects = [rect1, rect2]
+
+        split = split_rectangles(rects)
+        self.check_rectangle_split_result(rects, split)
+
+        rects = [rect4, rect5, rect1, rect2, rect3]
+        split = split_rectangles(rects)
+        self.check_rectangle_split_result(rects, split)
+        
+        rect1 = RectWithId(x_range=(3, 14, 2), y_range=(0, 3, 1), metadata=1)
+        rect2 = RectWithId(x_range=(0, 5, 2), y_range=(1, 12, 1), metadata=2)
+
+        rect3 = RectWithId(x_range=(-1, 7, 2), y_range=(-1, 7, 1), metadata=3)
+        rect4 = RectWithId(x_range=(2, 3, 2), y_range=(-1, 3, 1), metadata=4)
+        rect5 = RectWithId(x_range=(-3, 8, 2), y_range=(-2, 5, 1), metadata=5)
+        
+        rects = [rect1, rect2]
+
+        split = split_rectangles(rects)
+        self.check_rectangle_split_result(rects, split)
+
+        rects = [rect4, rect5, rect1, rect2, rect3]
+        split = split_rectangles(rects)
+        self.check_rectangle_split_result(rects, split)
+
+
     def test_point_contains(self):
         
         rect1 = RectWithId(x_range=(0, 9, 2), y_range=(0, 1, 1), metadata=0)
