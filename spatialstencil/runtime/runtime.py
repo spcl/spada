@@ -1,6 +1,7 @@
 import argparse
 from dataclasses import dataclass, field
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Union, TYPE_CHECKING
 import numpy as np
@@ -223,7 +224,8 @@ class Program:
         self.metadata = ProgramMetadata.from_json(metadata)
 
         # Initialize SDK runtime
-        self.runtime = crt.SdkRuntime(str(self.out_folder), suppress_simfab_trace=True)
+        cmaddr = os.environ.get('CM_ADDR', None)
+        self.runtime = crt.SdkRuntime(str(self.out_folder), suppress_simfab_trace=True, cmaddr=cmaddr)
 
         # Store input/output information from metadata
         self.inputs = self.metadata.inputs
