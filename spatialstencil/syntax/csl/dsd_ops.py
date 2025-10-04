@@ -115,7 +115,7 @@ def _dsd(dsds: UniqueDSDDict, expr: spir.SpatialNode, output: bool = False) -> s
         # If all else fails, return first DSD
         return dsds[expr.as_ir()][0][0]
     elif isinstance(expr, spir.ConstantLiteral):
-        return str(expr.value)
+        return str(float(expr.value))
     raise TypeError(f"Unsupported expression type: {type(expr)}")
 
 
@@ -131,7 +131,7 @@ def _dsd_object(dsds: UniqueDSDDict, expr: spir.SpatialNode, output: bool = Fals
                     return dsd[1]
         return dsds[expr.as_ir()][0][1]
     elif isinstance(expr, spir.ConstantLiteral):
-        return str(expr.value)
+        return str(float(expr.value))
     raise TypeError(f"Unsupported expression type: {type(expr)}")
 
 

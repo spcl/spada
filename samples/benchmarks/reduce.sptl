@@ -1,10 +1,11 @@
 /**
  * Simple chain reduction of a scalar value
  **/
- kernel @reduce<N>(stream<f32, 1>[N] readonly inp, stream<f32, 1> writeonly out) {
+ kernel @reduce<N>(stream<f32, 2>[N,1] readonly inp, stream<f32, 2>[1,1] writeonly out) {
     // Start
     place u16 i, u16 j in [N-1:N, 0:1] {
-        f32[1] local
+        f32[2] local
+        f32[2] snd_val
     }
     dataflow u16 i, u16 j in [N-1:N, 0:1] {
         stream<f32> westwards = relative_stream(-1, 0) {
@@ -14,31 +15,56 @@
     }
     compute u16 i, u16 j in [N-1:N, 0:1] {
         await receive(local, inp[i])
-        await send(local, westwards)
+        snd_val = local
+        await send(snd_val, westwards)
     }
 
     // Middle
-    place u16 i, u16 j in [1:N-1, 0:1] {
-        f32 local
-        f32 rcv_val
+    place u16 i, u16 j in [1:N-1:2, 0:1] {
+        f32[2] local
+        f32[2] rcv_val
     }
-    dataflow u16 i, u16 j in [1:N-1, 0:1] {
+    dataflow u16 i, u16 j in [1:N-1:2, 0:1] {
         stream<f32> westwards = relative_stream(-1, 0) {
             hops = [(-1, 0)],
             channel = 0
         }
+        stream<f32> westwards_rcv = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 1
+        }
     }
-    compute u16 i, u16 j in [1:N-1, 0:1] {
+    compute u16 i, u16 j in [1:N-1:2, 0:1] {
         await receive(local, inp[i])
-        await receive(rcv_val, westwards)
+        await receive(rcv_val, westwards_rcv)
+        rcv_val = rcv_val + local
+        await send(rcv_val, westwards)
+    }
+    place u16 i, u16 j in [2:N-1:2, 0:1] {
+        f32[2] local
+        f32[2] rcv_val
+    }
+    dataflow u16 i, u16 j in [2:N-1:2, 0:1] {
+        stream<f32> westwards = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 1
+        }
+        stream<f32> westwards_rcv = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 0
+        }
+    }
+    compute u16 i, u16 j in [2:N-1:2, 0:1] {
+        await receive(local, inp[i])
+        await receive(rcv_val, westwards_rcv)
         rcv_val = rcv_val + local
         await send(rcv_val, westwards)
     }
 
     // End
     place u16 i, u16 j in [0:1, 0:1] {
-        f32 local
-        f32 rcv_val
+        f32[2] local
+        f32[2] rcv_val
     }
     dataflow u16 i, u16 j in [0:1, 0:1] {
         stream<f32> westwards = relative_stream(-1, 0) {

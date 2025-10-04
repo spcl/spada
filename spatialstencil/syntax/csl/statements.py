@@ -112,12 +112,12 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice, destination: spir.Ident
                 if not indices and isinstance(dtype, spir.ArrayType):
                     indices = ['0']
                 if indices:
-                    return f"{identifier.as_ir()}[{', '.join(indices)}]"
-                return identifier.as_ir()
+                    return f"{name_to_csl(identifier)}[{', '.join(indices)}]"
+                return name_to_csl(identifier)
 
             if isinstance(dtype, spir.ArrayType):
-                return f"{identifier.as_ir()}[0]"
-            return identifier.as_ir()
+                return f"{name_to_csl(identifier)}[0]"
+            return name_to_csl(identifier)
 
         src_expr = _format_indexed_access(source, src_identifier)
         dst_expr = _format_indexed_access(destination, dst_identifier)
@@ -197,9 +197,9 @@ def emit_assignment(statement: spir.AssignmentStatement, dsds: UniqueDSDDict, dt
     # One element assignment
     if isinstance(statement.destination, spir.ArraySlice) or dst_identifier.as_ir() not in dsds:
         if isinstance(dtypes[dst_identifier], spir.ArrayType):
-            dst_expr = dst_identifier.as_ir() + f'[{", ".join(map(str, indices))}]'
+            dst_expr = name_to_csl(dst_identifier) + f'[{", ".join(map(str, indices))}]'
         else:
-            dst_expr = dst_identifier.as_ir()
+            dst_expr = name_to_csl(dst_identifier)
         return f"{dst_expr} = {emit_expression(statement.source, dsds, dtypes)};"
 
     # DSD assignment

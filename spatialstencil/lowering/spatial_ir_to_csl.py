@@ -177,8 +177,15 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
     # Emit symbol names for arguments and kernel
     layout_code.write('\n    // Arguments\n')
     for argument in kernel.arguments:
+        dtype = argument.dtype
+        if isinstance(argument.dtype, spir.ArrayType) and isinstance(argument.dtype.base_type, spir.StreamType):
+            pass
+        elif isinstance(argument.dtype, spir.StreamType):
+            # Support scalar streams
+            dtype = spir.ArrayType(argument.dtype, [1])
+
         layout_code.write(
-            f'    @export_name("{argument.identifier.name}", {dtype_as_csl(argument.dtype, export=True)}, true);\n')
+            f'    @export_name("{argument.identifier.name}", {dtype_as_csl(dtype, export=True)}, true);\n')
 
     # Generate benchmarking code
     if not disable_benchmarking:
@@ -514,17 +521,19 @@ def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, foote
     # Add arguments to header and footer
     if use_memcpy_mode:
         for argument in kernel.arguments:
+            name = name_to_csl(argument.identifier)
             if isinstance(argument.dtype, spir.ArrayType) and isinstance(argument.dtype.base_type, spir.StreamType):
                 assert argument.dtype.base_type.buffer_size is not None, f'Argument {argument.identifier.name} has no buffer size defined'
-                name = name_to_csl(argument.identifier)
                 # Ignore array size in arguments, as they are spatially mapped
                 size = argument.dtype.base_type.buffer_size.eval()
+                ptrtype = dtype_as_csl(argument.dtype, export=True)
             else:
                 size = 1
+                ptrtype = dtype_as_csl(spir.ArrayType(argument.dtype, [1]), export=True)
 
             header.write(f'var {name}: [{size}]'
                          f'{dtype_as_csl(argument.dtype.element_type.element_type.element_type)};\n')
-            header.write(f'var __{name}_ptr: {dtype_as_csl(argument.dtype, export=True)} = &{name};\n')
+            header.write(f'var __{name}_ptr: {ptrtype} = &{name};\n')
             footer.write(f'    @export_symbol(__{name}_ptr, "{name}");\n')
     else:
         # TODO(later): Some scaffolding for streaming indices within rectangle code
