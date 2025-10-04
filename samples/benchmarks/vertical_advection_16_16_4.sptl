@@ -1,8 +1,8 @@
 kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f32, 4>[16, 16] readonly _u_pos, stream<f32, 5>[16, 16] readonly _u_stage, stream<f32, 4>[16, 16] readonly _utens, stream<f32, 4>[16, 16] readonly _utens_stage, stream<f32, 4>[17, 16] readonly _wcon, stream<f32, 4>[16, 16] writeonly __kernel_out_0) {
-  place u16 i, u16 j in [17:18:2 , 0:16] {
+  place u16 i, u16 j in [17:18:2 , 0:16:1] {
     f32[5] wcon_0_0_0
   }
-  place u16 i#1, u16 j#1 in [1:2:2 , 0:1] {
+  place u16 i#1, u16 j#1 in [1:2:2 , 0:1:1] {
     f32[5] utens_stage_0_0_0#1
     f32[5] _refactored_wcon_1_0_0_0_0
     f32[4] ccol_0_0_0
@@ -30,29 +30,29 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
     f32[2] divided_0_0_0
     f32[2] ccol_0_0_0#2
     f32[2] dcol_0_0_0#2
-    f32[4] gav_0_0_-1
+    f32[4] gav_0_0_m1
     f32[4] gav_0_0_0
     f32[4] _temp_0_0_0#6
-    f32[4] gcv_0_0_-1
+    f32[4] gcv_0_0_m1
     f32[4] gcv_0_0_0#1
     f32[4] _temp_0_0_0#7
     f32[4] _temp_0_0_0#8
-    f32[4] as__0_0_-1
+    f32[4] as__0_0_m1
     f32[4] as__0_0_0
-    f32[4] cs_0_0_-1
+    f32[4] cs_0_0_m1
     f32[4] cs_0_0_0#1
     f32[4] acol_0_0_0
-    f32[4] ccol_0_0_-1
+    f32[4] ccol_0_0_m1
     f32[4] ccol_0_0_0#3
     f32[4] bcol_0_0_0#1
     f32[4] _temp_0_0_0#9
-    f32[4] correction_term_0_0_-1
+    f32[4] correction_term_0_0_m1
     f32[4] correction_term_0_0_0#1
     f32[4] _temp_0_0_0#10
     f32[4] _temp_0_0_0#11
     f32[4] _temp_0_0_0#12
     f32[4] _temp_0_0_0#13
-    f32[4] dcol_0_0_-1
+    f32[4] dcol_0_0_m1
     f32[4] dcol_0_0_0#3
     f32[4] _temp_0_0_0#14
     f32[4] _temp_0_0_0#15
@@ -64,17 +64,17 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
     f32[4] dcol_0_0_0#4
     f32[4] _temp_0_0_0#19
     f32[4] _temp_0_0_0#20
-    f32[5] gav_0_0_-1#1
+    f32[5] gav_0_0_m1#1
     f32[5] gav_0_0_0#1
     f32[5] _temp_0_0_0#21
-    f32[5] as__0_0_-1#1
+    f32[5] as__0_0_m1#1
     f32[5] as__0_0_0#1
     f32[5] acol_0_0_0#1
     f32[5] bcol_0_0_0#2
-    f32[5] correction_term_0_0_-1#1
+    f32[5] correction_term_0_0_m1#1
     f32[5] correction_term_0_0_0#2
     f32[5] _temp_0_0_0#22
-    f32[5] dcol_0_0_-1#1
+    f32[5] dcol_0_0_m1#1
     f32[5] dcol_0_0_0#5
     f32[5] _temp_0_0_0#23
     f32[5] _temp_0_0_0#24
@@ -95,7 +95,7 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
     f32[4] utens_stage_0_0_0#3
     f32[4] _temp_0_0_0#32
   }
-  place u16 i#2, u16 j#2 in [2:17:2 , 0:16] {
+  place u16 i#2, u16 j#2 in [2:17:2 , 0:16:1] {
     f32[5] utens_stage_0_0_0#1
     f32[5] _refactored_wcon_1_0_0_0_0
     f32[4] ccol_0_0_0
@@ -122,29 +122,29 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
     f32[2] divided_0_0_0
     f32[2] ccol_0_0_0#2
     f32[2] dcol_0_0_0#2
-    f32[4] gav_0_0_-1
+    f32[4] gav_0_0_m1
     f32[4] gav_0_0_0
     f32[4] _temp_0_0_0#6
-    f32[4] gcv_0_0_-1
+    f32[4] gcv_0_0_m1
     f32[4] gcv_0_0_0#1
     f32[4] _temp_0_0_0#7
     f32[4] _temp_0_0_0#8
-    f32[4] as__0_0_-1
+    f32[4] as__0_0_m1
     f32[4] as__0_0_0
-    f32[4] cs_0_0_-1
+    f32[4] cs_0_0_m1
     f32[4] cs_0_0_0#1
     f32[4] acol_0_0_0
-    f32[4] ccol_0_0_-1
+    f32[4] ccol_0_0_m1
     f32[4] ccol_0_0_0#3
     f32[4] bcol_0_0_0#1
     f32[4] _temp_0_0_0#9
-    f32[4] correction_term_0_0_-1
+    f32[4] correction_term_0_0_m1
     f32[4] correction_term_0_0_0#1
     f32[4] _temp_0_0_0#10
     f32[4] _temp_0_0_0#11
     f32[4] _temp_0_0_0#12
     f32[4] _temp_0_0_0#13
-    f32[4] dcol_0_0_-1
+    f32[4] dcol_0_0_m1
     f32[4] dcol_0_0_0#3
     f32[4] _temp_0_0_0#14
     f32[4] _temp_0_0_0#15
@@ -156,17 +156,17 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
     f32[4] dcol_0_0_0#4
     f32[4] _temp_0_0_0#19
     f32[4] _temp_0_0_0#20
-    f32[5] gav_0_0_-1#1
+    f32[5] gav_0_0_m1#1
     f32[5] gav_0_0_0#1
     f32[5] _temp_0_0_0#21
-    f32[5] as__0_0_-1#1
+    f32[5] as__0_0_m1#1
     f32[5] as__0_0_0#1
     f32[5] acol_0_0_0#1
     f32[5] bcol_0_0_0#2
-    f32[5] correction_term_0_0_-1#1
+    f32[5] correction_term_0_0_m1#1
     f32[5] correction_term_0_0_0#2
     f32[5] _temp_0_0_0#22
-    f32[5] dcol_0_0_-1#1
+    f32[5] dcol_0_0_m1#1
     f32[5] dcol_0_0_0#5
     f32[5] _temp_0_0_0#23
     f32[5] _temp_0_0_0#24
@@ -187,7 +187,7 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
     f32[4] utens_stage_0_0_0#3
     f32[4] _temp_0_0_0#32
   }
-  place u16 i#2, u16 j#2 in [3:17:2 , 0:16] {
+  place u16 i#2, u16 j#2 in [3:17:2 , 0:16:1] {
     f32[5] utens_stage_0_0_0#1
     f32[5] _refactored_wcon_1_0_0_0_0
     f32[4] ccol_0_0_0
@@ -214,29 +214,29 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
     f32[2] divided_0_0_0
     f32[2] ccol_0_0_0#2
     f32[2] dcol_0_0_0#2
-    f32[4] gav_0_0_-1
+    f32[4] gav_0_0_m1
     f32[4] gav_0_0_0
     f32[4] _temp_0_0_0#6
-    f32[4] gcv_0_0_-1
+    f32[4] gcv_0_0_m1
     f32[4] gcv_0_0_0#1
     f32[4] _temp_0_0_0#7
     f32[4] _temp_0_0_0#8
-    f32[4] as__0_0_-1
+    f32[4] as__0_0_m1
     f32[4] as__0_0_0
-    f32[4] cs_0_0_-1
+    f32[4] cs_0_0_m1
     f32[4] cs_0_0_0#1
     f32[4] acol_0_0_0
-    f32[4] ccol_0_0_-1
+    f32[4] ccol_0_0_m1
     f32[4] ccol_0_0_0#3
     f32[4] bcol_0_0_0#1
     f32[4] _temp_0_0_0#9
-    f32[4] correction_term_0_0_-1
+    f32[4] correction_term_0_0_m1
     f32[4] correction_term_0_0_0#1
     f32[4] _temp_0_0_0#10
     f32[4] _temp_0_0_0#11
     f32[4] _temp_0_0_0#12
     f32[4] _temp_0_0_0#13
-    f32[4] dcol_0_0_-1
+    f32[4] dcol_0_0_m1
     f32[4] dcol_0_0_0#3
     f32[4] _temp_0_0_0#14
     f32[4] _temp_0_0_0#15
@@ -248,17 +248,17 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
     f32[4] dcol_0_0_0#4
     f32[4] _temp_0_0_0#19
     f32[4] _temp_0_0_0#20
-    f32[5] gav_0_0_-1#1
+    f32[5] gav_0_0_m1#1
     f32[5] gav_0_0_0#1
     f32[5] _temp_0_0_0#21
-    f32[5] as__0_0_-1#1
+    f32[5] as__0_0_m1#1
     f32[5] as__0_0_0#1
     f32[5] acol_0_0_0#1
     f32[5] bcol_0_0_0#2
-    f32[5] correction_term_0_0_-1#1
+    f32[5] correction_term_0_0_m1#1
     f32[5] correction_term_0_0_0#2
     f32[5] _temp_0_0_0#22
-    f32[5] dcol_0_0_-1#1
+    f32[5] dcol_0_0_m1#1
     f32[5] dcol_0_0_0#5
     f32[5] _temp_0_0_0#23
     f32[5] _temp_0_0_0#24
@@ -279,7 +279,7 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
     f32[4] utens_stage_0_0_0#3
     f32[4] _temp_0_0_0#32
   }
-  place u16 i#3, u16 j#3 in [1:2:2 , 1:16] {
+  place u16 i#3, u16 j#3 in [1:2:2 , 1:16:1] {
     f32[5] utens_stage_0_0_0#1
     f32[5] _refactored_wcon_1_0_0_0_0
     f32[4] ccol_0_0_0
@@ -306,29 +306,29 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
     f32[2] divided_0_0_0
     f32[2] ccol_0_0_0#2
     f32[2] dcol_0_0_0#2
-    f32[4] gav_0_0_-1
+    f32[4] gav_0_0_m1
     f32[4] gav_0_0_0
     f32[4] _temp_0_0_0#6
-    f32[4] gcv_0_0_-1
+    f32[4] gcv_0_0_m1
     f32[4] gcv_0_0_0#1
     f32[4] _temp_0_0_0#7
     f32[4] _temp_0_0_0#8
-    f32[4] as__0_0_-1
+    f32[4] as__0_0_m1
     f32[4] as__0_0_0
-    f32[4] cs_0_0_-1
+    f32[4] cs_0_0_m1
     f32[4] cs_0_0_0#1
     f32[4] acol_0_0_0
-    f32[4] ccol_0_0_-1
+    f32[4] ccol_0_0_m1
     f32[4] ccol_0_0_0#3
     f32[4] bcol_0_0_0#1
     f32[4] _temp_0_0_0#9
-    f32[4] correction_term_0_0_-1
+    f32[4] correction_term_0_0_m1
     f32[4] correction_term_0_0_0#1
     f32[4] _temp_0_0_0#10
     f32[4] _temp_0_0_0#11
     f32[4] _temp_0_0_0#12
     f32[4] _temp_0_0_0#13
-    f32[4] dcol_0_0_-1
+    f32[4] dcol_0_0_m1
     f32[4] dcol_0_0_0#3
     f32[4] _temp_0_0_0#14
     f32[4] _temp_0_0_0#15
@@ -340,17 +340,17 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
     f32[4] dcol_0_0_0#4
     f32[4] _temp_0_0_0#19
     f32[4] _temp_0_0_0#20
-    f32[5] gav_0_0_-1#1
+    f32[5] gav_0_0_m1#1
     f32[5] gav_0_0_0#1
     f32[5] _temp_0_0_0#21
-    f32[5] as__0_0_-1#1
+    f32[5] as__0_0_m1#1
     f32[5] as__0_0_0#1
     f32[5] acol_0_0_0#1
     f32[5] bcol_0_0_0#2
-    f32[5] correction_term_0_0_-1#1
+    f32[5] correction_term_0_0_m1#1
     f32[5] correction_term_0_0_0#2
     f32[5] _temp_0_0_0#22
-    f32[5] dcol_0_0_-1#1
+    f32[5] dcol_0_0_m1#1
     f32[5] dcol_0_0_0#5
     f32[5] _temp_0_0_0#23
     f32[5] _temp_0_0_0#24
@@ -371,10 +371,10 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
     f32[4] utens_stage_0_0_0#3
     f32[4] _temp_0_0_0#32
   }
-  place u16 i#8, u16 j#8 in [0:1:2 , 0:16] {
+  place u16 i#8, u16 j#8 in [0:1:2 , 0:16:1] {
     f32[5] _refactored_wcon_1_0_0_0_0#1
   }
-  dataflow u16 i#9, u16 j#9 in [0:1:2 , 0:16] {
+  dataflow u16 i#9, u16 j#9 in [0:1:2 , 0:16:1] {
     stream<f32> _stream_wcon#1 = relative_stream(-1, 0) {
       hops = [(-1, 0)], 
       channel = 0
@@ -384,7 +384,7 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
       channel = 1
     }
   }
-  dataflow u16 i#9, u16 j#9 in [17:18:2 , 0:16] {
+  dataflow u16 i#9, u16 j#9 in [17:18:2 , 0:16:1] {
     stream<f32> _stream_wcon#1 = relative_stream(-1, 0) {
       hops = [(-1, 0)], 
       channel = 0
@@ -394,7 +394,7 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
       channel = 1
     }
   }
-  dataflow u16 i#9, u16 j#9 in [1:2:2 , 0:1] {
+  dataflow u16 i#9, u16 j#9 in [1:2:2 , 0:1:1] {
     stream<f32> _stream_wcon#1 = relative_stream(-1, 0) {
       hops = [(-1, 0)], 
       channel = 0
@@ -404,7 +404,7 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
       channel = 1
     }
   }
-  dataflow u16 i#9, u16 j#9 in [2:17:2 , 0:16] {
+  dataflow u16 i#9, u16 j#9 in [2:17:2 , 0:16:1] {
     stream<f32> _stream_wcon#1 = relative_stream(-1, 0) {
       hops = [(-1, 0)], 
       channel = 0
@@ -414,7 +414,7 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
       channel = 1
     }
   }
-  dataflow u16 i#9, u16 j#9 in [3:17:2 , 0:16] {
+  dataflow u16 i#9, u16 j#9 in [3:17:2 , 0:16:1] {
     stream<f32> _stream_wcon#1 = relative_stream(-1, 0) {
       hops = [(-1, 0)], 
       channel = 0
@@ -424,7 +424,7 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
       channel = 1
     }
   }
-  dataflow u16 i#9, u16 j#9 in [1:2:2 , 1:16] {
+  dataflow u16 i#9, u16 j#9 in [1:2:2 , 1:16:1] {
     stream<f32> _stream_wcon#1 = relative_stream(-1, 0) {
       hops = [(-1, 0)], 
       channel = 0
@@ -434,13 +434,13 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
       channel = 1
     }
   }
-  compute u16 i#4, u16 j#4 in [17:18:2 , 0:16] {
+  compute u16 i#4, u16 j#4 in [17:18:2 , 0:16:1] {
     await receive(wcon_0_0_0, _wcon[i#4, j#4])
     awaitall
     completion _send_comp = send(wcon_0_0_0, _stream_wcon#1)
     await _send_comp
   }
-  compute u16 i#5, u16 j#5 in [1:2:2 , 0:1] {
+  compute u16 i#5, u16 j#5 in [1:2:2 , 0:1:1] {
     await receive(utens_stage_0_0_0#1, _utens_stage[i#5, j#5])
     await receive(dtr_stage_0_0_0, _dtr_stage[i#5, j#5])
     await receive(u_pos_0_0_0, _u_pos[i#5, j#5])
@@ -553,7 +553,7 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
     awaitall
     await send(utens_stage_0_0_0#1, __kernel_out_0[(i#5 - 1), (j#5 - 0)])
   }
-  compute u16 i#6, u16 j#6 in [2:17:2 , 0:16] {
+  compute u16 i#6, u16 j#6 in [2:17:2 , 0:16:1] {
     await receive(utens_stage_0_0_0#1, _utens_stage[i#6, j#6])
     await receive(u_pos_0_0_0, _u_pos[i#6, j#6])
     await receive(u_stage_0_0_0, _u_stage[i#6, j#6])
@@ -665,7 +665,7 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
     awaitall
     await send(utens_stage_0_0_0#1, __kernel_out_0[(i#6 - 1), (j#6 - 0)])
   }
-  compute u16 i#6, u16 j#6 in [3:17:2 , 0:16] {
+  compute u16 i#6, u16 j#6 in [3:17:2 , 0:16:1] {
     await receive(utens_stage_0_0_0#1, _utens_stage[i#6, j#6])
     await receive(u_pos_0_0_0, _u_pos[i#6, j#6])
     await receive(u_stage_0_0_0, _u_stage[i#6, j#6])
@@ -777,7 +777,7 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
     awaitall
     await send(utens_stage_0_0_0#1, __kernel_out_0[(i#6 - 1), (j#6 - 0)])
   }
-  compute u16 i#7, u16 j#7 in [1:2:2 , 1:16] {
+  compute u16 i#7, u16 j#7 in [1:2:2 , 1:16:1] {
     await receive(utens_stage_0_0_0#1, _utens_stage[i#7, j#7])
     await receive(u_pos_0_0_0, _u_pos[i#7, j#7])
     await receive(u_stage_0_0_0, _u_stage[i#7, j#7])
@@ -889,7 +889,7 @@ kernel @vertical_advection<>(stream<f32, 1>[1, 1] readonly _dtr_stage, stream<f3
     awaitall
     await send(utens_stage_0_0_0#1, __kernel_out_0[(i#7 - 1), (j#7 - 0)])
   }
-  compute u16 i#11, u16 j#11 in [0:1:2 , 0:16] {
+  compute u16 i#11, u16 j#11 in [0:1:2 , 0:16:1] {
     completion _recv_comp = foreach i32 k, f32 x in [0:5], receive(_stream_wcon#1) {
       _refactored_wcon_1_0_0_0_0#1[k] = x
     }

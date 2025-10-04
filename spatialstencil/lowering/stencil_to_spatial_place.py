@@ -186,7 +186,8 @@ class ProgramPlacement:
 
         result = []
         for offset in offsets:
-            spa_identifier = self.versioning.next_version(f'{identifier.name}_{offset[0]}_{offset[1]}_{offset[2]}')
+            def _n(x): return x if x >= 0 else f'm{-x}'
+            spa_identifier = self.versioning.next_version(f'{identifier.name}_{_n(offset[0])}_{_n(offset[1])}_{_n(offset[2])}')
             assert domain.z[0] >= 0, "Z dimension must be non-negative"
             # Not that this might over-allocate the z-dimension, which is done to simplify the address calculations
             # We expect this temporary storage to be optimized away in a later pass
