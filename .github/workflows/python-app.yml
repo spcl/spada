@@ -68,3 +68,7 @@ jobs:
     - name: Test with pytest
       run: |
         PYTHONPATH=`pwd` pytest
+
+    - name: Test CSL with simulator
+      run: |
+        PYTHONPATH=`pwd` ./tests/csl_runtime/run_tests.sh
