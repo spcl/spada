@@ -1,0 +1,14 @@
+lark-parser==0.12.0
+parse==1.20.1
+pytest
+
+igraph~=0.11.4
+numpy~=1.24.4
+matplotlib~=3.7.5
+hilbertcurve~=2.0.5
+networkx~=2.8.8
+
+mkdocs~=1.5.3
+mkdocs-material~=9.2.7
+mkdocs-material-extensions~=1.2
+pymdown-extensions~=10.2.1
