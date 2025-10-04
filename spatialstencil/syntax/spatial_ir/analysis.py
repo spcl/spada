@@ -226,7 +226,7 @@ class StreamExtents:
         self.extents: dict[spir.Identifier, list[Rectangle]] = {}
         self.argnames: set[spir.Identifier] = set(arg.identifier for arg in kernel.arguments)
         self.is_transposed: dict[spir.Identifier, bool] = {arg.identifier: None for arg in kernel.arguments}
-        self.offsets: dict[spir.Identifier, list[tuple[int, int]]] = {arg.identifier: [] for arg in kernel.arguments}
+        self.offsets: dict[spir.Identifier, set[tuple[int, int]]] = {arg.identifier: set() for arg in kernel.arguments}
 
     def add_extent(self, arg: spir.Identifier, rect: Rectangle, offsets: tuple[int, int]):
         """
@@ -239,7 +239,7 @@ class StreamExtents:
             self.extents[arg] = []
 
         self.extents[arg].append(rect)
-        self.offsets[arg].append(offsets)
+        self.offsets[arg].add(tuple(offsets))
 
     def is_valid(self, arg: spir.Identifier, rect: Rectangle) -> bool:
         return arg in self.extents and any(rect.is_subset_of(r) for r in self.extents[arg])
@@ -254,7 +254,7 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
     Each stream argument has to correspond to a single contiguous rectangle (even if it appears as a union
     of rectangles). In case of disjoint rectangles, an exception is raised.
     """
-    # TODO: Reimplement extents as follows:
+    # Extents are extracted as follows:
     # 1. Collect all offsets in send/receive expressions (use index variable to map 1D offsets to 2D offsets properly)
     # 2. If multiple offsets coincide, raise an exception
     # 3. Collect all rectangles where each argument is used
@@ -262,7 +262,6 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
     # 5. Union all rectangles for each argument
     # 6. Intersect offsets with union of rectangles to minimize the range to the used area
     # 7. Return the extents
-    # Right now this is not implemented correctly and may lead to incorrect extents.
 
     # Collect all extents from all rectangles
     stream_extents = StreamExtents(kernel)
@@ -313,10 +312,10 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
                                     )
                                 if isinstance(expr.left.value, spir.Identifier):
                                     index_name = expr.left.value
-                                    offset = expr.right.eval() if expr.op == '+' else -expr.right.eval()
+                                    offset = -expr.right.eval() if expr.op == '+' else expr.right.eval()
                                 elif isinstance(expr.right.value, spir.Identifier):
                                     index_name = expr.right.value
-                                    offset = expr.left.eval() if expr.op == '+' else -expr.left.eval()
+                                    offset = -expr.left.eval() if expr.op == '+' else expr.left.eval()
                                 else:
                                     # Both sides are non-identifiers (e.g., constants or complex expressions)
                                     raise ValueError(
@@ -372,6 +371,20 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
 
                     stream_extents.add_extent(stream_name, rect, offsets)
 
+    # Check for offset consistency and create rectangles
+    offset_rectangles: dict[spir.Identifier, Rectangle] = {}
+    for stream_name, offsets in stream_extents.offsets.items():
+        if len(offsets) > 1:
+            raise ValueError(f"Stream argument '{stream_name.as_ir()}' is used with multiple offsets: {offsets}. "
+                             f"All uses of a stream argument must have the same offset relative to the PE grid.")
+        assert len(offsets) == 1
+        offset = next(iter(offsets))
+        shape = arg_shapes[stream_name.name]['shape']
+        offset_rectangles[stream_name] = Rectangle(
+            x_range=(offset[0], offset[0] + shape[0], 1) if len(shape) > 0 else (offset[0], offset[0] + 1, 1),
+            y_range=(offset[1], offset[1] + shape[1], 1) if len(shape) > 1 else (offset[1], offset[1] + 1, 1),
+            metadata=None)
+
     # Check for disjoint rectangles and validate that each stream argument maps to a contiguous region
     for stream_name, extents in stream_extents.extents.items():
         if len(extents) > 1:
@@ -410,22 +423,34 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
                                      f"{next_rect.x_range}x{next_rect.y_range}, which are not contiguous. "
                                      f"Stream arguments must correspond to a single contiguous rectangular region.")
 
-    # Union all rectangles for each stream argument
+    # Union all rectangles for each stream argument and intersect with offset rectangle
+    # NOTE: This may lead to incorrect extents if rectangles are not aligned properly.
     for stream_name, extents in stream_extents.extents.items():
         if len(extents) > 1:
             # Union the rectangles into a single rectangle
             x_min = min(r.x_range[0] for r in extents)
             x_max = max(r.x_range[1] for r in extents)
-            x_step = min(r.x_range[2] for r in extents)
             y_min = min(r.y_range[0] for r in extents)
             y_max = max(r.y_range[1] for r in extents)
-            y_step = min(r.y_range[2] for r in extents)
 
-            # Create a new unified rectangle using the metadata from the first rectangle
-            unified_rect = Rectangle(
-                x_range=(x_min, x_max, x_step), y_range=(y_min, y_max, y_step), metadata=extents[0].metadata)
+            x_step = 1 if len(set(r.x_range[2] for r in extents)) > 1 else extents[0].x_range[2]  # NOTE: Overapproximating
+            y_step = 1 if len(set(r.y_range[2] for r in extents)) > 1 else extents[0].y_range[2]  # NOTE: Overapproximating
+        else:
+            x_min, x_max, x_step = extents[0].x_range
+            y_min, y_max, y_step = extents[0].y_range
 
-            # Replace the list with just the unified rectangle
-            stream_extents.extents[stream_name] = [unified_rect]
+        # Intersect with offset rectangle
+        offset_rect = offset_rectangles[stream_name]
+        x_min = max(x_min, offset_rect.x_range[0])
+        x_max = min(x_max, offset_rect.x_range[1])
+        y_min = max(y_min, offset_rect.y_range[0])
+        y_max = min(y_max, offset_rect.y_range[1])
+
+        # Create a new unified rectangle using the metadata from the first rectangle
+        unified_rect = Rectangle(
+            x_range=(x_min, x_max, x_step), y_range=(y_min, y_max, y_step), metadata=extents[0].metadata)
+
+        # Replace the list with just the unified rectangle
+        stream_extents.extents[stream_name] = [unified_rect]
 
     return stream_extents

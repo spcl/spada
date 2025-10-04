@@ -26,6 +26,8 @@ class ArrayType:
     dtype: str  # One of f32, f16, i32, u32, etc.
     buffer_size: Union[int, None] = None  # Optional buffer size for streams
     rect_offset: List[int] = field(default_factory=lambda: [0, 0])  # Optional rectangle offset for streams
+    # Actual rectangle offset used in PEs. Subtract from rect_offset to get the offset within the buffer to copy
+    rect_offset_used: List[int] = field(default_factory=lambda: [0, 0])
     column_major: bool = False  # Whether the array should be copied in column-major order
 
 
@@ -107,8 +109,8 @@ def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.Sdk
     runtime.memcpy_h2d(
         buffer_id,
         data.ravel(),
-        metadata.inputs[name].rect_offset[0],  # PE offset in x direction
-        metadata.inputs[name].rect_offset[1],  # PE offset in y direction
+        metadata.inputs[name].rect_offset_used[0],  # PE offset in x direction
+        metadata.inputs[name].rect_offset_used[1],  # PE offset in y direction
         shape[0],  # Width is the second dimension
         shape[1],  # Height is the first dimension
         shape[2],
@@ -137,8 +139,8 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
     runtime.memcpy_d2h(
         data.ravel(),
         buffer_id,
-        metadata.outputs[name].rect_offset[0],  # PE offset in x direction
-        metadata.outputs[name].rect_offset[1],  # PE offset in y direction
+        metadata.outputs[name].rect_offset_used[0],  # PE offset in x direction
+        metadata.outputs[name].rect_offset_used[1],  # PE offset in y direction
         shape[0],  # Width is the second dimension
         shape[1],  # Height is the first dimension
         shape[2],

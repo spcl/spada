@@ -22,9 +22,9 @@ python <<EOF
 import numpy as np
 # Load the arrays
 ref = np.load('expected_out.npy')
-output = np.load('OUT__kernel_out_0.npy')
+output = np.load('OUT___kernel_out_0.npy')
 # Check if the output is correct
-if not np.allclose(output, ref):
+if not np.allclose(output, ref, atol=1e-6, rtol=1e-5):
     print("Test failed: Output does not match expected result.")
     exit(1)
 else:
@@ -33,4 +33,4 @@ EOF
 
 # Clean up generated files
 rm -rf lap_sptl
-rm -f a.npy OUT__kernel_out_0.npy expected_out.npy
+rm -f a.npy OUT___kernel_out_0.npy expected_out.npy

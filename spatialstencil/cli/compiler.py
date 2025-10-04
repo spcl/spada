@@ -106,10 +106,11 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         if arg_id not in stream_extents.extents:
             raise ValueError(f"Argument '{argname}' does not have a detected extent. "
                              "Please ensure the argument is properly defined in the kernel.")
-        arg["rect_offset"] = [
+        arg["rect_offset_used"] = [
             stream_extents.extents[arg_id][0].x_range[0], stream_extents.extents[arg_id][0].y_range[0]
         ]
         arg["column_major"] = stream_extents.is_transposed[arg_id]
+        arg["rect_offset"] = list(next(iter(stream_extents.offsets[arg_id])))
     metadata = {
         "kernel_name": kernel.name,
         "inputs": input_args,

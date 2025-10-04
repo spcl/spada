@@ -651,7 +651,7 @@ def test_shifted_rectangle_extents():
             f32 local_b2;
         }
         compute u16 i, u16 j in [5:10, 12:15] {
-            await receive(local_b2, b[i - 5, j - 12]);
+            await receive(local_b2, b[i - 5, j - 7]);
         }
     }
     '''
@@ -672,10 +672,10 @@ def test_shifted_rectangle_extents():
     out_identifier = spa.Identifier('out', 0)
 
     expectations = {
-        a_identifier: ((1, 11, 1), (2, 12, 1)),
-        b_identifier: ((5, 21, 1), (7, 23, 1)),
-        c_identifier: ((-1, 9, 1), (-2, 8, 1)),
-        out_identifier: ((1, 17, 1), (2, 18, 1)),
+        a_identifier: ((5, 10, 1), (7, 12, 1)),
+        b_identifier: ((5, 10, 1), (7, 15, 1)),
+        c_identifier: ((5, 9, 1), (7, 8, 1)),
+        out_identifier: ((5, 10, 1), (7, 12, 1)),
     }
 
     for identifier, (expected_x, expected_y) in expectations.items():
