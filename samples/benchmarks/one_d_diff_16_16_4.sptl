@@ -148,7 +148,9 @@ kernel @one_d_diff<>(stream<f32, 4>[18, 16] readonly _in_field, stream<f32, 4>[1
   compute u16 i#4, u16 j#4 in [0:1:2 , 0:16:1] {
     await receive(in_field_0_0_0, _in_field[i#4, j#4])
     awaitall
-    completion _recv_comp = receive(_temp_0_0_0#1[k#1], _stream_in_field#4)
+    completion _recv_comp = foreach i32 k#1, f32 x in [0:4:1], receive(_stream_in_field#4) {
+      _temp_0_0_0#1[k#1] = x
+    }
     await _recv_comp
     completion _send_comp#1 = send(in_field_0_0_0, _stream_in_field#2)
     await _send_comp#1
@@ -158,7 +160,9 @@ kernel @one_d_diff<>(stream<f32, 4>[18, 16] readonly _in_field, stream<f32, 4>[1
     awaitall
     completion _send_comp = send(in_field_0_0_0, _stream_in_field#4)
     await _send_comp
-    completion _recv_comp#1 = receive(out_field_0_0_0#1[k#2], _stream_in_field#2)
+    completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:4:1], receive(_stream_in_field#2) {
+      out_field_0_0_0#1[k#2] = x#1
+    }
     await _recv_comp#1
   }
 }

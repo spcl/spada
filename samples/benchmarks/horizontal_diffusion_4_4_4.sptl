@@ -2210,7 +2210,9 @@ kernel @horizontal_diffusion<>(stream<f32, 4>[4, 4] readonly _coeff, stream<f32,
     await _send_comp#4
     completion _send_comp#5 = send(lap_field_0_0_0, _stream_lap_field_mat#7)
     await _send_comp#5
-    completion _recv_comp#9 = receive(_temp_0_0_0#7[k#15], _stream_in_field#20)
+    completion _recv_comp#9 = foreach i32 k#15, f32 x#9 in [0:4:1], receive(_stream_in_field#20) {
+      _temp_0_0_0#7[k#15] = x#9
+    }
     await _recv_comp#9
   }
   compute u16 i#6, u16 j#6 in [3:6:2 , 1:2:2] {
@@ -2250,7 +2252,9 @@ kernel @horizontal_diffusion<>(stream<f32, 4>[4, 4] readonly _coeff, stream<f32,
     await _send_comp#4
     completion _send_comp#5 = send(lap_field_0_0_0, _stream_lap_field_mat#7)
     await _send_comp#5
-    completion _recv_comp#9 = receive(_temp_0_0_0#7[k#15], _stream_in_field#20)
+    completion _recv_comp#9 = foreach i32 k#15, f32 x#9 in [0:4:1], receive(_stream_in_field#20) {
+      _temp_0_0_0#7[k#15] = x#9
+    }
     await _recv_comp#9
   }
   compute u16 i#7, u16 j#7 in [2:6:2 , 6:7:2] {
@@ -2474,25 +2478,33 @@ kernel @horizontal_diffusion<>(stream<f32, 4>[4, 4] readonly _coeff, stream<f32,
   compute u16 i#8, u16 j#8 in [0:1:2 , 2:6:2] {
     await receive(in_field_0_0_0, _in_field[i#8, j#8])
     awaitall
-    completion _recv_comp = receive(_temp_0_0_0[k], _stream_in_field#11)
+    completion _recv_comp = foreach i32 k, f32 x in [0:4:1], receive(_stream_in_field#11) {
+      _temp_0_0_0[k] = x
+    }
     await _recv_comp
     completion _send_comp#1 = send(in_field_0_0_0, _stream_in_field#9)
     await _send_comp#1
     completion _send_comp#6 = send(lap_field_0_0_0, _stream_lap_field_mat#4)
     await _send_comp#6
-    completion _recv_comp#7 = receive(_temp_0_0_0#5[k#10], _stream_in_field#7)
+    completion _recv_comp#7 = foreach i32 k#10, f32 x#7 in [0:4:1], receive(_stream_in_field#7) {
+      _temp_0_0_0#5[k#10] = x#7
+    }
     await _recv_comp#7
   }
   compute u16 i#8, u16 j#8 in [0:1:2 , 3:6:2] {
     await receive(in_field_0_0_0, _in_field[i#8, j#8])
     awaitall
-    completion _recv_comp = receive(_temp_0_0_0[k], _stream_in_field#11)
+    completion _recv_comp = foreach i32 k, f32 x in [0:4:1], receive(_stream_in_field#11) {
+      _temp_0_0_0[k] = x
+    }
     await _recv_comp
     completion _send_comp#1 = send(in_field_0_0_0, _stream_in_field#9)
     await _send_comp#1
     completion _send_comp#6 = send(lap_field_0_0_0, _stream_lap_field_mat#4)
     await _send_comp#6
-    completion _recv_comp#7 = receive(_temp_0_0_0#5[k#10], _stream_in_field#7)
+    completion _recv_comp#7 = foreach i32 k#10, f32 x#7 in [0:4:1], receive(_stream_in_field#7) {
+      _temp_0_0_0#5[k#10] = x#7
+    }
     await _recv_comp#7
   }
   compute u16 i#9, u16 j#9 in [6:7:2 , 2:6:2] {
@@ -2581,7 +2593,9 @@ kernel @horizontal_diffusion<>(stream<f32, 4>[4, 4] readonly _coeff, stream<f32,
   compute u16 i#6, u16 j#6 in [0:1:2 , 1:2:2] {
     await receive(in_field_0_0_0, _in_field[i#6, j#6])
     awaitall
-    completion _recv_comp = receive(_temp_0_0_0[k], _stream_in_field#11)
+    completion _recv_comp = foreach i32 k, f32 x in [0:4:1], receive(_stream_in_field#11) {
+      _temp_0_0_0[k] = x
+    }
     await _recv_comp
     completion _send_comp#1 = send(in_field_0_0_0, _stream_in_field#9)
     await _send_comp#1
@@ -2629,7 +2643,9 @@ kernel @horizontal_diffusion<>(stream<f32, 4>[4, 4] readonly _coeff, stream<f32,
     awaitall
     completion _send_comp = send(in_field_0_0_0, _stream_in_field#11)
     await _send_comp
-    completion _recv_comp#1 = receive(_temp_0_0_0#1[k#1], _stream_in_field#9)
+    completion _recv_comp#1 = foreach i32 k#1, f32 x#1 in [0:4:1], receive(_stream_in_field#9) {
+      _temp_0_0_0#1[k#1] = x#1
+    }
     await _recv_comp#1
   }
   compute u16 i#6, u16 j#6 in [6:7:2 , 1:2:2] {
@@ -2672,7 +2688,9 @@ kernel @horizontal_diffusion<>(stream<f32, 4>[4, 4] readonly _coeff, stream<f32,
   compute u16 i#7, u16 j#7 in [0:1:2 , 6:7:2] {
     await receive(in_field_0_0_0, _in_field[i#7, j#7])
     awaitall
-    completion _recv_comp = receive(_temp_0_0_0[k], _stream_in_field#11)
+    completion _recv_comp = foreach i32 k, f32 x in [0:4:1], receive(_stream_in_field#11) {
+      _temp_0_0_0[k] = x
+    }
     await _recv_comp
     completion _send_comp#1 = send(in_field_0_0_0, _stream_in_field#9)
     await _send_comp#1
@@ -2754,7 +2772,9 @@ kernel @horizontal_diffusion<>(stream<f32, 4>[4, 4] readonly _coeff, stream<f32,
     awaitall
     completion _send_comp = send(in_field_0_0_0, _stream_in_field#11)
     await _send_comp
-    completion _recv_comp#1 = receive(_temp_0_0_0#1[k#1], _stream_in_field#9)
+    completion _recv_comp#1 = foreach i32 k#1, f32 x#1 in [0:4:1], receive(_stream_in_field#9) {
+      _temp_0_0_0#1[k#1] = x#1
+    }
     await _recv_comp#1
   }
   compute u16 i#9, u16 j#9 in [7:8:2 , 2:6:2] {
@@ -2762,7 +2782,9 @@ kernel @horizontal_diffusion<>(stream<f32, 4>[4, 4] readonly _coeff, stream<f32,
     awaitall
     completion _send_comp = send(in_field_0_0_0, _stream_in_field#11)
     await _send_comp
-    completion _recv_comp#1 = receive(_temp_0_0_0#1[k#1], _stream_in_field#9)
+    completion _recv_comp#1 = foreach i32 k#1, f32 x#1 in [0:4:1], receive(_stream_in_field#9) {
+      _temp_0_0_0#1[k#1] = x#1
+    }
     await _recv_comp#1
   }
   compute u16 i#9, u16 j#9 in [7:8:2 , 3:6:2] {
@@ -2770,13 +2792,17 @@ kernel @horizontal_diffusion<>(stream<f32, 4>[4, 4] readonly _coeff, stream<f32,
     awaitall
     completion _send_comp = send(in_field_0_0_0, _stream_in_field#11)
     await _send_comp
-    completion _recv_comp#1 = receive(_temp_0_0_0#1[k#1], _stream_in_field#9)
+    completion _recv_comp#1 = foreach i32 k#1, f32 x#1 in [0:4:1], receive(_stream_in_field#9) {
+      _temp_0_0_0#1[k#1] = x#1
+    }
     await _recv_comp#1
   }
   compute u16 i#6, u16 j#6 in [1:7:2 , 0:1:2] {
     await receive(in_field_0_0_0, _in_field[i#6, j#6])
     awaitall
-    completion _recv_comp#2 = receive(_temp_0_0_0#2[k#2], _stream_in_field#15)
+    completion _recv_comp#2 = foreach i32 k#2, f32 x#2 in [0:4:1], receive(_stream_in_field#15) {
+      _temp_0_0_0#2[k#2] = x#2
+    }
     await _recv_comp#2
     completion _send_comp#3 = send(in_field_0_0_0, _stream_in_field#13)
     await _send_comp#3
@@ -2784,7 +2810,9 @@ kernel @horizontal_diffusion<>(stream<f32, 4>[4, 4] readonly _coeff, stream<f32,
   compute u16 i#6, u16 j#6 in [2:7:2 , 0:1:2] {
     await receive(in_field_0_0_0, _in_field[i#6, j#6])
     awaitall
-    completion _recv_comp#2 = receive(_temp_0_0_0#2[k#2], _stream_in_field#15)
+    completion _recv_comp#2 = foreach i32 k#2, f32 x#2 in [0:4:1], receive(_stream_in_field#15) {
+      _temp_0_0_0#2[k#2] = x#2
+    }
     await _recv_comp#2
     completion _send_comp#3 = send(in_field_0_0_0, _stream_in_field#13)
     await _send_comp#3
@@ -2797,7 +2825,9 @@ kernel @horizontal_diffusion<>(stream<f32, 4>[4, 4] readonly _coeff, stream<f32,
     awaitall
     completion _send_comp#2 = send(in_field_0_0_0, _stream_in_field#15)
     await _send_comp#2
-    completion _recv_comp#3 = receive(_temp_0_0_0#3[k#3], _stream_in_field#13)
+    completion _recv_comp#3 = foreach i32 k#3, f32 x#3 in [0:4:1], receive(_stream_in_field#13) {
+      _temp_0_0_0#3[k#3] = x#3
+    }
     await _recv_comp#3
   }
   compute u16 i#7, u16 j#7 in [2:7:2 , 7:8:2] {
@@ -2805,7 +2835,9 @@ kernel @horizontal_diffusion<>(stream<f32, 4>[4, 4] readonly _coeff, stream<f32,
     awaitall
     completion _send_comp#2 = send(in_field_0_0_0, _stream_in_field#15)
     await _send_comp#2
-    completion _recv_comp#3 = receive(_temp_0_0_0#3[k#3], _stream_in_field#13)
+    completion _recv_comp#3 = foreach i32 k#3, f32 x#3 in [0:4:1], receive(_stream_in_field#13) {
+      _temp_0_0_0#3[k#3] = x#3
+    }
     await _recv_comp#3
   }
   compute u16 i#7, u16 j#7 in [7:8:2 , 7:8:2] {

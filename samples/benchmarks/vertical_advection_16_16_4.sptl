@@ -458,7 +458,9 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[16, 16] readonly _u_
     await send(utens_stage_0_0_0#1, __kernel_out_0[(i#2 - 1), (j#2 - 0)])
   }
   compute u16 i#7, u16 j#7 in [0:1:2 , 0:16:1] {
-    completion _recv_comp = receive(_refactored_wcon_1_0_0_0_0#1[k], _stream_wcon#1)
+    completion _recv_comp = foreach i32 k, f32 x in [0:5:1], receive(_stream_wcon#1) {
+      _refactored_wcon_1_0_0_0_0#1[k] = x
+    }
     await _recv_comp
   }
 }
