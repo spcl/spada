@@ -111,143 +111,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
     f32[80] i16_0_0_0#1
     f32[80] _temp_0_0_0#2
   }
-  dataflow u16 i#9, u16 j#9 in [1:129:2 , 1:129:2] {
-    stream<f32> _stream_arg1#2 = relative_stream(1, 0) {
-      hops = [(1, 0)], 
-      channel = 0
-    }
-    stream<f32> _stream_arg1#3 = relative_stream(1, 0) {
-      hops = [(1, 0)], 
-      channel = 1
-    }
-    stream<f32> _stream_arg0#2 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 2
-    }
-    stream<f32> _stream_arg0#3 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 3
-    }
-    stream<f32> _stream_arg0#4 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 4
-    }
-    stream<f32> _stream_arg0#5 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 5
-    }
-    stream<f32> _stream_arg1#4 = relative_stream(1, 0) {
-      hops = [(1, 0)], 
-      channel = 6
-    }
-    stream<f32> _stream_arg1#5 = relative_stream(1, 0) {
-      hops = [(1, 0)], 
-      channel = 7
-    }
-  }
-  dataflow u16 i#9, u16 j#9 in [1:129:2 , 2:129:2] {
-    stream<f32> _stream_arg1#2 = relative_stream(1, 0) {
-      hops = [(1, 0)], 
-      channel = 0
-    }
-    stream<f32> _stream_arg1#3 = relative_stream(1, 0) {
-      hops = [(1, 0)], 
-      channel = 1
-    }
-    stream<f32> _stream_arg0#2 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 2
-    }
-    stream<f32> _stream_arg0#3 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 3
-    }
-    stream<f32> _stream_arg0#4 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 4
-    }
-    stream<f32> _stream_arg0#5 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 5
-    }
-    stream<f32> _stream_arg1#4 = relative_stream(1, 0) {
-      hops = [(1, 0)], 
-      channel = 6
-    }
-    stream<f32> _stream_arg1#5 = relative_stream(1, 0) {
-      hops = [(1, 0)], 
-      channel = 7
-    }
-  }
-  dataflow u16 i#9, u16 j#9 in [2:129:2 , 1:129:2] {
-    stream<f32> _stream_arg1#2 = relative_stream(1, 0) {
-      hops = [(1, 0)], 
-      channel = 0
-    }
-    stream<f32> _stream_arg1#3 = relative_stream(1, 0) {
-      hops = [(1, 0)], 
-      channel = 1
-    }
-    stream<f32> _stream_arg0#2 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 2
-    }
-    stream<f32> _stream_arg0#3 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 3
-    }
-    stream<f32> _stream_arg0#4 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 4
-    }
-    stream<f32> _stream_arg0#5 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 5
-    }
-    stream<f32> _stream_arg1#4 = relative_stream(1, 0) {
-      hops = [(1, 0)], 
-      channel = 6
-    }
-    stream<f32> _stream_arg1#5 = relative_stream(1, 0) {
-      hops = [(1, 0)], 
-      channel = 7
-    }
-  }
-  dataflow u16 i#9, u16 j#9 in [2:129:2 , 2:129:2] {
-    stream<f32> _stream_arg1#2 = relative_stream(1, 0) {
-      hops = [(1, 0)], 
-      channel = 0
-    }
-    stream<f32> _stream_arg1#3 = relative_stream(1, 0) {
-      hops = [(1, 0)], 
-      channel = 1
-    }
-    stream<f32> _stream_arg0#2 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 2
-    }
-    stream<f32> _stream_arg0#3 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 3
-    }
-    stream<f32> _stream_arg0#4 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 4
-    }
-    stream<f32> _stream_arg0#5 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 5
-    }
-    stream<f32> _stream_arg1#4 = relative_stream(1, 0) {
-      hops = [(1, 0)], 
-      channel = 6
-    }
-    stream<f32> _stream_arg1#5 = relative_stream(1, 0) {
-      hops = [(1, 0)], 
-      channel = 7
-    }
-  }
-  dataflow u16 i#10, u16 j#10 in [0:1:2 , 1:129:2] {
+  dataflow u16 i#9, u16 j#9 in [0:1:2 , 1:129:2] {
     stream<f32> _stream_arg1#2 = relative_stream(1, 0) {
       hops = [(1, 0)], 
       channel = 0
@@ -258,14 +122,14 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
     }
     stream<f32> _stream_arg1#4 = relative_stream(1, 0) {
       hops = [(1, 0)], 
-      channel = 6
+      channel = 2
     }
     stream<f32> _stream_arg1#5 = relative_stream(1, 0) {
       hops = [(1, 0)], 
-      channel = 7
+      channel = 3
     }
   }
-  dataflow u16 i#10, u16 j#10 in [0:1:2 , 2:129:2] {
+  dataflow u16 i#9, u16 j#9 in [0:1:2 , 2:129:2] {
     stream<f32> _stream_arg1#2 = relative_stream(1, 0) {
       hops = [(1, 0)], 
       channel = 0
@@ -276,14 +140,86 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
     }
     stream<f32> _stream_arg1#4 = relative_stream(1, 0) {
       hops = [(1, 0)], 
-      channel = 6
+      channel = 2
     }
     stream<f32> _stream_arg1#5 = relative_stream(1, 0) {
       hops = [(1, 0)], 
+      channel = 3
+    }
+  }
+  dataflow u16 i#10, u16 j#10 in [1:129:2 , 0:1:2] {
+    stream<f32> _stream_arg0#2 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 4
+    }
+    stream<f32> _stream_arg0#3 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 5
+    }
+    stream<f32> _stream_arg0#4 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 6
+    }
+    stream<f32> _stream_arg0#5 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
       channel = 7
     }
   }
-  dataflow u16 i#11, u16 j#11 in [129:130:2 , 1:129:2] {
+  dataflow u16 i#10, u16 j#10 in [2:129:2 , 0:1:2] {
+    stream<f32> _stream_arg0#2 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 4
+    }
+    stream<f32> _stream_arg0#3 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 5
+    }
+    stream<f32> _stream_arg0#4 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 6
+    }
+    stream<f32> _stream_arg0#5 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 7
+    }
+  }
+  dataflow u16 i#11, u16 j#11 in [1:129:2 , 129:130:2] {
+    stream<f32> _stream_arg0#2 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 4
+    }
+    stream<f32> _stream_arg0#3 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 5
+    }
+    stream<f32> _stream_arg0#4 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 6
+    }
+    stream<f32> _stream_arg0#5 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 7
+    }
+  }
+  dataflow u16 i#11, u16 j#11 in [2:129:2 , 129:130:2] {
+    stream<f32> _stream_arg0#2 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 4
+    }
+    stream<f32> _stream_arg0#3 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 5
+    }
+    stream<f32> _stream_arg0#4 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 6
+    }
+    stream<f32> _stream_arg0#5 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 7
+    }
+  }
+  dataflow u16 i#12, u16 j#12 in [129:130:2 , 1:129:2] {
     stream<f32> _stream_arg1#2 = relative_stream(1, 0) {
       hops = [(1, 0)], 
       channel = 0
@@ -294,14 +230,14 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
     }
     stream<f32> _stream_arg1#4 = relative_stream(1, 0) {
       hops = [(1, 0)], 
-      channel = 6
+      channel = 2
     }
     stream<f32> _stream_arg1#5 = relative_stream(1, 0) {
       hops = [(1, 0)], 
-      channel = 7
+      channel = 3
     }
   }
-  dataflow u16 i#11, u16 j#11 in [129:130:2 , 2:129:2] {
+  dataflow u16 i#12, u16 j#12 in [129:130:2 , 2:129:2] {
     stream<f32> _stream_arg1#2 = relative_stream(1, 0) {
       hops = [(1, 0)], 
       channel = 0
@@ -312,83 +248,147 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
     }
     stream<f32> _stream_arg1#4 = relative_stream(1, 0) {
       hops = [(1, 0)], 
-      channel = 6
+      channel = 2
     }
     stream<f32> _stream_arg1#5 = relative_stream(1, 0) {
       hops = [(1, 0)], 
+      channel = 3
+    }
+  }
+  dataflow u16 i#13, u16 j#13 in [1:129:2 , 1:129:2] {
+    stream<f32> _stream_arg1#2 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 0
+    }
+    stream<f32> _stream_arg1#3 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 1
+    }
+    stream<f32> _stream_arg0#2 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 4
+    }
+    stream<f32> _stream_arg0#3 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 5
+    }
+    stream<f32> _stream_arg0#4 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
+      channel = 6
+    }
+    stream<f32> _stream_arg0#5 = relative_stream(0, 1) {
+      hops = [(0, 1)], 
       channel = 7
     }
-  }
-  dataflow u16 i#12, u16 j#12 in [1:129:2 , 0:1:2] {
-    stream<f32> _stream_arg0#2 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
+    stream<f32> _stream_arg1#4 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
       channel = 2
     }
-    stream<f32> _stream_arg0#3 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
+    stream<f32> _stream_arg1#5 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
       channel = 3
     }
-    stream<f32> _stream_arg0#4 = relative_stream(0, 1) {
+  }
+  dataflow u16 i#13, u16 j#13 in [1:129:2 , 2:129:2] {
+    stream<f32> _stream_arg1#2 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 0
+    }
+    stream<f32> _stream_arg1#3 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 1
+    }
+    stream<f32> _stream_arg0#2 = relative_stream(0, 1) {
       hops = [(0, 1)], 
       channel = 4
     }
-    stream<f32> _stream_arg0#5 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 5
-    }
-  }
-  dataflow u16 i#12, u16 j#12 in [2:129:2 , 0:1:2] {
-    stream<f32> _stream_arg0#2 = relative_stream(0, 1) {
-      hops = [(0, 1)], 
-      channel = 2
-    }
     stream<f32> _stream_arg0#3 = relative_stream(0, 1) {
       hops = [(0, 1)], 
-      channel = 3
+      channel = 5
     }
     stream<f32> _stream_arg0#4 = relative_stream(0, 1) {
       hops = [(0, 1)], 
-      channel = 4
+      channel = 6
     }
     stream<f32> _stream_arg0#5 = relative_stream(0, 1) {
       hops = [(0, 1)], 
-      channel = 5
+      channel = 7
+    }
+    stream<f32> _stream_arg1#4 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 2
+    }
+    stream<f32> _stream_arg1#5 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 3
     }
   }
-  dataflow u16 i#13, u16 j#13 in [1:129:2 , 129:130:2] {
+  dataflow u16 i#13, u16 j#13 in [2:129:2 , 1:129:2] {
+    stream<f32> _stream_arg1#2 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 0
+    }
+    stream<f32> _stream_arg1#3 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 1
+    }
     stream<f32> _stream_arg0#2 = relative_stream(0, 1) {
       hops = [(0, 1)], 
-      channel = 2
+      channel = 4
     }
     stream<f32> _stream_arg0#3 = relative_stream(0, 1) {
       hops = [(0, 1)], 
-      channel = 3
+      channel = 5
     }
     stream<f32> _stream_arg0#4 = relative_stream(0, 1) {
       hops = [(0, 1)], 
-      channel = 4
+      channel = 6
     }
     stream<f32> _stream_arg0#5 = relative_stream(0, 1) {
       hops = [(0, 1)], 
-      channel = 5
+      channel = 7
+    }
+    stream<f32> _stream_arg1#4 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 2
+    }
+    stream<f32> _stream_arg1#5 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 3
     }
   }
-  dataflow u16 i#13, u16 j#13 in [2:129:2 , 129:130:2] {
+  dataflow u16 i#13, u16 j#13 in [2:129:2 , 2:129:2] {
+    stream<f32> _stream_arg1#2 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 0
+    }
+    stream<f32> _stream_arg1#3 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 1
+    }
     stream<f32> _stream_arg0#2 = relative_stream(0, 1) {
       hops = [(0, 1)], 
-      channel = 2
+      channel = 4
     }
     stream<f32> _stream_arg0#3 = relative_stream(0, 1) {
       hops = [(0, 1)], 
-      channel = 3
+      channel = 5
     }
     stream<f32> _stream_arg0#4 = relative_stream(0, 1) {
       hops = [(0, 1)], 
-      channel = 4
+      channel = 6
     }
     stream<f32> _stream_arg0#5 = relative_stream(0, 1) {
       hops = [(0, 1)], 
-      channel = 5
+      channel = 7
+    }
+    stream<f32> _stream_arg1#4 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 2
+    }
+    stream<f32> _stream_arg1#5 = relative_stream(1, 0) {
+      hops = [(1, 0)], 
+      channel = 3
     }
   }
   compute u16 i#3, u16 j#3 in [1:129:2 , 1:129:2] {
