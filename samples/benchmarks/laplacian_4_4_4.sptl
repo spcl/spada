@@ -430,9 +430,7 @@ kernel @laplacian<>(stream<f32, 4>[6, 6] readonly _in_field, stream<f32, 4>[4, 4
   compute u16 i#8, u16 j#8 in [0:1:2 , 1:5:2] {
     await receive(in_field_0_0_0, _in_field[i#8, j#8])
     awaitall
-    completion _recv_comp = foreach i32 k, f32 x in [0:4:1], receive(_stream_in_field#6) {
-      _temp_0_0_0[k] = 0
-    }
+    completion _recv_comp = receive(_temp_0_0_0[k], _stream_in_field#6)
     await _recv_comp
     completion _send_comp#1 = send(in_field_0_0_0, _stream_in_field#4)
     await _send_comp#1
@@ -440,9 +438,7 @@ kernel @laplacian<>(stream<f32, 4>[6, 6] readonly _in_field, stream<f32, 4>[4, 4
   compute u16 i#8, u16 j#8 in [0:1:2 , 2:5:2] {
     await receive(in_field_0_0_0, _in_field[i#8, j#8])
     awaitall
-    completion _recv_comp = foreach i32 k, f32 x in [0:4:1], receive(_stream_in_field#6) {
-      _temp_0_0_0[k] = 0
-    }
+    completion _recv_comp = receive(_temp_0_0_0[k], _stream_in_field#6)
     await _recv_comp
     completion _send_comp#1 = send(in_field_0_0_0, _stream_in_field#4)
     await _send_comp#1
@@ -612,9 +608,7 @@ kernel @laplacian<>(stream<f32, 4>[6, 6] readonly _in_field, stream<f32, 4>[4, 4
   compute u16 i#6, u16 j#6 in [1:5:2 , 0:1:2] {
     await receive(in_field_0_0_0, _in_field[i#6, j#6])
     awaitall
-    completion _recv_comp#2 = foreach i32 k#2, f32 x#2 in [0:4:1], receive(_stream_in_field#10) {
-      _temp_0_0_0#2[k#2] = 0
-    }
+    completion _recv_comp#2 = receive(_temp_0_0_0#2[k#2], _stream_in_field#10)
     await _recv_comp#2
     completion _send_comp#3 = send(in_field_0_0_0, _stream_in_field#8)
     await _send_comp#3
@@ -622,9 +616,7 @@ kernel @laplacian<>(stream<f32, 4>[6, 6] readonly _in_field, stream<f32, 4>[4, 4
   compute u16 i#6, u16 j#6 in [2:5:2 , 0:1:2] {
     await receive(in_field_0_0_0, _in_field[i#6, j#6])
     awaitall
-    completion _recv_comp#2 = foreach i32 k#2, f32 x#2 in [0:4:1], receive(_stream_in_field#10) {
-      _temp_0_0_0#2[k#2] = 0
-    }
+    completion _recv_comp#2 = receive(_temp_0_0_0#2[k#2], _stream_in_field#10)
     await _recv_comp#2
     completion _send_comp#3 = send(in_field_0_0_0, _stream_in_field#8)
     await _send_comp#3
@@ -640,9 +632,7 @@ kernel @laplacian<>(stream<f32, 4>[6, 6] readonly _in_field, stream<f32, 4>[4, 4
     awaitall
     completion _send_comp#2 = send(in_field_0_0_0, _stream_in_field#10)
     await _send_comp#2
-    completion _recv_comp#3 = foreach i32 k#3, f32 x#3 in [0:4:1], receive(_stream_in_field#8) {
-      _temp_0_0_0#3[k#3] = 0
-    }
+    completion _recv_comp#3 = receive(_temp_0_0_0#3[k#3], _stream_in_field#8)
     await _recv_comp#3
   }
   compute u16 i#7, u16 j#7 in [2:5:2 , 5:6:2] {
@@ -650,9 +640,7 @@ kernel @laplacian<>(stream<f32, 4>[6, 6] readonly _in_field, stream<f32, 4>[4, 4
     awaitall
     completion _send_comp#2 = send(in_field_0_0_0, _stream_in_field#10)
     await _send_comp#2
-    completion _recv_comp#3 = foreach i32 k#3, f32 x#3 in [0:4:1], receive(_stream_in_field#8) {
-      _temp_0_0_0#3[k#3] = 0
-    }
+    completion _recv_comp#3 = receive(_temp_0_0_0#3[k#3], _stream_in_field#8)
     await _recv_comp#3
   }
   compute u16 i#9, u16 j#9 in [5:6:2 , 1:5:2] {
@@ -660,9 +648,7 @@ kernel @laplacian<>(stream<f32, 4>[6, 6] readonly _in_field, stream<f32, 4>[4, 4
     awaitall
     completion _send_comp = send(in_field_0_0_0, _stream_in_field#6)
     await _send_comp
-    completion _recv_comp#1 = foreach i32 k#1, f32 x#1 in [0:4:1], receive(_stream_in_field#4) {
-      _temp_0_0_0#1[k#1] = 0
-    }
+    completion _recv_comp#1 = receive(_temp_0_0_0#1[k#1], _stream_in_field#4)
     await _recv_comp#1
   }
   compute u16 i#9, u16 j#9 in [5:6:2 , 2:5:2] {
@@ -670,9 +656,7 @@ kernel @laplacian<>(stream<f32, 4>[6, 6] readonly _in_field, stream<f32, 4>[4, 4
     awaitall
     completion _send_comp = send(in_field_0_0_0, _stream_in_field#6)
     await _send_comp
-    completion _recv_comp#1 = foreach i32 k#1, f32 x#1 in [0:4:1], receive(_stream_in_field#4) {
-      _temp_0_0_0#1[k#1] = 0
-    }
+    completion _recv_comp#1 = receive(_temp_0_0_0#1[k#1], _stream_in_field#4)
     await _recv_comp#1
   }
 }
