@@ -1214,4 +1214,13 @@ kernel @uvbke<>(stream<f32, 4>[16, 17] readonly _arg0, stream<f32, 4>[17, 16] re
   compute u16 i#13, u16 j#13 in [0:1:2 , 0:1:2] {
 
   }
+  compute u16 i#13, u16 j#13 in [15:16:2 , 0:1:2] {
+
+  }
+  compute u16 i#13, u16 j#13 in [15:16:2 , 15:16:2] {
+
+  }
+  compute u16 i#13, u16 j#13 in [0:1:2 , 15:16:2] {
+
+  }
 }
