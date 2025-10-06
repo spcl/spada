@@ -258,9 +258,9 @@ class SplitTransformer(spa.NodeTransformer):
         
         Creates 2^(active_dimensions) many splits
         
-        """       
-        assert subgrid.x_range.step == None or subgrid.x_range.step == 1
-        assert subgrid.y_range.step == None or subgrid.y_range.step == 1
+        """
+        assert subgrid.x_range.step == None or subgrid.x_range.step.eval() == 1
+        assert subgrid.y_range.step == None or subgrid.y_range.step.eval() == 1
         if not self.active_dimensions[0] and not self.active_dimensions[1]:
             return [subgrid]
         
