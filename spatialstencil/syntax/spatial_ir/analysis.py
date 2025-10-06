@@ -1,6 +1,7 @@
 """
 Contains analysis functions for Spatial IR, such as statement dependency analysis.
 """
+from collections import defaultdict
 from spatialstencil.syntax.spatial_ir import irnodes as spir
 from dataclasses import dataclass
 from typing import Literal
@@ -456,3 +457,97 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
         stream_extents.extents[stream_name] = [unified_rect]
 
     return stream_extents
+
+
+def detect_undefined_array_access(kernel: spir.Kernel) -> list[tuple[spir.Identifier, spir.SpatialNode]]:
+    visitor = FieldsDefinedCheck()
+    visitor.visit(kernel)
+    return visitor.undefined_identifiers
+
+
+class FieldsDefinedCheck(spir.NodeVisitor):
+    
+    def __init__(self):
+        super().__init__()
+        self.global_identifiers = set()
+        self.undefined_identifiers = set()
+    
+    def push(self, variables: list[spir.TypedIdentifier | spir.KernelArgument]):
+        for var in variables:
+            self.global_identifiers.add(var.identifier)
+        
+    def pop(self, variables: list[spir.TypedIdentifier | spir.KernelArgument]):
+        for var in variables:
+            self.global_identifiers.remove(var.identifier)
+    
+    def visit_Kernel(self, kernel: spir.Kernel):
+        def_collector = FieldDefCollector()
+        def_collector.visit(kernel)
+        self.field_definitions = def_collector.field_definitions
+        
+        self.kernel = kernel
+        self.push(kernel.arguments)
+        
+        self.generic_visit(kernel)
+        
+        self.pop(kernel.arguments)
+        
+        self.kernel = None
+        
+    def visit_PlaceBlock(self, s):
+        pass
+    
+    def visit_DataflowBlock(self, s):
+        pass
+        
+    def visit_ComputeBlock(self, comp: spir.ComputeBlock):
+        self.active_compute = comp
+        self.generic_visit(comp)
+        self.active_compute = None
+        
+    def visit_ForeachStatement(self, stmt: spir.ForeachStatement):
+        self.generic_visit(stmt)
+        
+    def check_access(self, identifier: spir.Identifier):
+        current_rect = self.active_compute.get_rectangle()
+        if not identifier in self.global_identifiers:
+            # check if any rectangle matches
+            for rect in self.field_definitions[identifier]:
+                if current_rect.is_subset_of(rect):
+                    return
+            self.undefined_identifiers.add((identifier, current_rect.x_range, current_rect.y_range))
+        
+    def visit_ReceiveStatement(self, stmt: spir.ReceiveStatement):
+        identifier = stmt.local_array
+        if isinstance(identifier, spir.Identifier):
+            self.check_access(identifier)
+        else:
+            assert isinstance(identifier, spir.ArraySlice)
+            self.check_access(identifier.array)
+
+    def visit_SendStatement(self, stmt: spir.SendStatement):
+        identifier = stmt.local_array
+        if isinstance(identifier, spir.Identifier):
+            self.check_access(identifier)
+        else:
+            assert isinstance(identifier, spir.ArraySlice)
+            self.check_access(identifier.array)
+
+    def visit_ArraySlice(self, access: spir.ArraySlice):
+        identifier = access.array
+        self.check_access(identifier)
+
+    def visit_Identifier(self, identifier: spir.Identifier):
+        pass
+
+class FieldDefCollector(spir.NodeVisitor):
+    
+    field_definitions: dict[spir.Identifier, list[Rectangle[spir.PlaceBlock]]]
+    
+    def __init__(self):
+        super().__init__()
+        self.field_definitions = defaultdict(list)
+        
+    def visit_PlaceBlock(self, block: spir.PlaceBlock):
+        for stmt in block.statements:
+            self.field_definitions[stmt.field_name].append(block.get_rectangle())

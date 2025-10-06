@@ -138,8 +138,17 @@ class ArrayType(SpatialNode, IRType):
         assert all(isinstance(dim, (int, Expression)) for dim in self.shape)
         assert len(self.shape) > 0
 
+    def dimensions(self) -> list[int]:
+        dims = []
+        for dim in self.shape:
+            if isinstance(dim, Expression):
+                dims.append(dim.eval())
+            else:
+                dims.append(dim)
+        return dims
+
     def as_ir(self, indent: int = 0) -> str:
-        dims = ", ".join(str(dim.as_ir() if isinstance(dim, SpatialNode) else dim) for dim in self.shape)
+        dims = ", ".join(str(d) for d in self.dimensions())
         return f'{self.base_type.as_ir()}[{dims}]'
 
     @property
@@ -500,6 +509,11 @@ class PlaceBlock(SpatialNode):
     variables: list[TypedIdentifier]
     subgrid: SubgridExpression
     statements: list[FieldDeclaration]
+
+    def get_rectangle(self) -> Rectangle['PlaceBlock']:
+        xs, xe, ys, ye = self.get_grid_rect()
+        xss, yss = self.get_grid_stride()
+        return Rectangle((xs, xe, xss), (ys, ye, yss), self)
 
     def get_grid_rect(self) -> tuple[int, int, int, int]:
         return self.subgrid.get_grid_rect()
@@ -939,6 +953,11 @@ class ComputeBlock(SpatialNode):
         assert all(isinstance(var, TypedIdentifier) for var in self.variables)
         assert all(isinstance(stmt, Statement) for stmt in self.statements)
         assert len(self.variables) == 2
+
+    def get_rectangle(self) -> Rectangle['ComputeBlock']:
+        xs, xe, ys, ye = self.get_grid_rect()
+        xss, yss = self.get_grid_stride()
+        return Rectangle((xs, xe, xss), (ys, ye, yss), self)
 
     def get_grid_rect(self) -> tuple[int, int, int, int]:
         """

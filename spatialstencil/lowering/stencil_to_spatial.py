@@ -18,6 +18,7 @@ from spatialstencil.syntax.stencil_ir.refactor_forward_backward_stencils import 
 from spatialstencil.syntax.stencil_ir.type_inference import infer_scalar_types, infer_types
 from spatialstencil.syntax.stencil_ir.ssa import SSAVisitor
 from spatialstencil.syntax.spatial_ir.passes import mark_readonly_writeonly_arguments
+from spatialstencil.syntax.spatial_ir.analysis import detect_undefined_array_access
 
 def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: ChannelStrategy = ChannelStrategy.TRIVIAL) -> spa.Kernel:
     """Lower a stencil to a spatial program.
@@ -87,6 +88,11 @@ def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: ChannelStr
     kernel = coloring.generate_routing(kernel, channel_strategy)
 
     kernel = mark_readonly_writeonly_arguments(kernel)
+
+    # Verification
+    undefined = detect_undefined_array_access(kernel)
+    for id, x_range, y_range in undefined:
+        print(f"ERROR: undefined identifier {id.as_ir()} in block {x_range}, {y_range}")
 
     return kernel
 
