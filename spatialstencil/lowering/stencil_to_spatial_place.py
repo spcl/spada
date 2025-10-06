@@ -173,7 +173,8 @@ class ProgramPlacement:
             if offset in self._storage_map[identifier]:
                 return self._storage_map[identifier][offset]
         elif identifier.name in self._program_scope_scalars and offset.l1_norm() == 0:
-            return (spa.Identifier(identifier.name, 0), self._program_scope_scalars[identifier.name])
+            # Prefix with _ to be consistent with input argument naming conventions
+            return (spa.Identifier(f"_{identifier.name}", 0), self._program_scope_scalars[identifier.name])
         else:
             return None
 
