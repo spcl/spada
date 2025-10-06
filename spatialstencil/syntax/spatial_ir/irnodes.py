@@ -1,3 +1,4 @@
+import copy
 from dataclasses import dataclass
 from typing import Union, Tuple, Optional, Literal
 from spatialstencil.syntax.common import visitor
@@ -138,17 +139,11 @@ class ArrayType(SpatialNode, IRType):
         assert all(isinstance(dim, (int, Expression)) for dim in self.shape)
         assert len(self.shape) > 0
 
-    def dimensions(self) -> list[int]:
-        dims = []
-        for dim in self.shape:
-            if isinstance(dim, Expression):
-                dims.append(dim.eval())
-            else:
-                dims.append(dim)
-        return dims
+    def dimensions(self) -> list:
+        return copy.copy(self.shape)
 
     def as_ir(self, indent: int = 0) -> str:
-        dims = ", ".join(str(d) for d in self.dimensions())
+        dims = ", ".join(str(d) if isinstance(d, int) else d.as_ir() for d in self.shape)
         return f'{self.base_type.as_ir()}[{dims}]'
 
     @property
