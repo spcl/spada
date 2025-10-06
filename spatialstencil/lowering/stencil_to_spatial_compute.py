@@ -1,3 +1,4 @@
+import copy
 from dataclasses import dataclass
 
 from spatialstencil.lowering.stencil_to_spatial_compute_fwbw import ForwardBackwardComputeVisitor
@@ -48,9 +49,13 @@ class ProgramCompute:
         merged = group_rectangles_by_domain(split)
 
         # Convert to Compute blocks
+        dummy_receive_transformer = DummyReceiveTransformer(self.dataflow)
         compute_blocks = []
         for block in merged:
             compute_blocks.append(self._convert_to_compute_block(block))
+            
+        # Remove dummy foreach receive operation bodies
+        compute_blocks = [dummy_receive_transformer.visit(block) for block in compute_blocks]
 
         return compute_blocks
 
@@ -63,11 +68,48 @@ class ProgramCompute:
         subgrid = spa.SubgridExpression.from_tuple(block[0].x_range, block[0].y_range)
 
         stmts = sorted(block, key=lambda x: x.metadata[0])
-
+        
         block = spa.ComputeBlock(variables, subgrid, [stmt.metadata[1] for stmt in stmts])
 
         return block
 
+
+class DummyReceiveTransformer(spa.NodeTransformer):
+    """Cleans up dummy receive foreach loops.
+    These have to be inserted to avoid deadlocks at the edges of computations, but should not actually perform
+    any computations themselves.
+    This transformer deletes the body of these loops.
+    """
+    _dataflow: ProgramDataflow
+    _current_block: spa.ComputeBlock | None
+    
+    def __init__(self, dataflow: ProgramDataflow):
+        super().__init__()
+        self._dataflow = dataflow
+        self._current_block = None
+        
+        
+    def visit_ComputeBlock(self, blk: spa.ComputeBlock):
+        self._current_block = blk
+        self.generic_visit(blk)
+        self._current_block = None
+        return blk
+    
+    def visit_ForeachStatement(self, stmt: spa.ForeachStatement):
+        rcv = stmt.receive_stream
+        
+        block_domain = self._current_block.get_grid_rect()
+        block_domain_stride = self._current_block.get_grid_stride()
+        
+        block_rect = Rectangle[int]((block_domain[0], block_domain[1], block_domain_stride[0]), (block_domain[2], block_domain[3], block_domain_stride[1]), 0)
+        send_domain_x, send_domain_y = self._dataflow.stream_send_range_map[rcv.stream_name]
+        send_rect = Rectangle[int](send_domain_x, send_domain_y, 1)
+        
+        if not block_rect.intersects(send_rect):
+            stmt = copy.deepcopy(stmt)
+            stmt.body = []
+
+        return stmt
 
 @dataclass(frozen=True)
 class TransformerContext:
@@ -655,7 +697,6 @@ class HorizontalStencilTransformer(PatternTransformer[sast.AssignOp | sast.Retur
         # (3) remote buffer
         # Determine if its an input type or an intermediate type
         out_t = stmt_block.operation_type.destination[context.index]
-        xy_range = self.dataflow.get_x_y_range(out_t, 0, 0)
 
         if any([remote == inp for inp in compute_block.inputs]):
             if dx == 0 and dy == 0:
@@ -690,6 +731,8 @@ class HorizontalStencilTransformer(PatternTransformer[sast.AssignOp | sast.Retur
             return _send_receive_statement(self.dataflow, self.versioning, self.placement, remote, out_t, dx, dy,
                                            res_id, res_dtype, out_id, var_x, var_k, src_expr)
         else:
+            xy_range = self.dataflow.get_x_y_range(out_t, 0, 0)
+
             # (4) materialized buffer (already computed)
             # Only local computation is needed
             remote_id, remote_dtype = self.placement.get_storage(remote, sast.Offset((dx, dy, 0)))
