@@ -58,20 +58,13 @@ class ProgramCompute:
         var_i = self.versioning.next_version('i')
         var_j = self.versioning.next_version('j')
 
-        variables = [spa.TypedIdentifier(self.grid_var_t, var_i),
-                     spa.TypedIdentifier(self.grid_var_t, var_j)]
+        variables = [spa.TypedIdentifier(self.grid_var_t, var_i), spa.TypedIdentifier(self.grid_var_t, var_j)]
 
-        subgrid = spa.SubgridExpression.from_tuple(
-            block[0].x_range, block[0].y_range
-        )
+        subgrid = spa.SubgridExpression.from_tuple(block[0].x_range, block[0].y_range)
 
         stmts = sorted(block, key=lambda x: x.metadata[0])
 
-        block = spa.ComputeBlock(
-            variables,
-            subgrid,
-            [stmt.metadata[1] for stmt in stmts]
-        )
+        block = spa.ComputeBlock(variables, subgrid, [stmt.metadata[1] for stmt in stmts])
 
         return block
 
@@ -83,20 +76,22 @@ class TransformerContext:
     # Indicates that we are operating on the index-th result of the statement
     index: int = 0
 
+
 class ParallelComputeVisitor(sast.ScopedNodeVisitor):
 
-    def __init__(self, placement: ProgramPlacement,
-                 versioning: Versioning[spa.Identifier],
-                 dataflow: ProgramDataflow):
+    def __init__(self, placement: ProgramPlacement, versioning: Versioning[spa.Identifier], dataflow: ProgramDataflow):
         super().__init__()
         self.placement = placement
         self.versioning = versioning
         self.dataflow = dataflow
         self.stmts = []
 
-        self.statement_transformers = [UnaryMapTransformer(placement, versioning, dataflow),
-                                       MapTransformer(placement, versioning, dataflow),
-                                       HorizontalStencilTransformer(placement, versioning, dataflow)]
+        self.statement_transformers = [
+            UnaryMapTransformer(placement, versioning, dataflow),
+            MapTransformer(placement, versioning, dataflow),
+            TernaryMapTransformer(placement, versioning, dataflow),
+            HorizontalStencilTransformer(placement, versioning, dataflow)
+        ]
 
     def visit_ReturnOp(self, op: sast.ReturnOp):
         comp = self.get_scope()
@@ -118,41 +113,29 @@ class ParallelComputeVisitor(sast.ScopedNodeVisitor):
 
             src_id, src_dtype = self.placement.get_storage(value)
 
-            src_e = spa.Expression(
-                spa.ArraySlice(
-                    src_id,
-                    [spa.Expression(var_k)]
-                )
-            )
+            src_e = spa.Expression(spa.ArraySlice(src_id, [spa.Expression(var_k)]))
 
             dst_id, dst_dtype = self.placement.get_storage(out)
 
             if translation > 0:
 
-                dst_e = spa.ArraySlice(
-                    dst_id,
-                    [spa.RangeExpression(spa.Expression(spa.BinaryOperator(spa.Expression(var_k),
-                                                                           '+',
-                                                                           spa.Expression(
-                                                                               spa.ConstantLiteral(translation,
-                                                                                                   ScalarType.i32)))))]
-                )
+                dst_e = spa.ArraySlice(dst_id, [
+                    spa.RangeExpression(
+                        spa.Expression(
+                            spa.BinaryOperator(
+                                spa.Expression(var_k), '+',
+                                spa.Expression(spa.ConstantLiteral(translation, ScalarType.i32)))))
+                ])
             else:
-                dst_e = spa.ArraySlice(
-                    dst_id,
-                    [spa.Expression(var_k)]
-                )
+                dst_e = spa.ArraySlice(dst_id, [spa.Expression(var_k)])
 
             stmt = spa.MapStatement(
                 variables=[spa.TypedIdentifier(ScalarType.i32, var_k)],
                 range_expression=[spa.RangeExpression.from_args(0, out_t.domain.z[1])],
-                body=[
-                    spa.AssignmentStatement(
-                        dst_e,
-                        src_e,
-                    )
-                ]
-            )
+                body=[spa.AssignmentStatement(
+                    dst_e,
+                    src_e,
+                )])
 
             line_nr = self.versioning.next_version("___line___").version
             self.stmts.append(AbstractStatement(x_range, y_range, (line_nr, stmt)))
@@ -224,19 +207,12 @@ class ParallelComputeVisitor(sast.ScopedNodeVisitor):
                 var_k = self.versioning.next_version('k')
                 var_x = self.versioning.next_version('x')
 
-                recv = spa.ReceiveGenerator(
-                    stream
-                )
+                recv = spa.ReceiveGenerator(stream)
 
                 src_expr = spa.Expression(var_x)
 
                 assign_stmt = spa.AssignmentStatement(
-                    source=src_expr,
-                    destination=spa.ArraySlice(
-                        dst_buf,
-                        [spa.Expression(var_k)]
-                    )
-                )
+                    source=src_expr, destination=spa.ArraySlice(dst_buf, [spa.Expression(var_k)]))
 
                 body = [assign_stmt]
 
@@ -256,11 +232,7 @@ class ParallelComputeVisitor(sast.ScopedNodeVisitor):
 
                 send_comp_id = self.versioning.next_version('_send_comp')
                 send_completion = spa.Completion(send_comp_id)
-                send = spa.SendStatement(
-                    src_buf,
-                    stream,
-                    send_completion
-                )
+                send = spa.SendStatement(src_buf, stream, send_completion)
 
                 dx, dy, dz = extent.values
                 send_x_range, send_y_range = self.dataflow.get_x_y_range(out_t, dx, dy)
@@ -279,13 +251,9 @@ class ParallelComputeVisitor(sast.ScopedNodeVisitor):
                 self.stmts.extend([receive, send_stmt, await_send, await_recv])
 
 
-class MapTransformer(
-    PatternTransformer[sast.AssignOp | sast.ReturnOp, AbstractStatement, TransformerContext]):
+class MapTransformer(PatternTransformer[sast.AssignOp | sast.ReturnOp, AbstractStatement, TransformerContext]):
 
-    def __init__(self,
-                 placement: ProgramPlacement,
-                 versioning: Versioning[spa.Identifier],
-                 dataflow: ProgramDataflow):
+    def __init__(self, placement: ProgramPlacement, versioning: Versioning[spa.Identifier], dataflow: ProgramDataflow):
         self.placement = placement
         self.versioning = versioning
         self.dataflow = dataflow
@@ -316,25 +284,24 @@ class MapTransformer(
 
         e_0_neg = sast.Expression(
             sast.BinaryOperator(
-                sast.Expression(sast.UnaryOperator(
-                    Wildcard[str]("unary_op")(),
-                    sast.Expression(Wildcard[float]("value")())
-                )),
+                sast.Expression(
+                    sast.UnaryOperator(Wildcard[str]("unary_op")(), sast.Expression(Wildcard[float]("value")()))),
                 Wildcard("op")(),
                 sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
             ))
 
         e_1_neg = sast.Expression(
             sast.BinaryOperator(
-                sast.Expression(sast.UnaryOperator(
-                    Wildcard[str]("unary_op")(),
-                    sast.Expression(Wildcard[int]("value")())
-                )),
+                sast.Expression(
+                    sast.UnaryOperator(Wildcard[str]("unary_op")(), sast.Expression(Wildcard[int]("value")()))),
                 Wildcard("op")(),
                 sast.Expression(sast.Subscript(Wildcard("src")(), [0, 0, 0])),
             ))
 
-        assignments = [sast.AssignOp(Wildcard[sast.Identifier]("dst")(), e, Wildcard()()) for e in [e_0, e_1, e_2, e_3, e_1_neg, e_0_neg]]
+        assignments = [
+            sast.AssignOp(Wildcard[sast.Identifier]("dst")(), e,
+                          Wildcard()()) for e in [e_0, e_1, e_2, e_3, e_1_neg, e_0_neg]
+        ]
         returns = [sast.ReturnOp([e], Wildcard()()) for e in [e_0, e_1, e_2, e_3, e_1_neg, e_0_neg]]
 
         super().__init__(assignments + returns)
@@ -363,60 +330,39 @@ class MapTransformer(
 
         var_k = self.versioning.next_version('k')
         if src2 is None:
-            
+
             if value is None and op is None:
-                
-                src_e = spa.Expression(spa.ArraySlice(
-                            src_id,
-                            [spa.Expression(var_k)]
-                        ))
-                
+
+                src_e = spa.Expression(spa.ArraySlice(src_id, [spa.Expression(var_k)]))
+
             else:
                 assert value is not None and op is not None
-                
+
                 if unary_op is None:
                     const_expr = spa.ConstantLiteral(value, src_dtype.base_type)
                 else:
-                    const_expr = spa.UnaryOperator(unary_op, spa.Expression(spa.ConstantLiteral(value, src_dtype.base_type)))
-                
+                    const_expr = spa.UnaryOperator(unary_op,
+                                                   spa.Expression(spa.ConstantLiteral(value, src_dtype.base_type)))
+
                 src_e = spa.Expression(
                     spa.BinaryOperator(
                         spa.Expression(const_expr),
                         op,
-                        spa.Expression(spa.ArraySlice(
-                            src_id,
-                            [spa.Expression(var_k)]
-                        )),
-                    )
-                )
+                        spa.Expression(spa.ArraySlice(src_id, [spa.Expression(var_k)])),
+                    ))
         else:
             src2_id, src2_dtype = self.placement.get_storage(src2)
             src_e = spa.Expression(
                 spa.BinaryOperator(
-                    spa.Expression(spa.ArraySlice(
-                        src2_id,
-                        [spa.Expression(var_k)]
-                    )),
+                    spa.Expression(spa.ArraySlice(src2_id, [spa.Expression(var_k)])),
                     op,
-                    spa.Expression(spa.ArraySlice(
-                        src_id,
-                        [spa.Expression(var_k)]
-                    )),
-                )
-            )
+                    spa.Expression(spa.ArraySlice(src_id, [spa.Expression(var_k)])),
+                ))
 
         stmt = spa.MapStatement(
             variables=[spa.TypedIdentifier(ScalarType.i32, var_k)],
             range_expression=[spa.RangeExpression.from_args(0, res_dtype.shape[0])],
-            body=[
-                spa.AssignmentStatement(
-                    spa.ArraySlice(
-                        res_id,
-                        [spa.Expression(var_k)]
-                    ),
-                    src_e)
-            ]
-        )
+            body=[spa.AssignmentStatement(spa.ArraySlice(res_id, [spa.Expression(var_k)]), src_e)])
 
         stmt_block = self.get_context().stmt
         out_t = stmt_block.operation_type.destination[0]
@@ -427,13 +373,9 @@ class MapTransformer(
         return [AbstractStatement(xy_range[0], xy_range[1], (line_nr, stmt))]
 
 
-class UnaryMapTransformer(
-    PatternTransformer[sast.AssignOp | sast.ReturnOp, AbstractStatement, TransformerContext]):
+class UnaryMapTransformer(PatternTransformer[sast.AssignOp | sast.ReturnOp, AbstractStatement, TransformerContext]):
 
-    def __init__(self,
-                 placement: ProgramPlacement,
-                 versioning: Versioning[spa.Identifier],
-                 dataflow: ProgramDataflow):
+    def __init__(self, placement: ProgramPlacement, versioning: Versioning[spa.Identifier], dataflow: ProgramDataflow):
         self.placement = placement
         self.versioning = versioning
         self.dataflow = dataflow
@@ -478,26 +420,16 @@ class UnaryMapTransformer(
                 spa.Expression(
                     spa.UnaryOperator(u_op, spa.Expression(spa.ConstantLiteral(value, src_dtype.base_type)))),
                 op,
-                spa.Expression(spa.ArraySlice(
-                    src_id,
-                    [spa.Expression(var_k)]
-                )),
-            )
-        )
+                spa.Expression(spa.ArraySlice(src_id, [spa.Expression(var_k)])),
+            ))
 
         stmt = spa.MapStatement(
             variables=[spa.TypedIdentifier(ScalarType.i32, var_k)],
             range_expression=[spa.RangeExpression.from_args(0, res_dtype.shape[0])],
-            body=[
-                spa.AssignmentStatement(
-                    spa.ArraySlice(
-                        res_id,
-                        [spa.Expression(var_k)]
-                    ),
-                    src_e,
-                )
-            ]
-        )
+            body=[spa.AssignmentStatement(
+                spa.ArraySlice(res_id, [spa.Expression(var_k)]),
+                src_e,
+            )])
 
         stmt_block = self.get_context().stmt
         out_t = stmt_block.operation_type.destination[0]
@@ -508,13 +440,109 @@ class UnaryMapTransformer(
         return [AbstractStatement(xy_range[0], xy_range[1], (line_nr, stmt))]
 
 
-class HorizontalStencilTransformer(
-    PatternTransformer[sast.AssignOp | sast.ReturnOp, AbstractStatement, TransformerContext]):
+class TernaryMapTransformer(PatternTransformer[sast.AssignOp | sast.ReturnOp, AbstractStatement, TransformerContext]):
 
-    def __init__(self,
-                 placement: ProgramPlacement,
-                 versioning: Versioning[spa.Identifier],
-                 dataflow: ProgramDataflow):
+    def __init__(self, placement: ProgramPlacement, versioning: Versioning[spa.Identifier], dataflow: ProgramDataflow):
+        self.placement = placement
+        self.versioning = versioning
+        self.dataflow = dataflow
+
+        patterns = []
+
+        for const_type in (int, float):
+            for const2_type in (int, float):
+                # const if (b[0,0,0] op const_cond) else a[0,0,0]
+                patterns.append(
+                    sast.Expression(
+                        sast.TernaryOperator(
+                            sast.Expression(Wildcard[const_type]("value")()),
+                            sast.Expression(
+                                sast.BinaryOperator(
+                                    sast.Expression(sast.Subscript(Wildcard("src_cond")(), [0, 0, 0])),
+                                    Wildcard("op")(),
+                                    sast.Expression(Wildcard[const2_type]("value_cond")()),
+                                )),
+                            sast.Expression(sast.Subscript(Wildcard("src_false")(), [0, 0, 0])),
+                        )))
+
+                # a[0,0,0] if (b[0,0,0] op const_cond) else const
+                patterns.append(
+                    sast.Expression(
+                        sast.TernaryOperator(
+                            sast.Expression(sast.Subscript(Wildcard("src_true")(), [0, 0, 0])),
+                            sast.Expression(
+                                sast.BinaryOperator(
+                                    sast.Expression(sast.Subscript(Wildcard("src_cond")(), [0, 0, 0])),
+                                    Wildcard("op")(),
+                                    sast.Expression(Wildcard[const2_type]("value_cond")()),
+                                )),
+                            sast.Expression(Wildcard[const_type]("value")()),
+                        )))
+
+        assignments = [sast.AssignOp(Wildcard[sast.Identifier]("dst")(), e, Wildcard()()) for e in patterns]
+        returns = [sast.ReturnOp([e], Wildcard()()) for e in patterns]
+
+        super().__init__(assignments + returns)
+
+    def transform(self,
+                  root: sast.AssignOp | sast.ReturnOp,
+                  op: str = None,
+                  value=None,
+                  value_cond=None,
+                  src_false: sast.Identifier = None,
+                  src_true: sast.Identifier = None,
+                  src_cond: sast.Identifier = None,
+                  dst: sast.Identifier = None,
+                  **wildcards) -> list[AbstractStatement]:
+        assert src_false is not None or src_true is not None
+        assert src_cond is not None
+        assert src_false is None or src_true is None, "Only one of src_false or src_true should be set"
+
+        src_id, src_dtype = self.placement.get_storage(src_false or src_true)
+        src_cond_id, src_cond_dtype = self.placement.get_storage(src_cond)
+
+        context = self.get_context()
+        compute_block, stmt_block = context.comp, context.stmt
+
+        if dst is None:
+            assert isinstance(root, sast.ReturnOp)
+            # Return statement has an implicit destination to the i-th output of the statement block
+            dst = stmt_block.outputs[context.index]
+        res_id, res_dtype = self.placement.get_storage(dst)
+
+        var_k = self.versioning.next_version('k')
+
+        arr_operand = spa.Expression(spa.ArraySlice(src_id, [spa.Expression(var_k)]))
+        const_operand = spa.Expression(spa.ConstantLiteral(value, src_dtype.base_type))
+
+        src_e = spa.Expression(
+            spa.TernaryOperator(
+                arr_operand if src_true is not None else const_operand,
+                spa.Expression(
+                    spa.BinaryOperator(
+                        spa.Expression(spa.ArraySlice(src_cond_id, [spa.Expression(var_k)])), op,
+                        spa.Expression(spa.ConstantLiteral(value_cond, src_cond_dtype.base_type)))),
+                const_operand if src_true is not None else arr_operand,
+            ))
+
+        stmt = spa.MapStatement(
+            variables=[spa.TypedIdentifier(ScalarType.i32, var_k)],
+            range_expression=[spa.RangeExpression.from_args(0, res_dtype.shape[0])],
+            body=[spa.AssignmentStatement(spa.ArraySlice(res_id, [spa.Expression(var_k)]), src_e)])
+
+        stmt_block = self.get_context().stmt
+        out_t = stmt_block.operation_type.destination[0]
+        xy_range = self.dataflow.get_x_y_range(out_t, 0, 0)
+
+        line_nr = self.versioning.next_version("___line___").version
+
+        return [AbstractStatement(xy_range[0], xy_range[1], (line_nr, stmt))]
+
+
+class HorizontalStencilTransformer(PatternTransformer[sast.AssignOp | sast.ReturnOp, AbstractStatement,
+                                                      TransformerContext]):
+
+    def __init__(self, placement: ProgramPlacement, versioning: Versioning[spa.Identifier], dataflow: ProgramDataflow):
         self.placement = placement
         self.versioning = versioning
         self.dataflow = dataflow
@@ -524,47 +552,46 @@ class HorizontalStencilTransformer(
         # %d = %factor * %b[dx, dy, 0] : f32
 
         e_1 = sast.Expression(
-            value=sast.BinaryOperator(left=sast.Expression(value=sast.Subscript(
-                Wildcard[sast.Identifier]('local')(), [0, 0, 0])),
+            value=sast.BinaryOperator(
+                left=sast.Expression(value=sast.Subscript(Wildcard[sast.Identifier]('local')(), [0, 0, 0])),
                 op=Wildcard("op")(),
                 right=sast.Expression(
-                    sast.Subscript(Wildcard('remote')(),
-                                   [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0]))))
+                    sast.Subscript(Wildcard('remote')(), [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0]))))
 
         e = sast.Expression(
-            value=sast.BinaryOperator(right=sast.Expression(value=sast.Subscript(
-                Wildcard[sast.Identifier]('local')(), [0, 0, 0])),
+            value=sast.BinaryOperator(
+                right=sast.Expression(value=sast.Subscript(Wildcard[sast.Identifier]('local')(), [0, 0, 0])),
                 op=Wildcard("op")(),
                 left=sast.Expression(
-                    sast.Subscript(Wildcard('remote')(),
-                                   [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0]))))
+                    sast.Subscript(Wildcard('remote')(), [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0]))))
 
-        e_2 = sast.Expression(sast.Subscript(Wildcard('remote')(),
-                                             [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0]))
+        e_2 = sast.Expression(sast.Subscript(Wildcard('remote')(), [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0]))
 
-        e_3 = sast.Expression(sast.BinaryOperator(sast.Expression(Wildcard[int]('factor')()),
-                                                  Wildcard('op')(),
-                                                  sast.Expression(sast.Subscript(Wildcard('remote')(),
-                                                                                 [Wildcard[int]('dx')(),
-                                                                                  Wildcard[int]('dy')(), 0]))))
+        e_3 = sast.Expression(
+            sast.BinaryOperator(
+                sast.Expression(Wildcard[int]('factor')()),
+                Wildcard('op')(),
+                sast.Expression(
+                    sast.Subscript(Wildcard('remote')(), [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0]))))
 
-        e_4 = sast.Expression(sast.BinaryOperator(sast.Expression(sast.Subscript(Wildcard('remote')(),
-                                                                                 [Wildcard[int]('dx')(),
-                                                                                  Wildcard[int]('dy')(), 0])),
-                                                  Wildcard('op')(),
-                                                  sast.Expression(Wildcard[int]('factor')())))
+        e_4 = sast.Expression(
+            sast.BinaryOperator(
+                sast.Expression(
+                    sast.Subscript(Wildcard('remote')(), [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0])),
+                Wildcard('op')(), sast.Expression(Wildcard[int]('factor')())))
 
-        e_5 = sast.Expression(sast.BinaryOperator(sast.Expression(Wildcard[float]('factor')()),
-                                                  Wildcard('op')(),
-                                                  sast.Expression(sast.Subscript(Wildcard('remote')(),
-                                                                                 [Wildcard[int]('dx')(),
-                                                                                  Wildcard[int]('dy')(), 0]))))
+        e_5 = sast.Expression(
+            sast.BinaryOperator(
+                sast.Expression(Wildcard[float]('factor')()),
+                Wildcard('op')(),
+                sast.Expression(
+                    sast.Subscript(Wildcard('remote')(), [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0]))))
 
-        e_6 = sast.Expression(sast.BinaryOperator(sast.Expression(sast.Subscript(Wildcard('remote')(),
-                                                                                 [Wildcard[int]('dx')(),
-                                                                                  Wildcard[int]('dy')(), 0])),
-                                                  Wildcard('op')(),
-                                                  sast.Expression(Wildcard[float]('factor')())))
+        e_6 = sast.Expression(
+            sast.BinaryOperator(
+                sast.Expression(
+                    sast.Subscript(Wildcard('remote')(), [Wildcard[int]('dx')(), Wildcard[int]('dy')(), 0])),
+                Wildcard('op')(), sast.Expression(Wildcard[float]('factor')())))
 
         exprs = [e, e_1, e_2, e_3, e_4, e_5, e_6]
 
@@ -626,12 +653,11 @@ class HorizontalStencilTransformer(
 
             # Build the source expression
             if local is not None:
-                src_expr = spa.Expression(
-                    spa.BinaryOperator(
-                        spa.Expression(local_id),
-                        op,
-                        spa.Expression(var_x),
-                    ))
+                src_expr = spa.Expression(spa.BinaryOperator(
+                    spa.Expression(local_id),
+                    op,
+                    spa.Expression(var_x),
+                ))
             elif factor is not None:
                 # %d = %factor * %b[dx, dy, 0] : f32
                 if isinstance(factor, int):
@@ -643,19 +669,8 @@ class HorizontalStencilTransformer(
                 # %c = (%b[dx, dy, 0] : f32
                 src_expr = spa.Expression(var_x)
 
-            return _send_receive_statement(self.dataflow,
-                                           self.versioning,
-                                           self.placement,
-                                           remote,
-                                           out_t,
-                                           dx,
-                                           dy,
-                                           res_id,
-                                           res_dtype,
-                                           out_id,
-                                           var_x,
-                                           var_k,
-                                           src_expr)
+            return _send_receive_statement(self.dataflow, self.versioning, self.placement, remote, out_t, dx, dy,
+                                           res_id, res_dtype, out_id, var_x, var_k, src_expr)
         else:
             # (4) materialized buffer (already computed)
             # Only local computation is needed
@@ -667,86 +682,48 @@ class HorizontalStencilTransformer(
             if local is not None:
                 src_e = spa.Expression(
                     spa.BinaryOperator(
-                        spa.Expression(spa.ArraySlice(
-                            local_id,
-                            [spa.Expression(var_k)]
-                        )),
+                        spa.Expression(spa.ArraySlice(local_id, [spa.Expression(var_k)])),
                         op,
-                        spa.Expression(spa.ArraySlice(
-                            remote_id,
-                            [spa.Expression(var_k)]
-                        )),
-                    )
-                )
+                        spa.Expression(spa.ArraySlice(remote_id, [spa.Expression(var_k)])),
+                    ))
             elif factor is not None:
                 src_e = spa.Expression(
                     spa.BinaryOperator(
                         spa.Expression(spa.ConstantLiteral(factor, ScalarType.i32)),
                         op,
-                        spa.Expression(spa.ArraySlice(
-                            remote_id,
-                            [spa.Expression(var_k)]
-                        )),
-                    )
-                )
+                        spa.Expression(spa.ArraySlice(remote_id, [spa.Expression(var_k)])),
+                    ))
             else:
-                src_e = spa.Expression(
-                    spa.ArraySlice(
-                        remote_id,
-                        [spa.Expression(var_k)]
-                    )
-                )
+                src_e = spa.Expression(spa.ArraySlice(remote_id, [spa.Expression(var_k)]))
 
             stmt = spa.MapStatement(
                 variables=[spa.TypedIdentifier(ScalarType.i32, var_k)],
                 range_expression=[spa.RangeExpression.from_args(0, res_dtype.shape[0])],
-                body=[
-                    spa.AssignmentStatement(
-                        spa.ArraySlice(
-                            res_id,
-                            [spa.Expression(var_k)]
-                        ),
-                        src_e,
-                    )
-                ]
-            )
+                body=[spa.AssignmentStatement(
+                    spa.ArraySlice(res_id, [spa.Expression(var_k)]),
+                    src_e,
+                )])
 
             line_nr = self.versioning.next_version("___line___").version
             return [AbstractStatement(xy_range[0], xy_range[1], (line_nr, stmt))]
 
 
-def _send_receive_statement(dataflow: ProgramDataflow,
-                            versioning: Versioning[spa.Identifier],
-                            placement: ProgramPlacement,
-                            remote: sast.Identifier,
-                            out_t: sast.DataType,
-                            dx: int,
-                            dy: int,
-                            res_id: spa.Identifier,
-                            res_dtype: spa.ArrayType,
-                            out_id: spa.Identifier,
-                            var_x: spa.Identifier,
-                            var_k: spa.Identifier,
+def _send_receive_statement(dataflow: ProgramDataflow, versioning: Versioning[spa.Identifier],
+                            placement: ProgramPlacement, remote: sast.Identifier, out_t: sast.DataType, dx: int,
+                            dy: int, res_id: spa.Identifier, res_dtype: spa.ArrayType, out_id: spa.Identifier,
+                            var_x: spa.Identifier, var_k: spa.Identifier,
                             src_expr: spa.Expression) -> list[AbstractStatement]:
     # stream used to communicate the remote buffer
     remote_id, remote_dtype = placement.get_storage(remote)
     stream = dataflow.get_stream(remote, out_id, sast.Offset((dx, dy, 0)))
     assert stream
-    
+
     send_range_x, send_range_y = dataflow.get_x_y_send_range(out_t, dx, dy)
-    receive_range_x, receive_range_y =  dataflow.get_x_y_receive_range(out_t, dx, dy)
+    receive_range_x, receive_range_y = dataflow.get_x_y_receive_range(out_t, dx, dy)
 
-    recv = spa.ReceiveGenerator(
-        stream
-    )
+    recv = spa.ReceiveGenerator(stream)
 
-    assign_stmt = spa.AssignmentStatement(
-        source=src_expr,
-        destination=spa.ArraySlice(
-            res_id,
-            [spa.Expression(var_k)]
-        )
-    )
+    assign_stmt = spa.AssignmentStatement(source=src_expr, destination=spa.ArraySlice(res_id, [spa.Expression(var_k)]))
 
     body = [assign_stmt]
 
@@ -767,18 +744,13 @@ def _send_receive_statement(dataflow: ProgramDataflow,
 
     send_comp_id = versioning.next_version('_send_comp')
     send_completion = spa.Completion(send_comp_id)
-    send = spa.SendStatement(
-        remote_id,
-        stream,
-        send_completion
-    )
+    send = spa.SendStatement(remote_id, stream, send_completion)
 
     line_nr = versioning.next_version("___line___").version
     send_stmt = AbstractStatement(send_range_x, send_range_y, (line_nr, send))
 
     line_nr = versioning.next_version("___line___").version
-    await_send = AbstractStatement(send_range_x, send_range_y,
-                                   (line_nr, spa.AwaitCompletionStatement(send_comp_id)))
+    await_send = AbstractStatement(send_range_x, send_range_y, (line_nr, spa.AwaitCompletionStatement(send_comp_id)))
 
     line_nr = versioning.next_version("___line___").version
     await_recv = AbstractStatement(receive_range_x, receive_range_y,
