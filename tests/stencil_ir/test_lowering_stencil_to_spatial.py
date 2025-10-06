@@ -4,6 +4,7 @@ from typing import Tuple
 
 import pytest
 
+from spatialstencil.cli.gt4py_to_spatial import lower_function, lower_gt4py_to_sptl
 from spatialstencil.lowering.stencil_to_spatial_routing import ChannelStrategy
 from spatialstencil.lowering.stencil_to_spatial_compute import HorizontalStencilTransformer
 from spatialstencil.lowering.stencil_to_spatial_dataflow import ProgramDataflow
@@ -81,7 +82,7 @@ def test_lowering_finishes():
         domain = Cartesian(x=Interval(0, 128), y=Interval(0, 128), z=Interval(0, 80))
         type_inference.infer_field_domains(program, domain)
 
-        spatial_program = lower_stencil_to_spatial(program, CHANNEL_STRATEGY.none)
+        spatial_program = lower_stencil_to_spatial(program, ChannelStrategy.none)
 
         assert subgrids_dont_overlap(spatial_program)
         assert len(spatial_program.as_ir())
@@ -227,9 +228,23 @@ def test_vadv():
         assert subgrids_dont_overlap(spatial_program)
 
 
+def test_gt4py_integration():
+    from spatialstencil.syntax.gt4py import parser as gt4py_parser
+    
+    gtfuncs = gt4py_parser.parse_file(str(Path(__file__).parent / Path('../../samples/gt4py_test_instances.py')))
+
+    print(f"Found {len(gtfuncs)} function(s): {list(gtfuncs.keys())}")
+        
+    for func_name in gtfuncs.keys():
+        try:
+            lower_function(func_name, [8, 8, 4], None, gtfuncs)
+        except Exception as e:
+            raise e
+
 if __name__ == '__main__':
     test_horizontal_stencil_transformer()
     test_lowering_finishes()
     test_vertical_stencil_finishes()
     test_scalar_arguments()
     test_vadv()
+    test_gt4py_integration()

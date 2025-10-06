@@ -1,3 +1,4 @@
+import copy
 from spatialstencil.lowering.stencil_to_spatial_dataflow import ProgramDataflow
 from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
 from spatialstencil.lowering.versioning import Versioning
@@ -153,19 +154,22 @@ class ExpressionTranslator(sast.NodeVisitor):
         assert node.subscript[1] == 0
         z_offset = node.subscript[2]
         array = self.placement.get_storage(node.value)
+        if isinstance(array[1], spa.ArrayType):
+            if z_offset == 0:
+                access = self.iteration_variable.identifier
+            elif z_offset > 0:
+                access = spa.BinaryOperator(spa.Expression(self.iteration_variable.identifier),
+                                            "+",
+                                            spa.Expression(spa.ConstantLiteral(z_offset, ScalarType.i32)))
+            else:
+                access = spa.BinaryOperator(spa.Expression(self.iteration_variable.identifier),
+                                            "-",
+                                            spa.Expression(spa.ConstantLiteral(-z_offset, ScalarType.i32)))
 
-        if z_offset == 0:
-            access = self.iteration_variable.identifier
-        elif z_offset > 0:
-            access = spa.BinaryOperator(spa.Expression(self.iteration_variable.identifier),
-                                        "+",
-                                        spa.Expression(spa.ConstantLiteral(z_offset, ScalarType.i32)))
+            result = spa.ArraySlice(array[0], [spa.Expression(access)])
         else:
-            access = spa.BinaryOperator(spa.Expression(self.iteration_variable.identifier),
-                                        "-",
-                                        spa.Expression(spa.ConstantLiteral(-z_offset, ScalarType.i32)))
-
-        result = spa.ArraySlice(array[0], [spa.Expression(access)])
+            assert isinstance(array[1], spa.ScalarType)
+            result = copy.copy(array[0])
         self.translation_stack.append(result)
 
     def visit_Expression(self, node: sast.Expression):
@@ -192,11 +196,12 @@ class ExpressionTranslator(sast.NodeVisitor):
     def visit_Identifier(self, node: sast.Identifier):
         # This MUST be an access to a scalar argument, because we
         # repalced accessed to fields with an explicit subscript
-        array = self.placement.get_storage(node)
-        if array:
+        identifier, dtype = self.placement.get_storage(node)
+        if isinstance(dtype, spa.ArrayType):
             access = self.iteration_variable.identifier
-            result = spa.ArraySlice(array[0], [spa.Expression(access)])
+            result = spa.ArraySlice(identifier, [spa.Expression(access)])
         else:
+            assert isinstance(dtype, spa.ScalarType)
             assert node.version == 0, f"{node.as_ir()} must be input"
             result = spa.Identifier(node.name, node.version)
         self.translation_stack.append(result)

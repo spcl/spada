@@ -36,7 +36,7 @@ def lower_gt4py_to_stencil_ir(program: gtast.GTProgram,
     new_ast = convert_gt4py_ast_to_stencil_ast(program, default_float_dtype, default_int_dtype)
 
     SSAVisitor().visit(new_ast)
-
+    
     # Infer which fields are intermediate (before materialize pass)
     type_inference.infer_inputs_and_outputs(new_ast)
 
@@ -274,18 +274,20 @@ def convert_gt4py_ast_to_stencil_ast(program: gtast.GTProgram, default_float_dty
         name=program.name,
         inputs=[sast.Identifier(field) for field in sorted(input_fields)],
         attributes={},
-        operation_type=sast.OperationType([_view_as_field(field_type_by_name[field]) for field in sorted(input_fields)],
-                                          [_view_as_field(field_type_by_name[field]) for field in sorted(output_fields)]),
+        operation_type=sast.OperationType([_as_field_or_scalar(field_type_by_name[field]) for field in sorted(input_fields)],
+                                          [_as_field_or_scalar(field_type_by_name[field]) for field in sorted(output_fields)]),
         computations=computations,
     )
 
 
-def _view_as_field(view: sast.ViewType) -> sast.FieldType:
+def _as_field_or_scalar(view: sast.ViewType | sast.ScalarType) -> sast.FieldType | sast.ScalarType:
     """
     Converts a view type to a field type.
     :param view: The view type to convert.
     :return: The field type, dropping the extent information.
     """
+    if isinstance(view, sast.ScalarType):
+        return view
     return sast.FieldType(view.domain, view.dtype)
 
 
@@ -308,7 +310,7 @@ def _parse_field(name: str) -> sast.Identifier:
 
 
 def _gt4py_to_stencil_ir_type(dtype: gtast.FieldType, default_float_dtype: sast.ScalarType,
-                              default_int_dtype: sast.ScalarType) -> sast.ViewType:
+                              default_int_dtype: sast.ScalarType) -> sast.ViewType | sast.ScalarType:
     result = sast.ViewType.empty()
 
     # TODO(later): Try to use GT4Py type annotations if explicit
@@ -327,13 +329,9 @@ def _gt4py_to_stencil_ir_type(dtype: gtast.FieldType, default_float_dtype: sast.
         result.dtype = default_float_dtype
         result.domain = sast.Cartesian.from_sequence((0, 1, 0, 1, 0, None))
     elif dtype == gtast.FieldType.int:
-        result.dtype = default_int_dtype
-        result.domain = sast.Cartesian.from_sequence((0, 1, 0, 1, 0, 1))
-        result.extent = sast.Extent([sast.Offset((0, 0, 0))])
+        return default_int_dtype
     elif dtype == gtast.FieldType.float:
-        result.dtype = default_float_dtype
-        result.domain = sast.Cartesian.from_sequence((0, 1, 0, 1, 0, 1))
-        result.extent = sast.Extent([sast.Offset((0, 0, 0))])
+        return default_float_dtype
     else:
         raise TypeError(f'Unsupported field type "{dtype}"')
 

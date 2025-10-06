@@ -28,6 +28,7 @@ class ProgramPlacement:
         self.subgrid_var_type = subgrid_var_type
         # contains the set of output variables of the program
         self._program_scope_fields: dict[str, sast.Identifier] = dict()
+        self._program_scope_scalars: dict[str, sast.ScalarType] = dict()
 
     def place_program(self,
                       program: sast.Program) -> list[spa.PlaceBlock]:
@@ -135,14 +136,14 @@ class ProgramPlacement:
         place_blocks = []
         for inp, inp_t in zip(scope.inputs, scope.operation_type.source):
             if isinstance(inp_t, ScalarType):
-                # Scalar types are converted to kernel arguments, need to allocation
-                continue
-
-            domain = inp_t.domain.add(self.get_shift())
-            # Allocate a field for the input
-            field = self._allocate_field(inp, inp_t.dtype, domain)
-            place_blocks.extend(field)
-            self._program_scope_fields[inp.name] = inp
+                # Scalar types are converted to kernel arguments, no need to allocate -> simply record type
+                self._program_scope_scalars[inp.name] = inp_t
+            else:
+                domain = inp_t.domain.add(self.get_shift())
+                # Allocate a field for the input
+                field = self._allocate_field(inp, inp_t.dtype, domain)
+                place_blocks.extend(field)
+                self._program_scope_fields[inp.name] = inp
 
         return place_blocks
 
@@ -162,7 +163,7 @@ class ProgramPlacement:
 
     def get_storage(self,
                     identifier: sast.Identifier,
-                    offset: sast.Offset = sast.Offset.zero()) -> tuple[spa.Identifier, spa.ArrayType] | None:
+                    offset: sast.Offset = sast.Offset.zero()) -> tuple[spa.Identifier, spa.ArrayType | spa.ScalarType] | None:
         if identifier in self._storage_map:
             if offset in self._storage_map[identifier]:
                 return self._storage_map[identifier][offset]
@@ -171,6 +172,8 @@ class ProgramPlacement:
             identifier = self._program_scope_fields[identifier.name]
             if offset in self._storage_map[identifier]:
                 return self._storage_map[identifier][offset]
+        elif identifier.name in self._program_scope_scalars and offset.l1_norm() == 0:
+            return (spa.Identifier(identifier.name, 0), self._program_scope_scalars[identifier.name])
         else:
             return None
 

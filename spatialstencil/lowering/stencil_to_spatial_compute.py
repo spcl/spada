@@ -113,7 +113,10 @@ class ParallelComputeVisitor(sast.ScopedNodeVisitor):
 
             src_id, src_dtype = self.placement.get_storage(value)
 
-            src_e = spa.Expression(spa.ArraySlice(src_id, [spa.Expression(var_k)]))
+            if isinstance(src_dtype, spa.ArrayType):
+                src_e = spa.Expression(spa.ArraySlice(src_id, [spa.Expression(var_k)]))
+            else:
+                src_e = spa.Expression(src_id)
 
             dst_id, dst_dtype = self.placement.get_storage(out)
 
@@ -327,14 +330,18 @@ class MapTransformer(PatternTransformer[sast.AssignOp | sast.ReturnOp, AbstractS
             # Return statement has an implicit destination to the i-th output of the statement block
             dst = stmt_block.outputs[context.index]
         res_id, res_dtype = self.placement.get_storage(dst)
-
+        
         var_k = self.versioning.next_version('k')
+
+        if isinstance(src_dtype, spa.ArrayType):
+            src_1_expr = spa.Expression(spa.ArraySlice(src_id, [spa.Expression(var_k)]))
+        else:
+            src_1_expr = spa.Expression(src_id)
+
         if src2 is None:
 
             if value is None and op is None:
-
-                src_e = spa.Expression(spa.ArraySlice(src_id, [spa.Expression(var_k)]))
-
+                src_e = src_1_expr
             else:
                 assert value is not None and op is not None
 
@@ -348,15 +355,21 @@ class MapTransformer(PatternTransformer[sast.AssignOp | sast.ReturnOp, AbstractS
                     spa.BinaryOperator(
                         spa.Expression(const_expr),
                         op,
-                        spa.Expression(spa.ArraySlice(src_id, [spa.Expression(var_k)])),
+                        src_1_expr,
                     ))
         else:
             src2_id, src2_dtype = self.placement.get_storage(src2)
+            
+            if isinstance(src2_dtype, spa.ScalarType):
+                src2_expr = spa.Expression(src2_id)
+            else:
+                src2_expr = spa.Expression(spa.ArraySlice(src2_id, [spa.Expression(var_k)]))
+                
             src_e = spa.Expression(
                 spa.BinaryOperator(
-                    spa.Expression(spa.ArraySlice(src2_id, [spa.Expression(var_k)])),
+                    src2_expr,
                     op,
-                    spa.Expression(spa.ArraySlice(src_id, [spa.Expression(var_k)])),
+                    src_1_expr,
                 ))
 
         stmt = spa.MapStatement(
@@ -415,12 +428,17 @@ class UnaryMapTransformer(PatternTransformer[sast.AssignOp | sast.ReturnOp, Abst
         # so we can easily extract the correct operation from the expression
         src_id, src_dtype = self.placement.get_storage(src)
 
+        if isinstance(src_dtype, spa.ScalarType):
+            src_expr = spa.Expression(src_id)
+        else:
+            src_expr = spa.Expression(spa.ArraySlice(src_id, [spa.Expression(var_k)]))
+
         src_e = spa.Expression(
             spa.BinaryOperator(
                 spa.Expression(
                     spa.UnaryOperator(u_op, spa.Expression(spa.ConstantLiteral(value, src_dtype.base_type)))),
                 op,
-                spa.Expression(spa.ArraySlice(src_id, [spa.Expression(var_k)])),
+                src_expr,
             ))
 
         stmt = spa.MapStatement(

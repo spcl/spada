@@ -32,27 +32,24 @@ def validate_path(path_str, must_exist=False):
     return path
 
 
-def lower_function(input_file: Path,
-                           function_name: str,
-                           domain_size: tuple[int, int, int],
-                           output_dir: Path,
-                           gtfuncs: dict):
+def lower_function(function_name: str, domain_size: tuple[int, int, int], output_dir: Path | None, gtfuncs: dict):
     """Process a single function."""
     print(f"Processing function: {function_name}")
     
     if function_name not in gtfuncs:
-        raise ValueError(f"Function {function_name} not found in {input_file}")
+        raise ValueError(f"Function {function_name} not found")
     
     program = gtfuncs[function_name]
     irprogram = gt4py_to_stencil_ir.lower_gt4py_to_stencil_ir(program, domain=domain_size)
     
     # Save
     output = irprogram.as_ir()
-    output_file = output_dir / f"{function_name}_{domain_size[0]}_{domain_size[1]}_{domain_size[2]}.spst"
-    with open(output_file, mode="w") as f:
-        f.write(output)
-    
-    print(f"  Saved stencil to: {output_file}")
+    if output_dir is not None:
+        output_file = output_dir / f"{function_name}_{domain_size[0]}_{domain_size[1]}_{domain_size[2]}.spst"
+        with open(output_file, mode="w") as f:
+            f.write(output)
+        
+        print(f"  Saved stencil to: {output_file}")
     
     type_inference.infer_field_extents(irprogram)
     type_inference.infer_field_domains(irprogram)
@@ -60,11 +57,12 @@ def lower_function(input_file: Path,
     
     # Save
     output = spatial_program.as_ir()
-    output_file = output_dir / f"{function_name}_{domain_size[0]}_{domain_size[1]}_{domain_size[2]}.sptl"
-    with open(output_file, mode="w") as f:
-        f.write(output)
-    
-    print(f"  Saved SpaDa to: {output_file}")
+    if output_dir is not None:
+        output_file = output_dir / f"{function_name}_{domain_size[0]}_{domain_size[1]}_{domain_size[2]}.sptl"
+        with open(output_file, mode="w") as f:
+            f.write(output)
+        
+        print(f"  Saved SpaDa to: {output_file}")
 
 
 def lower_gt4py_to_sptl(input_file: Path,
@@ -96,13 +94,13 @@ def lower_gt4py_to_sptl(input_file: Path,
         
         for func_name in gtfuncs.keys():
             try:
-                lower_function(input_file, func_name, domain_size, output_dir, gtfuncs)
+                lower_function(func_name, domain_size, output_dir, gtfuncs)
             except Exception as e:
                 print(f"Exception occured during lowering of function {func_name}: ")
                 print(traceback.format_exc())
     else:
         # Process single function
-        lower_function(input_file, function_name, domain_size, output_dir, gtfuncs)
+        lower_function(function_name, domain_size, output_dir, gtfuncs)
     
     print("Lowering complete!")
 
