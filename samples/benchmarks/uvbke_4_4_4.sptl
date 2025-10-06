@@ -111,6 +111,18 @@ kernel @uvbke<>(stream<f32, 4>[4, 5] readonly _arg0, stream<f32, 4>[5, 4] readon
     f32[4] i16_0_0_0#1
     f32[4] _temp_0_0_0#2
   }
+  place u16 i#23, u16 j#23 in [0:1:2 , 0:1:2] {
+
+  }
+  place u16 i#24, u16 j#24 in [5:6:2 , 0:1:2] {
+
+  }
+  place u16 i#25, u16 j#25 in [0:1:2 , 5:6:2] {
+
+  }
+  place u16 i#26, u16 j#26 in [5:6:2 , 5:6:2] {
+
+  }
   dataflow u16 i#9, u16 j#9 in [0:1:2 , 1:5:2] {
     stream<f32> _stream_arg1#2 = relative_stream(1, 0) {
       hops = [(1, 0)], 
@@ -390,6 +402,18 @@ kernel @uvbke<>(stream<f32, 4>[4, 5] readonly _arg0, stream<f32, 4>[5, 4] readon
       hops = [(1, 0)], 
       channel = 3
     }
+  }
+  dataflow u16 i#27, u16 j#27 in [0:1:2 , 0:1:2] {
+
+  }
+  dataflow u16 i#28, u16 j#28 in [5:6:2 , 0:1:2] {
+
+  }
+  dataflow u16 i#29, u16 j#29 in [0:1:2 , 5:6:2] {
+
+  }
+  dataflow u16 i#30, u16 j#30 in [5:6:2 , 5:6:2] {
+
   }
   compute u16 i#3, u16 j#3 in [1:5:2 , 1:5:2] {
     await receive(arg2_0_0_0, _arg2[i#3, j#3])
