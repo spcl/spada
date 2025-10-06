@@ -377,13 +377,9 @@ class RangeExpression(SpatialNode):
     def from_args(start: int, stop: int, step: int = None) -> 'RangeExpression':
         start_expr = Expression(ConstantLiteral(start, ScalarType.i32))
         stop_expr = Expression(ConstantLiteral(stop, ScalarType.i32))
-        if step is not None:
-            step_expr = Expression(ConstantLiteral(step, ScalarType.i32))
-            return RangeExpression(start_expr, stop_expr, step_expr)
-        if abs(start - stop) == 1:
-            return RangeExpression(start_expr)
-        else:
-            return RangeExpression(start_expr, stop_expr)
+        step_expr = Expression(ConstantLiteral(step if step else 1, ScalarType.i32))
+
+        return RangeExpression(start_expr, stop_expr, step_expr)
 
     def as_tuple(self) -> tuple:
         if self.step:

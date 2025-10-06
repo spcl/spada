@@ -166,7 +166,7 @@ def input_phase(body: list[spa.PlaceBlock],
             # Check if it is an input field by looking at the arguments and checking if there is
             # a field with the same name but with a _ prefix
             for arg in arguments:
-                if field.field_name.name == f'{arg.identifier.name[1:]}_0_0_0':
+                if field.field_name.name == f'{arg.identifier.name[1:]}_0_0_0' and field.field_name.version == 0:
                     # Generate input phase
                     # TODO: Check / Fix the indices
                     # Receive the input

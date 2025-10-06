@@ -32,3 +32,11 @@ def scalar_arg_i(in_field: Field3D, factor: float, out_field: Field3D):
 def scalar_arg_j(in_field: Field3D, factor: float, out_field: Field3D):
     with computation(FORWARD), interval(1, None):
         out_field = factor * in_field[0, 0, -1]
+        
+        
+def pure_vertical_test(in_field: Field3D, out_field: Field3D):
+    with computation(FORWARD):
+        with interval(0, 1):
+            in_field = in_field[0, 0, 0]
+        with interval(1, None):
+            in_field = in_field[0, 0, 0] - 0.5 * in_field[0, 0, -1]

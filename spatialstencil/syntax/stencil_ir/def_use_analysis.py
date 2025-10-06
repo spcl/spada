@@ -118,6 +118,10 @@ class DefUseAnalysis(sast.ScopedNodeVisitor):
 
         for arg_id, arg_t in zip(node.inputs, node.operation_type.source):
             self.add_use(arg_id, arg_t)
+            if arg_id.version > 0:
+                # Implicitly uses the 0 version [happens for vertical stencils]
+                self.add_use(sast.Identifier(arg_id.name, 0), arg_t)
+                
         for out_id, out_t in zip(node.outputs, node.operation_type.destination):
             self.add_definition(out_id, out_t)
 
