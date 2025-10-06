@@ -2805,7 +2805,7 @@ kernel @hdiffsa<>(stream<f32, 4>[8, 8] readonly _arg0, stream<f32, 4>[4, 4] read
     completion _send_comp = send(arg0_0_0_0, _stream_arg0#13)
     await _send_comp
     completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:4:1], receive(_stream_arg0#15) {
-
+      i16_0_0_0[k#2] = 0
     }
     await _recv_comp#1
   }
@@ -2815,7 +2815,7 @@ kernel @hdiffsa<>(stream<f32, 4>[8, 8] readonly _arg0, stream<f32, 4>[4, 4] read
     completion _send_comp = send(arg0_0_0_0, _stream_arg0#13)
     await _send_comp
     completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:4:1], receive(_stream_arg0#15) {
-
+      i16_0_0_0[k#2] = 0
     }
     await _recv_comp#1
   }
@@ -2825,13 +2825,13 @@ kernel @hdiffsa<>(stream<f32, 4>[8, 8] readonly _arg0, stream<f32, 4>[4, 4] read
     completion _send_comp = send(arg0_0_0_0, _stream_arg0#13)
     await _send_comp
     completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:4:1], receive(_stream_arg0#15) {
-
+      i16_0_0_0[k#2] = 0
     }
     await _recv_comp#1
     completion _send_comp#6 = send(i9_0_0_0, _stream_i9_mat#4)
     await _send_comp#6
     completion _recv_comp#7 = foreach i32 k#15, f32 x#7 in [0:4:1], receive(_stream_arg0#11) {
-
+      i18_mat_0_0_0#1[k#15] = 0
     }
     await _recv_comp#7
   }
@@ -2841,13 +2841,13 @@ kernel @hdiffsa<>(stream<f32, 4>[8, 8] readonly _arg0, stream<f32, 4>[4, 4] read
     completion _send_comp = send(arg0_0_0_0, _stream_arg0#13)
     await _send_comp
     completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:4:1], receive(_stream_arg0#15) {
-
+      i16_0_0_0[k#2] = 0
     }
     await _recv_comp#1
     completion _send_comp#6 = send(i9_0_0_0, _stream_i9_mat#4)
     await _send_comp#6
     completion _recv_comp#7 = foreach i32 k#15, f32 x#7 in [0:4:1], receive(_stream_arg0#11) {
-
+      i18_mat_0_0_0#1[k#15] = 0
     }
     await _recv_comp#7
   }
@@ -2971,7 +2971,7 @@ kernel @hdiffsa<>(stream<f32, 4>[8, 8] readonly _arg0, stream<f32, 4>[4, 4] read
     await receive(arg0_0_0_0, _arg0[i#18, j#18])
     awaitall
     completion _recv_comp#2 = foreach i32 k#5, f32 x#2 in [0:4:1], receive(_stream_arg0#7) {
-
+      i23_0_0_0[k#5] = 0
     }
     await _recv_comp#2
     completion _send_comp#3 = send(arg0_0_0_0, _stream_arg0#9)
@@ -2981,7 +2981,7 @@ kernel @hdiffsa<>(stream<f32, 4>[8, 8] readonly _arg0, stream<f32, 4>[4, 4] read
     await receive(arg0_0_0_0, _arg0[i#18, j#18])
     awaitall
     completion _recv_comp#2 = foreach i32 k#5, f32 x#2 in [0:4:1], receive(_stream_arg0#7) {
-
+      i23_0_0_0[k#5] = 0
     }
     await _recv_comp#2
     completion _send_comp#3 = send(arg0_0_0_0, _stream_arg0#9)
@@ -2991,7 +2991,7 @@ kernel @hdiffsa<>(stream<f32, 4>[8, 8] readonly _arg0, stream<f32, 4>[4, 4] read
     await receive(arg0_0_0_0, _arg0[i#20, j#20])
     awaitall
     completion _recv_comp = foreach i32 k#1, f32 x in [0:4:1], receive(_stream_arg0#13) {
-
+      _temp_0_0_0[k#1] = 0
     }
     await _recv_comp
     completion _send_comp#1 = send(arg0_0_0_0, _stream_arg0#15)
@@ -3009,7 +3009,7 @@ kernel @hdiffsa<>(stream<f32, 4>[8, 8] readonly _arg0, stream<f32, 4>[4, 4] read
     completion _send_comp#2 = send(arg0_0_0_0, _stream_arg0#7)
     await _send_comp#2
     completion _recv_comp#3 = foreach i32 k#6, f32 x#3 in [0:4:1], receive(_stream_arg0#9) {
-
+      i24_0_0_0[k#6] = 0
     }
     await _recv_comp#3
   }
@@ -3019,7 +3019,7 @@ kernel @hdiffsa<>(stream<f32, 4>[8, 8] readonly _arg0, stream<f32, 4>[4, 4] read
     completion _send_comp#2 = send(arg0_0_0_0, _stream_arg0#7)
     await _send_comp#2
     completion _recv_comp#3 = foreach i32 k#6, f32 x#3 in [0:4:1], receive(_stream_arg0#9) {
-
+      i24_0_0_0[k#6] = 0
     }
     await _recv_comp#3
   }
@@ -3078,7 +3078,7 @@ kernel @hdiffsa<>(stream<f32, 4>[8, 8] readonly _arg0, stream<f32, 4>[4, 4] read
     completion _send_comp#5 = send(i9_0_0_0, _stream_i9_mat#7)
     await _send_comp#5
     completion _recv_comp#9 = foreach i32 k#21, f32 x#9 in [0:4:1], receive(_stream_arg0#20) {
-
+      i20_0_0_0[k#21] = 0
     }
     await _recv_comp#9
   }
@@ -3137,7 +3137,7 @@ kernel @hdiffsa<>(stream<f32, 4>[8, 8] readonly _arg0, stream<f32, 4>[4, 4] read
     completion _send_comp#5 = send(i9_0_0_0, _stream_i9_mat#7)
     await _send_comp#5
     completion _recv_comp#9 = foreach i32 k#21, f32 x#9 in [0:4:1], receive(_stream_arg0#20) {
-
+      i20_0_0_0[k#21] = 0
     }
     await _recv_comp#9
   }
@@ -3361,7 +3361,7 @@ kernel @hdiffsa<>(stream<f32, 4>[8, 8] readonly _arg0, stream<f32, 4>[4, 4] read
     await receive(arg0_0_0_0, _arg0[i#23, j#23])
     awaitall
     completion _recv_comp = foreach i32 k#1, f32 x in [0:4:1], receive(_stream_arg0#13) {
-
+      _temp_0_0_0[k#1] = 0
     }
     await _recv_comp
     completion _send_comp#1 = send(arg0_0_0_0, _stream_arg0#15)
@@ -3371,7 +3371,7 @@ kernel @hdiffsa<>(stream<f32, 4>[8, 8] readonly _arg0, stream<f32, 4>[4, 4] read
     await receive(arg0_0_0_0, _arg0[i#25, j#25])
     awaitall
     completion _recv_comp = foreach i32 k#1, f32 x in [0:4:1], receive(_stream_arg0#13) {
-
+      _temp_0_0_0[k#1] = 0
     }
     await _recv_comp
     completion _send_comp#1 = send(arg0_0_0_0, _stream_arg0#15)
@@ -3381,7 +3381,7 @@ kernel @hdiffsa<>(stream<f32, 4>[8, 8] readonly _arg0, stream<f32, 4>[4, 4] read
     await receive(arg0_0_0_0, _arg0[i#25, j#25])
     awaitall
     completion _recv_comp = foreach i32 k#1, f32 x in [0:4:1], receive(_stream_arg0#13) {
-
+      _temp_0_0_0[k#1] = 0
     }
     await _recv_comp
     completion _send_comp#1 = send(arg0_0_0_0, _stream_arg0#15)

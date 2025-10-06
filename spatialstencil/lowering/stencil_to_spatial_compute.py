@@ -107,7 +107,10 @@ class DummyReceiveTransformer(spa.NodeTransformer):
         
         if not block_rect.intersects(send_rect):
             stmt = copy.deepcopy(stmt)
-            stmt.body = []
+            assign = stmt.body[0]
+            if isinstance(assign, spa.AssignmentStatement):
+                assign.source = spa.Expression(spa.ConstantLiteral(0, spa.ScalarType.f16))
+            #stmt.body = []
 
         return stmt
 

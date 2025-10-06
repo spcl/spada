@@ -431,7 +431,7 @@ kernel @laplacian<>(stream<f32, 4>[18, 18] readonly _in_field, stream<f32, 4>[16
     await receive(in_field_0_0_0, _in_field[i#8, j#8])
     awaitall
     completion _recv_comp = foreach i32 k, f32 x in [0:4:1], receive(_stream_in_field#6) {
-
+      _temp_0_0_0[k] = 0
     }
     await _recv_comp
     completion _send_comp#1 = send(in_field_0_0_0, _stream_in_field#4)
@@ -441,7 +441,7 @@ kernel @laplacian<>(stream<f32, 4>[18, 18] readonly _in_field, stream<f32, 4>[16
     await receive(in_field_0_0_0, _in_field[i#8, j#8])
     awaitall
     completion _recv_comp = foreach i32 k, f32 x in [0:4:1], receive(_stream_in_field#6) {
-
+      _temp_0_0_0[k] = 0
     }
     await _recv_comp
     completion _send_comp#1 = send(in_field_0_0_0, _stream_in_field#4)
@@ -613,7 +613,7 @@ kernel @laplacian<>(stream<f32, 4>[18, 18] readonly _in_field, stream<f32, 4>[16
     await receive(in_field_0_0_0, _in_field[i#6, j#6])
     awaitall
     completion _recv_comp#2 = foreach i32 k#2, f32 x#2 in [0:4:1], receive(_stream_in_field#10) {
-
+      _temp_0_0_0#2[k#2] = 0
     }
     await _recv_comp#2
     completion _send_comp#3 = send(in_field_0_0_0, _stream_in_field#8)
@@ -623,7 +623,7 @@ kernel @laplacian<>(stream<f32, 4>[18, 18] readonly _in_field, stream<f32, 4>[16
     await receive(in_field_0_0_0, _in_field[i#6, j#6])
     awaitall
     completion _recv_comp#2 = foreach i32 k#2, f32 x#2 in [0:4:1], receive(_stream_in_field#10) {
-
+      _temp_0_0_0#2[k#2] = 0
     }
     await _recv_comp#2
     completion _send_comp#3 = send(in_field_0_0_0, _stream_in_field#8)
@@ -641,7 +641,7 @@ kernel @laplacian<>(stream<f32, 4>[18, 18] readonly _in_field, stream<f32, 4>[16
     completion _send_comp#2 = send(in_field_0_0_0, _stream_in_field#10)
     await _send_comp#2
     completion _recv_comp#3 = foreach i32 k#3, f32 x#3 in [0:4:1], receive(_stream_in_field#8) {
-
+      _temp_0_0_0#3[k#3] = 0
     }
     await _recv_comp#3
   }
@@ -651,7 +651,7 @@ kernel @laplacian<>(stream<f32, 4>[18, 18] readonly _in_field, stream<f32, 4>[16
     completion _send_comp#2 = send(in_field_0_0_0, _stream_in_field#10)
     await _send_comp#2
     completion _recv_comp#3 = foreach i32 k#3, f32 x#3 in [0:4:1], receive(_stream_in_field#8) {
-
+      _temp_0_0_0#3[k#3] = 0
     }
     await _recv_comp#3
   }
@@ -661,7 +661,7 @@ kernel @laplacian<>(stream<f32, 4>[18, 18] readonly _in_field, stream<f32, 4>[16
     completion _send_comp = send(in_field_0_0_0, _stream_in_field#6)
     await _send_comp
     completion _recv_comp#1 = foreach i32 k#1, f32 x#1 in [0:4:1], receive(_stream_in_field#4) {
-
+      _temp_0_0_0#1[k#1] = 0
     }
     await _recv_comp#1
   }
@@ -671,7 +671,7 @@ kernel @laplacian<>(stream<f32, 4>[18, 18] readonly _in_field, stream<f32, 4>[16
     completion _send_comp = send(in_field_0_0_0, _stream_in_field#6)
     await _send_comp
     completion _recv_comp#1 = foreach i32 k#1, f32 x#1 in [0:4:1], receive(_stream_in_field#4) {
-
+      _temp_0_0_0#1[k#1] = 0
     }
     await _recv_comp#1
   }

@@ -685,41 +685,41 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
   }
   compute u16 i#15, u16 j#15 in [129:130:2 , 1:129:2] {
     completion _recv_comp = foreach i32 k, f32 x in [0:80:1], receive(_stream_arg1#2) {
-
+      _temp_0_0_0[k] = 0
     }
     await _recv_comp
     completion _recv_comp#3 = foreach i32 k#8, f32 x#3 in [0:80:1], receive(_stream_arg1#4) {
-
+      i19_0_0_0#1[k#8] = 0
     }
     await _recv_comp#3
   }
   compute u16 i#15, u16 j#15 in [129:130:2 , 2:129:2] {
     completion _recv_comp = foreach i32 k, f32 x in [0:80:1], receive(_stream_arg1#2) {
-
+      _temp_0_0_0[k] = 0
     }
     await _recv_comp
     completion _recv_comp#3 = foreach i32 k#8, f32 x#3 in [0:80:1], receive(_stream_arg1#4) {
-
+      i19_0_0_0#1[k#8] = 0
     }
     await _recv_comp#3
   }
   compute u16 i#17, u16 j#17 in [1:129:2 , 129:130:2] {
     completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:80:1], receive(_stream_arg0#2) {
-
+      i19_0_0_0[k#2] = 0
     }
     await _recv_comp#1
     completion _recv_comp#2 = foreach i32 k#6, f32 x#2 in [0:80:1], receive(_stream_arg0#4) {
-
+      _temp_0_0_0#2[k#6] = 0
     }
     await _recv_comp#2
   }
   compute u16 i#17, u16 j#17 in [2:129:2 , 129:130:2] {
     completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:80:1], receive(_stream_arg0#2) {
-
+      i19_0_0_0[k#2] = 0
     }
     await _recv_comp#1
     completion _recv_comp#2 = foreach i32 k#6, f32 x#2 in [0:80:1], receive(_stream_arg0#4) {
-
+      _temp_0_0_0#2[k#6] = 0
     }
     await _recv_comp#2
   }
