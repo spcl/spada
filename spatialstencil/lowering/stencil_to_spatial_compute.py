@@ -241,9 +241,12 @@ class ParallelComputeVisitor(sast.ScopedNodeVisitor):
         # that is not zero
         dst = op.result
         src = op.value
+        out_t = op.operation_type.destination[0]
         for extent in op.operation_type.destination[0].extent.extents:
             if extent != sast.Offset.zero():
                 dst_buf, dst_dtype = self.placement.get_storage(dst, extent)
+                
+                dx, dy, dz = extent.values
 
                 # Approach: Communicate the remote values and aggregate them into the local value
                 # For this, we need:
@@ -253,8 +256,8 @@ class ParallelComputeVisitor(sast.ScopedNodeVisitor):
 
                 # (3) remote buffer
                 # Determine if its an input type or an intermediate type
-                out_t = op.operation_type.destination[0]
-                xy_range = self.dataflow.get_x_y_range(out_t, 0, 0)
+                dst_t = out_t
+                xy_range = self.dataflow.get_x_y_receive_range(dst_t, dx, dy)
 
                 # (4) stream used to communicate the remote buffer
                 stream = self.dataflow.get_stream(src, dst, extent)
@@ -291,8 +294,7 @@ class ParallelComputeVisitor(sast.ScopedNodeVisitor):
                 send_completion = spa.Completion(send_comp_id)
                 send = spa.SendStatement(src_buf, stream, send_completion)
 
-                dx, dy, dz = extent.values
-                send_x_range, send_y_range = self.dataflow.get_x_y_range(out_t, dx, dy)
+                send_x_range, send_y_range = self.dataflow.get_x_y_send_range(dst_t, dx, dy)
 
                 line_nr = self.versioning.next_version("___line___").version
                 send_stmt = AbstractStatement(send_x_range, send_y_range, (line_nr, send))

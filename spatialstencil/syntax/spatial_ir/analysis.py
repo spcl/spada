@@ -459,7 +459,7 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
     return stream_extents
 
 
-def detect_undefined_array_access(kernel: spir.Kernel) -> list[tuple[spir.Identifier, spir.SpatialNode]]:
+def detect_undefined_array_access(kernel: spir.Kernel) -> list[tuple[spir.Identifier, tuple]]:
     visitor = FieldsDefinedCheck()
     visitor.visit(kernel)
     return visitor.undefined_identifiers
