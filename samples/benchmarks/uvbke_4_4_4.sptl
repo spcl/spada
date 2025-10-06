@@ -683,7 +683,7 @@ kernel @uvbke<>(stream<f32, 4>[4, 5] readonly _arg0, stream<f32, 4>[5, 4] readon
     completion _send_comp#3 = send(arg1_0_0_0, _stream_arg1#4)
     await _send_comp#3
   }
-  compute u16 i#15, u16 j#15 in [5:6:2 , 1:5:2] {
+  compute u16 i#14, u16 j#14 in [5:6:2 , 1:5:2] {
     completion _recv_comp = foreach i32 k, f32 x in [0:4:1], receive(_stream_arg1#2) {
       _temp_0_0_0[k] = x
     }
@@ -693,7 +693,7 @@ kernel @uvbke<>(stream<f32, 4>[4, 5] readonly _arg0, stream<f32, 4>[5, 4] readon
     }
     await _recv_comp#3
   }
-  compute u16 i#15, u16 j#15 in [5:6:2 , 2:5:2] {
+  compute u16 i#14, u16 j#14 in [5:6:2 , 2:5:2] {
     completion _recv_comp = foreach i32 k, f32 x in [0:4:1], receive(_stream_arg1#2) {
       _temp_0_0_0[k] = x
     }
@@ -722,5 +722,17 @@ kernel @uvbke<>(stream<f32, 4>[4, 5] readonly _arg0, stream<f32, 4>[5, 4] readon
       _temp_0_0_0#2[k#6] = x#2
     }
     await _recv_comp#2
+  }
+  compute u16 i#19, u16 j#19 in [0:1:2 , 0:1:2] {
+
+  }
+  compute u16 i#20, u16 j#20 in [5:6:2 , 0:1:2] {
+
+  }
+  compute u16 i#21, u16 j#21 in [0:1:2 , 5:6:2] {
+
+  }
+  compute u16 i#22, u16 j#22 in [5:6:2 , 5:6:2] {
+
   }
 }
