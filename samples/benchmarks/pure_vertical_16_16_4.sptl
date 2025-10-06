@@ -1,6 +1,6 @@
-kernel @pure_vertical<>(stream<f32, 1>[16, 16] readonly _in_field, stream<f32, 4>[16, 16] writeonly __kernel_out_0) {
+kernel @pure_vertical<>(stream<f32, 4>[16, 16] readonly _in_field, stream<f32, 4>[16, 16] writeonly __kernel_out_0) {
   place u16 i, u16 j in [0:16:1 , 0:16:1] {
-    f32[1] in_field_0_0_0
+    f32[4] in_field_0_0_0
     f32[4] in_field_0_0_0#1
     f32[1] in_field_0_0_0#2
     f32[4] in_field_0_0_0#3
@@ -8,14 +8,13 @@ kernel @pure_vertical<>(stream<f32, 1>[16, 16] readonly _in_field, stream<f32, 4
   }
   compute u16 i#1, u16 j#1 in [0:16:1 , 0:16:1] {
     await receive(in_field_0_0_0, _in_field[i#1, j#1])
-    await receive(in_field_0_0_0#1, _in_field[i#1, j#1])
     awaitall
-    for i32 k in [0] {
+    for i32 k in [0:1:1] {
       in_field_0_0_0#2[k] = in_field_0_0_0[k]
       in_field_0_0_0#1[k] = in_field_0_0_0#2[k]
     }
     awaitall
-    for i32 k#1 in [1:4] {
+    for i32 k#1 in [1:4:1] {
       _temp_0_0_0[k#1] = (0.5 * in_field_0_0_0#1[(k#1 - 1)])
       in_field_0_0_0#3[k#1] = (in_field_0_0_0#1[k#1] - _temp_0_0_0[k#1])
       in_field_0_0_0#1[k#1] = in_field_0_0_0#3[k#1]
