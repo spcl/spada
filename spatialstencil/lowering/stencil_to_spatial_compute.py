@@ -58,13 +58,9 @@ class ProgramCompute:
         merged = group_rectangles_by_domain(split)
 
         # Convert to Compute blocks
-        dummy_receive_transformer = DummyReceiveTransformer(self.dataflow)
         compute_blocks = []
         for block in merged:
             compute_blocks.append(self._convert_to_compute_block(block))
-            
-        # Remove dummy foreach receive operation bodies
-        compute_blocks = [dummy_receive_transformer.visit(block) for block in compute_blocks]
 
         return compute_blocks
 

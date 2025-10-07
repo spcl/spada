@@ -71,7 +71,7 @@ kernel @one_d_diff<>(stream<f32, 80>[129, 128] readonly _in_field, stream<f32, 8
       _temp_0_0_0[k] = (2 * in_field_0_0_0[k])
     }
     completion _recv_comp = foreach i32 k#1, f32 x in [0:80:1], receive(_stream_in_field#2) {
-      out_field_0_0_0#1[k#1] = x
+      out_field_0_0_0#1[k#1] = (_temp_0_0_0 - x)
     }
     await _recv_comp
     await map i32 k#2 in [0:80:1] {
