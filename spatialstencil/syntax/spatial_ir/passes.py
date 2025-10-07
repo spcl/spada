@@ -134,6 +134,10 @@ class ConstExprPropagation(spa.NodeTransformer):
             result = iftrue.value.value if cond.value.value else iffalse.value.value
             return spa.ConstantLiteral(result, restype)
 
+        # Collapse ternary expressions where only the condition is boolean
+        if isinstance(cond.value, spa.ConstantLiteral):
+            return iftrue.value if cond.value.value else iffalse.value
+
         node.cond = cond
         node.if_true = iftrue
         node.if_false = iffalse
