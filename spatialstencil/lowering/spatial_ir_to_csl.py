@@ -18,7 +18,10 @@ UniqueDSDDict = dict[str, list[tuple[str, cslstruct.DataStructureDescriptor]]]
 
 def lower_spatial_ir_to_csl(kernel: spir.Kernel,
                             rect_offset: tuple[int, int] = (0, 0),
-                            disable_benchmarking: bool = False) -> list[CodeFile]:
+                            disable_benchmarking: bool = False,
+                            disable_asynchronous: bool = False,
+                            disable_dsd: bool = False,
+                            task_fusion: bool = True) -> list[CodeFile]:
     """
     Lowers a routed Spatial IR kernel into Cerebras CSL code.
 
@@ -26,6 +29,9 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     :param rect_offset: The offset of the output rectangle to use.
     :param disable_benchmarking: If True, disables benchmarking code generation (and memory overhead).
                                  Use in memory-limited scenarios.
+    :param disable_asynchronous: If True, disables asynchronous task code generation.
+    :param disable_dsd: If True, disables DSD operation detection and code generation.
+    :param task_fusion: If True, enables task fusion to reduce number of tasks.
     :return: List of code-file objects that can be written to files. See ``write_code_to_files``.
     """
     # PRECONDITION: Rectangles of dataflow/compute/place do not intersect (comes from Spatial IR)
@@ -80,7 +86,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
         # Create a unique CSL code file based on rectangle offset
         csl_name = f'code_{rect.x_range[0]}_{rect.y_range[0]}.csl'
         rect_code, color_map = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode,
-                                                  stream_rects, channel_to_color, disable_benchmarking)
+                                                  stream_rects, channel_to_color, disable_benchmarking,
+                                                  disable_asynchronous, disable_dsd, task_fusion)
         color_maps.append(color_map)
         csl_codes.append(CodeFile(csl_name, rect_code))
 
@@ -208,11 +215,17 @@ def generate_rectangle(kernel: spir.Kernel,
                        use_memcpy_mode: bool,
                        stream_extents: analysis.StreamExtents,
                        channel_to_color: dict[int, int],
-                       disable_benchmarking: bool = False) -> tuple[str, dict[str, int]]:
+                       disable_benchmarking: bool = False,
+                       disable_asynchronous: bool = False,
+                       disable_dsd: bool = False,
+                       task_fusion: bool = True) -> tuple[str, dict[str, int]]:
     # Code generation carets
     header = StringIO()
     current_code = StringIO()
     footer = StringIO()
+
+    if disable_dsd:
+        dsd_ops.DISABLE_DSD = True
 
     header.write("""
 param memcpy_params: comptime_struct;
@@ -252,8 +265,28 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     #    * (re)cycle task IDs based on ``csl.{DATA,LOCAL,CONTROL}_TASK_IDS``: becomes switch-case on the variable that
     #      maintains the current state
     completion_dag = analysis.to_completion_dag(rect.metadata.compute)
-    tasks = tdag.create_csl_tasks(completion_dag, rect.metadata.compute, dtypes)
-    dsds = _collect_unique_dsds(tasks, rect.metadata, header, dtypes, kernel, use_memcpy_mode)
+    task_creation_behavior = (
+        tdag.TaskCreationBehavior.NO_TASKS if disable_asynchronous else tdag.TaskCreationBehavior.FAIL_ON_OVERRUN)
+    tasks = tdag.create_csl_tasks(completion_dag, rect.metadata.compute, dtypes, task_creation_behavior)
+    try:
+        dsds = _collect_unique_dsds(tasks, rect.metadata, header, dtypes, kernel, use_memcpy_mode)
+    except KeyError as e:
+        if e.args and isinstance(e.args[0], spir.Identifier):
+            raise ValueError(f"Error in {e.args[0].lineinfo}. Undefined identifier \"{e.args[0].as_ir()}\".")
+
+    # Fuse tasks as much as possible to reduce number of resources
+    if task_fusion:
+        orig_len = 0
+        len_for_reporting = len(tasks)
+        while orig_len != len(tasks):  # Run to a fixed point
+            orig_len = len(tasks)
+            tasks = tdag.fuse_tasks(tasks, dsds, dtypes, rect, use_memcpy_mode, rect.metadata.compute)
+
+        if len(tasks) != len_for_reporting:
+            print(f'P{rect.x_range[0]},{rect.y_range[0]}: Reduced from {len_for_reporting} to {len(tasks)} tasks.')
+
+    # Map task IDs to CSL task IDs
+    tdag.renumber_tasks(tasks, task_creation_behavior)
 
     # Generate each task
     max_task_id = csl.LOCAL_TASK_IDS[0] - 1
@@ -303,10 +336,14 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         if task.blocked:
             footer.write(f'    @block({prefix}task_{i}_id);\n')
 
-    # Bind exit task
-    footer.write(f'    @bind_local_task(exit_task, exit_task_id);\n')
-
+    # Create exit task that unblocks command stream
+    exit_task_sequential = all(typ == tdag.InterTaskEdge.SEQUENCE for t in tasks for n, typ in t.outgoing if n == -1)
     exit_task_blocked = any(n == -1 and typ == tdag.InterTaskEdge.UNBLOCK for t in tasks for n, typ in t.outgoing)
+
+    # Bind exit task
+    if not exit_task_sequential:
+        footer.write(f'    @bind_local_task(exit_task, exit_task_id);\n')
+
     if exit_task_blocked:
         footer.write('    @block(exit_task_id);\n')
 
@@ -323,12 +360,13 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         current_code.write(f'    sys_mod.unblock_cmd_stream();\n')
     current_code.write('}\n')
 
-    current_code.write(f'''
-const exit_task_id = @get_local_task_id({max_task_id + 1});
-task exit_task() void {{
-    // On completion, unblock command stream
-    sys_mod.unblock_cmd_stream();
-}}''')
+    if not exit_task_sequential:
+        current_code.write(f'''
+    const exit_task_id = @get_local_task_id({max_task_id + 1});
+    task exit_task() void {{
+        // On completion, unblock command stream
+        sys_mod.unblock_cmd_stream();
+    }}''')
 
     # Write benchmarking code
     if not disable_benchmarking:
@@ -1108,6 +1146,11 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
 
             for line in lines:
                 current_code.write(f'    {line}\n')
+
+        if next_task == -1 and itedge == tdag.InterTaskEdge.SEQUENCE:
+            # Run exit task directly
+            current_code.write(f'    sys_mod.unblock_cmd_stream();\n')
+            continue
 
         if skip_activation:
             continue

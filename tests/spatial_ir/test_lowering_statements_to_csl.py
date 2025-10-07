@@ -469,7 +469,7 @@ def test_async_block_basic_structure():
     kernel = passes.concretize_parameters(kernel, N=8)
     kernel = passes.constexpr_propagation(kernel)
 
-    csl_files = lower_spatial_ir_to_csl(kernel)
+    csl_files = lower_spatial_ir_to_csl(kernel, task_fusion=False)
 
     # Check that CSL files were generated
     assert len(csl_files) > 0
@@ -532,7 +532,7 @@ def test_async_block_with_nested_operations():
     kernel = passes.concretize_parameters(kernel, N=8)
     kernel = passes.constexpr_propagation(kernel)
 
-    csl_files = lower_spatial_ir_to_csl(kernel)
+    csl_files = lower_spatial_ir_to_csl(kernel, task_fusion=False)
 
     # Check that CSL files were generated
     assert len(csl_files) > 0
@@ -605,7 +605,7 @@ def test_async_block_chain():
     kernel = passes.concretize_parameters(kernel, N=8)
     kernel = passes.constexpr_propagation(kernel)
 
-    csl_files = lower_spatial_ir_to_csl(kernel)
+    csl_files = lower_spatial_ir_to_csl(kernel, task_fusion=False)
 
     # Check that CSL files were generated
     assert len(csl_files) > 0
