@@ -169,6 +169,8 @@ def emit_expression(expr: spir.Expression, dsds: UniqueDSDDict, dtypes: dict[spi
     elif isinstance(val, spir.Identifier):
         return name_to_csl(val)
     elif isinstance(val, spir.ConstantLiteral):
+        if val.dtype in (spir.ScalarType.f16, spir.ScalarType.f32, spir.ScalarType.f64, spir.ScalarType.UNKNOWN):
+            return str(float(val.value))
         return str(val.value)
     elif isinstance(val, spir.ArraySlice):
         return f"{name_to_csl(val.array)}[{', '.join(map(lambda x: emit_expression(x, dsds, dtypes), val.indices))}]"
