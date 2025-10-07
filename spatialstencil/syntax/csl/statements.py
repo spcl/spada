@@ -187,6 +187,8 @@ def emit_expression(expr: spir.Expression,
             if other is not None:
                 other_dtype = dtypes.get(other.value, None) if isinstance(other.value, spir.Identifier) else None
                 if other_dtype is not None:
+                    while not isinstance(other_dtype, spir.ScalarType):
+                        other_dtype = other_dtype.element_type
                     val = spir.ConstantLiteral(value=val.value, dtype=other_dtype)
         if val.dtype in (spir.ScalarType.f16, spir.ScalarType.f32, spir.ScalarType.f64):
             return str(float(val.value))
