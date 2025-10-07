@@ -74,6 +74,10 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     # Collect scalar argument types
     scalar_argument_types = []
     scalar_arguments = []
+    for argument in kernel.arguments:
+        if isinstance(argument.dtype, spir.ScalarType):
+            scalar_argument_types.append(dtype_as_csl(argument.dtype))
+            scalar_arguments.append(f'__arg_{name_to_csl(argument.identifier)}: {dtype_as_csl(argument.dtype)}')
 
     # For each rectangle, collect metadata and generate code
     csl_codes: list[CodeFile] = []
@@ -353,6 +357,13 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     # Write entry point code
     current_code.write(f'''\nfn {kernel.name}({", ".join(scalar_arguments)}) void {{
 ''')
+
+    # Copy scalar arguments to local variables
+    for argument in scalar_arguments:
+        arg_name = argument.split(':')[0].strip().removeprefix('__arg_')
+        current_code.write(f'    {arg_name} = __arg_{arg_name};\n')
+
+    # Activate all source tasks
     non_source_tasks = set(n for i, t in enumerate(tasks) for n, _ in t.outgoing if n != i)
     source_tasks = [t for i, t in enumerate(tasks) if i not in non_source_tasks]
     for i, task in enumerate(source_tasks):
@@ -562,6 +573,8 @@ def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, foote
     # Add arguments to header and footer
     if use_memcpy_mode:
         for argument in kernel.arguments:
+            if not isinstance(argument.dtype, spir.ArrayType):  # Skip scalar arguments
+                continue
             name = name_to_csl(argument.identifier)
             if isinstance(argument.dtype, spir.ArrayType) and isinstance(argument.dtype.base_type, spir.StreamType):
                 assert argument.dtype.base_type.buffer_size is not None, f'Argument {argument.identifier.name} has no buffer size defined'
@@ -579,6 +592,13 @@ def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, foote
     else:
         # TODO(later): Some scaffolding for streaming indices within rectangle code
         pass
+
+    # Add scalar arguments to header
+    for argument in kernel.arguments:
+        if not isinstance(argument.dtype, spir.ScalarType):  # Skip non-scalar arguments
+            continue
+        name = name_to_csl(argument.identifier)
+        header.write(f'var {name}: {dtype_as_csl(argument.dtype)};\n')
 
     header.write('\n')
 
@@ -833,7 +853,8 @@ def _collect_unique_dsds(
             if extents is not None:  # Use buffer size
                 extents = extents if isinstance(extents, int) else extents.eval()
             else:  # Infer from send count
-                if isinstance(substmt.local_array, spir.ArraySlice) or isinstance(dtypes[substmt.local_array], spir.ScalarType):
+                if isinstance(substmt.local_array, spir.ArraySlice) or isinstance(dtypes[substmt.local_array],
+                                                                                  spir.ScalarType):
                     # Scalar send
                     extents = 1
                 else:

@@ -1,0 +1,14 @@
+/**
+ * Testing scalar arguments
+ **/
+kernel @mult_scalar<N>(stream<f32, 1>[N, N] readonly a, f32 coeff, 
+                       stream<f32, 1>[N, N] writeonly out) {
+    place u16 i, u16 j in [0:N, 0:N] {
+        f32 local_a;
+    }
+    compute u16 i, u16 j in [0:N, 0:N] {
+        await receive(local_a, a[i, j]);
+        local_a = local_a * coeff;
+        await send(local_a, out[i, j]);
+    }
+}

@@ -174,6 +174,10 @@ def get_kernel_stream_arguments(
         if arg.compiletime:
             continue
 
+        if isinstance(arg.dtype, spir.ScalarType):
+            input_streams[arg.identifier.name] = {"dtype": arg.dtype.as_ir(), "shape": [], "buffer_size": None}
+            continue
+
         shape = []
         if isinstance(arg.dtype, spir.ArrayType):
             for dim in arg.dtype.shape:

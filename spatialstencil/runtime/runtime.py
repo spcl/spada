@@ -252,6 +252,13 @@ class Program:
             if input_name not in kwargs:
                 raise ValueError(f"Missing required input: {input_name}")
 
+        # Separate scalar and array arguments
+        scalar_kwargs = {k: v for k, v in kwargs.items() if k in self.inputs and len(self.inputs[k].shape) == 0}
+        kwargs = {k: v for k, v in kwargs.items() if k not in scalar_kwargs}
+        if scalar_kwargs and not self.metadata.argument_order:
+            raise ValueError("Scalar arguments provided but no argument order specified.")
+        scalar_args = [scalar_kwargs[name] for name in self.metadata.argument_order if name in scalar_kwargs]
+
         try:
             print("Loading program...", flush=True, end='')
             self.runtime.load()
@@ -287,7 +294,7 @@ class Program:
                 print("Launching kernel...", flush=True, end='')
                 if self.benchmark:
                     self.runtime.launch("f_tic", nonblock=False)
-                self.runtime.launch(self.metadata.kernel_name, nonblock=False)
+                self.runtime.launch(self.metadata.kernel_name, *scalar_args, nonblock=False)
                 if self.benchmark:
                     self.runtime.launch("f_toc", nonblock=False)
                 print("kernel launched.", flush=True)
@@ -352,12 +359,22 @@ if __name__ == "__main__":
             data = np.random.rand(*shape).astype(dtype)
             inputs.append(data)
     else:
-        for input_file in args.input_files:
+        for i, input_file in enumerate(args.input_files):
             data = np.load(input_file)
-            if len(data.shape) not in (2, 3):
-                raise ValueError(f"Input data from {input_file} must be 2D or 3D. Got shape {data.shape}.")
-            if len(data.shape) == 2:
-                data = data.reshape((data.shape[0], data.shape[1], 1))  # Ensure at least 3 dimensions
+            if tuple(data.shape) == (1,) or data.ndim == 0:  # Scalar input
+                argname = program.metadata.argument_order[i]
+                if argname not in program.metadata.inputs:
+                    raise ValueError(
+                        f"Scalar file argument {input_file} given for {argname} not found in program inputs.")
+                arg = program.metadata.inputs[argname].shape
+                if len(arg) > 0:
+                    raise ValueError(f"Scalar file argument {input_file} given for {argname} which is not a scalar.")
+                data = data.item()  # Convert single-element arrays to scalar
+            else:  # Array input
+                if len(data.shape) not in (2, 3):
+                    raise ValueError(f"Input data from {input_file} must be 2D or 3D. Got shape {data.shape}.")
+                if len(data.shape) == 2:
+                    data = data.reshape((data.shape[0], data.shape[1], 1))  # Ensure at least 3 dimensions
             inputs.append(data)
 
     # Run the program with loaded inputs

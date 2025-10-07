@@ -112,15 +112,21 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
     stream_extents = analysis.detect_stream_argument_extents(rectangles, kernel)
     for argname, arg in itertools.chain(input_args.items(), output_args.items()):
-        arg_id = spa.Identifier(argname, 0)
-        if arg_id not in stream_extents.extents:
-            raise ValueError(f"Argument '{argname}' does not have a detected extent. "
-                             "Please ensure the argument is properly defined in the kernel.")
-        arg["rect_offset_used"] = [
-            stream_extents.extents[arg_id][0].x_range[0], stream_extents.extents[arg_id][0].y_range[0]
-        ]
-        arg["column_major"] = stream_extents.is_transposed[arg_id]
-        arg["rect_offset"] = list(next(iter(stream_extents.offsets[arg_id])))
+        if len(arg["shape"]) > 0: # Ignore scalar arguments
+            arg_id = spa.Identifier(argname, 0)
+            if arg_id not in stream_extents.extents:
+                raise ValueError(f"Argument '{argname}' does not have a detected extent. "
+                                "Please ensure the argument is properly defined in the kernel.")
+            arg["rect_offset_used"] = [
+                stream_extents.extents[arg_id][0].x_range[0], stream_extents.extents[arg_id][0].y_range[0]
+            ]
+            arg["column_major"] = stream_extents.is_transposed[arg_id]
+            arg["rect_offset"] = list(next(iter(stream_extents.offsets[arg_id])))
+        else:
+            arg["rect_offset_used"] = [0, 0]
+            arg["column_major"] = False
+            arg["rect_offset"] = [0, 0]
+
     metadata = {
         "kernel_name": kernel.name,
         "inputs": input_args,
