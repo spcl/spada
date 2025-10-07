@@ -382,7 +382,7 @@ def _get_base_dtype(dtypes: dict[str, spir.IRType],
         dtype = dtype.element_type
     return dtype
 
-
+DISABLE_DSD = False
 def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
                stmt: spir.ForeachStatement | spir.MapStatement | spir.AssignmentStatement) -> Optional[str]:
     """
@@ -391,6 +391,8 @@ def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
     This is used in lowering to CSL to determine whether a DSD operation can be used directly vs. creating
     a data task.
     """
+    if DISABLE_DSD:
+        return None
     if isinstance(stmt, spir.AssignmentStatement):
         inner_stmt = stmt
     else:
