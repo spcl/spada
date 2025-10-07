@@ -338,6 +338,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
     # Create exit task that unblocks command stream
     exit_task_sequential = all(typ == tdag.InterTaskEdge.SEQUENCE for t in tasks for n, typ in t.outgoing if n == -1)
+    exit_task_sequential &= not any(t.task_type == 'data' for t in tasks for n, _ in t.outgoing if n == -1)  # No data tasks
     exit_task_blocked = any(n == -1 and typ == tdag.InterTaskEdge.UNBLOCK for t in tasks for n, typ in t.outgoing)
 
     # Bind exit task
