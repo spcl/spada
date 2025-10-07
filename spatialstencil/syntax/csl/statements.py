@@ -150,7 +150,8 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice, destination: spir.Ident
     return dsd_ops.CopyDSDOp()
 
 
-def emit_expression(expr: spir.Expression, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType]) -> str:
+def emit_expression(expr: spir.Expression, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType],
+                    other: Optional[spir.Expression] = None) -> str:
     """
     Generates a CSL expression from a Spatial IR expression.
 
@@ -159,7 +160,7 @@ def emit_expression(expr: spir.Expression, dsds: UniqueDSDDict, dtypes: dict[spi
     """
     val = expr.value
     if isinstance(val, spir.BinaryOperator):
-        return f"({emit_expression(val.left, dsds, dtypes)} {val.op} {emit_expression(val.right, dsds, dtypes)})"
+        return f"({emit_expression(val.left, dsds, dtypes, other=val.right)} {val.op} {emit_expression(val.right, dsds, dtypes, other=val.left)})"
     elif isinstance(val, spir.UnaryOperator):
         return f"({val.op}{emit_expression(val.value, dsds, dtypes)})"
     elif isinstance(val, spir.TernaryOperator):
@@ -169,7 +170,13 @@ def emit_expression(expr: spir.Expression, dsds: UniqueDSDDict, dtypes: dict[spi
     elif isinstance(val, spir.Identifier):
         return name_to_csl(val)
     elif isinstance(val, spir.ConstantLiteral):
-        if val.dtype in (spir.ScalarType.f16, spir.ScalarType.f32, spir.ScalarType.f64, spir.ScalarType.UNKNOWN):
+        if val.dtype == spir.ScalarType.UNKNOWN:  # Type is not given, need to perform light type inference
+            # TODO(later): Move to separate constant type inference pass
+            if other is not None:
+                other_dtype = dtypes.get(other.value, None) if isinstance(other.value, spir.Identifier) else None
+                if other_dtype is not None:
+                    val = spir.ConstantLiteral(value=val.value, dtype=other_dtype)
+        if val.dtype in (spir.ScalarType.f16, spir.ScalarType.f32, spir.ScalarType.f64):
             return str(float(val.value))
         return str(val.value)
     elif isinstance(val, spir.ArraySlice):
