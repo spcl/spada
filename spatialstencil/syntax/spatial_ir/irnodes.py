@@ -671,7 +671,9 @@ class SendStatement(Statement):
 
     def validate(self) -> None:
         assert isinstance(self.local_array, (Identifier, ArraySlice))
-        assert isinstance(self.stream_name, (Identifier, ArraySlice))
+        # TODO(later): Defer validation of stream_name to after constant propagation.
+        #              In the meantime, allow ternary operators here.
+        assert isinstance(self.stream_name, (Identifier, ArraySlice, TernaryOperator))
         if self.completion_name:
             assert isinstance(self.completion_name, Completion)
 

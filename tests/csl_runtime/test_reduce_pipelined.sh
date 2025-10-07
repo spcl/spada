@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Compile the spatial stencil program
 FOLDER_NAME="reduce_sptl"
-sptlc "$SCRIPT_DIR/../../samples/benchmarks/reduce.sptl" "$FOLDER_NAME" -p N=15 -p K=128
+sptlc "$SCRIPT_DIR/../../samples/benchmarks/reduce_pipelined.sptl" "$FOLDER_NAME" -p N=15 -p K=128
 
 python <<EOF
 import numpy as np

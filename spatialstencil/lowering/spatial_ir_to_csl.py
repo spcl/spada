@@ -273,6 +273,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     except KeyError as e:
         if e.args and isinstance(e.args[0], spir.Identifier):
             raise ValueError(f"Error in {e.args[0].lineinfo}. Undefined identifier \"{e.args[0].as_ir()}\".")
+        raise
 
     # Fuse tasks as much as possible to reduce number of resources
     if task_fusion:
@@ -338,7 +339,8 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
     # Create exit task that unblocks command stream
     exit_task_sequential = all(typ == tdag.InterTaskEdge.SEQUENCE for t in tasks for n, typ in t.outgoing if n == -1)
-    exit_task_sequential &= not any(t.task_type == 'data' for t in tasks for n, _ in t.outgoing if n == -1)  # No data tasks
+    exit_task_sequential &= not any(
+        t.task_type == 'data' for t in tasks for n, _ in t.outgoing if n == -1)  # No data tasks
     exit_task_blocked = any(n == -1 and typ == tdag.InterTaskEdge.UNBLOCK for t in tasks for n, typ in t.outgoing)
 
     # Bind exit task
@@ -820,7 +822,35 @@ def _collect_unique_dsds(
                         dsds[stream_name.as_ir()].append((dsd_name, dsd))
                         input_queue_id_ctr += 1
 
+        def _visit_nested_send(substmt: spir.SendStatement):
+            if substmt.stream_name.as_ir() not in stream_candidates:
+                return
+            # Stream DSD (i.e., await send in a foreach)
+            stream_name = substmt.stream_name
+            dsd_type = cslstruct.DSDType.fabout
+            dsd_name = f'{name_to_csl(stream_name)}_out_dsd'
+            extents = stream_candidates[stream_name.as_ir()][1]
+            if extents is not None:  # Use buffer size
+                extents = extents if isinstance(extents, int) else extents.eval()
+            else:  # Infer from send count
+                if isinstance(substmt.local_array, spir.ArraySlice) or isinstance(dtypes[substmt.local_array], spir.ScalarType):
+                    # Scalar send
+                    extents = 1
+                else:
+                    extents = functools.reduce(
+                        lambda a, b: a * b,
+                        [s.eval() if not isinstance(s, int) else s for s in dtypes[substmt.local_array].shape], 1)
+            fabric_color = f'{name_to_csl(stream_name)}_color'
+            nonlocal output_queue_id_ctr
+            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
+                                      csl.OUTPUT_QUEUE_IDS[output_queue_id_ctr % len(csl.OUTPUT_QUEUE_IDS)])
+            output_queue_id_ctr += 1
+            dsds[stream_name.as_ir()].append((dsd_name, dsd))
+
         def _visit_dsd(substmt, in_foreach_or_map):
+            if isinstance(substmt, spir.SendStatement) and in_foreach_or_map:
+                _visit_nested_send(substmt)
+                return
             if (isinstance(substmt, spir.Identifier) and substmt.as_ir() in array_candidates and
                     substmt.as_ir() not in dsds):
                 dsds[substmt.as_ir()].append((f"{name_to_csl(substmt)}_dsd", _dsd_from_array(array_candidates,
@@ -889,6 +919,10 @@ class DSDVisitor(spir.NodeVisitor):
         self.in_map = False
 
     def visit_Identifier(self, node: spir.Identifier):
+        self.callback(node, self.in_foreach or self.in_map)
+        return
+
+    def visit_SendStatement(self, node: spir.SendStatement):
         self.callback(node, self.in_foreach or self.in_map)
         return
 
@@ -1081,7 +1115,7 @@ def _generate_data_task(
 
     # Write op contents
     for substmt in stmt.body:
-        code = cslstmt.generate_csl_statement(substmt, dsds, dtypes, None, header)
+        code = cslstmt.generate_csl_statement(substmt, dsds, dtypes, None, header, in_foreach_or_map=True)
 
         for line in code.splitlines():
             current_code.write(f'    {line}\n')

@@ -7,8 +7,12 @@ from spatialstencil.syntax.spatial_ir import irnodes as spir
 UniqueDSDDict = dict[str, list[tuple[str, DataStructureDescriptor]]]
 
 
-def generate_csl_statement(statement: spir.Statement, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType],
-                           async_target: Optional[dsd_ops.AsyncTarget], header_code: StringIO) -> str:
+def generate_csl_statement(statement: spir.Statement,
+                           dsds: UniqueDSDDict,
+                           dtypes: dict[spir.Identifier, spir.IRType],
+                           async_target: Optional[dsd_ops.AsyncTarget],
+                           header_code: StringIO,
+                           in_foreach_or_map: bool = False) -> str:
     """
     Generates a CSL statement from a Spatial IR statement.
 
@@ -17,13 +21,14 @@ def generate_csl_statement(statement: spir.Statement, dsds: UniqueDSDDict, dtype
     :param dtypes: A dictionary of data types.
     :param async_target: The asynchronous target for the statement, or None if synchronous.
     :param header_code: The header code to include in the generated statement.
+    :param in_foreach_or_map: Whether the statement is inside a foreach or map block.
     :return: The generated CSL statement.
     """
     op: str | dsd_ops.DSDOp | None = None
     if isinstance(statement, spir.ReceiveStatement):
-        op = emit_copy(statement.stream_name, statement.local_array, dsds, dtypes)
+        op = emit_copy(statement.stream_name, statement.local_array, dsds, dtypes, in_foreach_or_map)
     elif isinstance(statement, spir.SendStatement):
-        op = emit_copy(statement.local_array, statement.stream_name, dsds, dtypes)
+        op = emit_copy(statement.local_array, statement.stream_name, dsds, dtypes, in_foreach_or_map)
     elif isinstance(statement, spir.ForeachStatement):
         op = _try_emit_dsd_op(statement, dsds, dtypes)
         if op is None:
@@ -69,14 +74,19 @@ def _try_emit_dsd_op(statement: spir.MapStatement | spir.ForeachStatement, dsds:
     return dsd_op
 
 
-def emit_copy(source: spir.Identifier | spir.ArraySlice, destination: spir.Identifier | spir.ArraySlice,
-              dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType]) -> str | dsd_ops.CopyDSDOp:
+def emit_copy(source: spir.Identifier | spir.ArraySlice,
+              destination: spir.Identifier | spir.ArraySlice,
+              dsds: UniqueDSDDict,
+              dtypes: dict[spir.Identifier, spir.IRType],
+              in_foreach_or_map: bool = False) -> str | dsd_ops.CopyDSDOp:
     """
     Generates a CSL copy statement from source to destination.
 
     :param source: The source of the copy operation.
     :param destination: The destination of the copy operation.
     :param dsds: A dictionary of DSDs for the source and destination.
+    :param dtypes: A dictionary of data types for the source and destination.
+    :param in_foreach_or_map: Whether the copy is inside a foreach or map block.
     :return: The generated CSL copy statement.
     """
     src_identifier: spir.Identifier
@@ -147,10 +157,12 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice, destination: spir.Ident
             f"Source and destination types do not match: {dtypes[src_identifier]} != {dtypes[dst_identifier]}")
 
     # If both source and destination are DSDs, use the copy operation
-    return dsd_ops.CopyDSDOp()
+    return dsd_ops.CopyDSDOp(scalar_input=in_foreach_or_map)
 
 
-def emit_expression(expr: spir.Expression, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType],
+def emit_expression(expr: spir.Expression,
+                    dsds: UniqueDSDDict,
+                    dtypes: dict[spir.Identifier, spir.IRType],
                     other: Optional[spir.Expression] = None) -> str:
     """
     Generates a CSL expression from a Spatial IR expression.

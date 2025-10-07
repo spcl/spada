@@ -263,6 +263,9 @@ class FMADSDOp(DSDOp):
 
 
 class CopyDSDOp(DSDOp):
+    def __init__(self, scalar_input: bool = False):
+        super().__init__()
+        self.scalar_input = scalar_input
 
     def _as_csl(self, statement: spir.AssignmentStatement | spir.SendStatement,
                 dtypes: dict[spir.Identifier, spir.IRType], dsds: UniqueDSDDict) -> str:
@@ -302,6 +305,13 @@ class CopyDSDOp(DSDOp):
                 op = '@fs2xp16'
             else:
                 raise TypeError(f"Unsupported types for cast operation: {src_dtype}, {dtype}")
+
+        if self.scalar_input:
+            from spatialstencil.syntax.csl.statements import emit_expression
+            assert isinstance(statement.local_array, spir.ArraySlice)
+            expr = emit_expression(spir.Expression(statement.local_array), dsds, dtypes)
+            return f'{op}({_dsd(dsds, dest, output=True)}, {expr});'
+
         return f'{op}({_dsd(dsds, dest, output=True)}, {_dsd(dsds, src)});'
 
     def used_dsd_objects(self, statement: spir.AssignmentStatement,
@@ -313,6 +323,9 @@ class CopyDSDOp(DSDOp):
             assert isinstance(statement.source.value, (spir.ArraySlice, spir.Identifier, spir.ConstantLiteral))
             src = _ident_or_const(statement.source.value)
             dest = _ident(statement.destination)
+
+        if self.scalar_input:
+            return [_dsd_object(dsds, dest, output=True)]
 
         return [_dsd_object(dsds, dest, output=True), _dsd_object(dsds, src)]
 
