@@ -357,6 +357,8 @@ if __name__ == "__main__":
             dtype = dtype_to_numpy.get(info.dtype, np.float32)
             print(f"Randomizing input {name} with shape {shape} and dtype {dtype}")
             data = np.random.rand(*shape).astype(dtype)
+            if len(info.shape) == 0:  # Scalar input
+                data = data.item()  # Convert single-element arrays to scalar
             inputs.append(data)
     else:
         for i, input_file in enumerate(args.input_files):
