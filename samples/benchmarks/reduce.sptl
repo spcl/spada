@@ -1,11 +1,11 @@
 /**
  * Simple chain reduction of a scalar value
  **/
- kernel @reduce<N>(stream<f32, 2>[N,1] readonly inp, stream<f32, 2>[1,1] writeonly out) {
+ kernel @reduce<N, K>(stream<f32, K>[N,1] readonly inp, stream<f32, K>[1,1] writeonly out) {
     // Start
     place u16 i, u16 j in [N-1:N, 0:1] {
-        f32[2] local
-        f32[2] snd_val
+        f32[K] local
+        f32[K] snd_val
     }
     dataflow u16 i, u16 j in [N-1:N, 0:1] {
         stream<f32> westwards = relative_stream(-1, 0) {
@@ -21,8 +21,8 @@
 
     // Middle
     place u16 i, u16 j in [1:N-1:2, 0:1] {
-        f32[2] local
-        f32[2] rcv_val
+        f32[K] local
+        f32[K] rcv_val
     }
     dataflow u16 i, u16 j in [1:N-1:2, 0:1] {
         stream<f32> westwards = relative_stream(-1, 0) {
@@ -41,8 +41,8 @@
         await send(rcv_val, westwards)
     }
     place u16 i, u16 j in [2:N-1:2, 0:1] {
-        f32[2] local
-        f32[2] rcv_val
+        f32[K] local
+        f32[K] rcv_val
     }
     dataflow u16 i, u16 j in [2:N-1:2, 0:1] {
         stream<f32> westwards = relative_stream(-1, 0) {
@@ -63,8 +63,8 @@
 
     // End
     place u16 i, u16 j in [0:1, 0:1] {
-        f32[2] local
-        f32[2] rcv_val
+        f32[K] local
+        f32[K] rcv_val
     }
     dataflow u16 i, u16 j in [0:1, 0:1] {
         stream<f32> westwards = relative_stream(-1, 0) {

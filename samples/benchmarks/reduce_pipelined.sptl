@@ -1,0 +1,105 @@
+/**
+ * Pipelined reduction benchmark
+ **/
+ kernel @chain_reduce<N, K>(stream<f32, K>[N,1] readonly a_in, stream<f32, K>[1,1] writeonly out) {
+    place i16 i, i16 j in [N-1, 0] {  // East corner
+        f32[K] a
+    }
+    place i16 i, i16 j in [1:N-1:2, 0] {  // Odd PEs
+        f32[K] a
+    }
+    place i16 i, i16 j in [2:N-1:2, 0] {  // Even PEs
+        f32[K] a
+    }
+    place i16 i, i16 j in [0, 0] {  // West corner (root)
+        f32[K] a
+    }
+
+    // Phase 1: Read argument stream
+    phase {
+        compute i16 i, i16 j in [N-1, 0] {  // East corner
+            await receive(a, a_in[i, j])
+        }
+        compute i16 i, i16 j in [1:N-1:2, 0] {  // Odd PEs
+            await receive(a, a_in[i, j])
+        }
+        compute i16 i, i16 j in [2:N-1:2, 0] {  // Even PEs
+            await receive(a, a_in[i, j])
+        }
+        compute i16 i, i16 j in [0, 0] {  // West corner (root)
+            await receive(a, a_in[i, j])
+        }
+    }
+
+    // Phase 2: Perform reduction
+    phase {
+        // Declare dataflow
+        dataflow i16 i, i16 j in [N-1, 0] {  // East corner
+            stream<f32> red = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 1
+            }
+        }
+        dataflow i16 i, i16 j in [1:N-1:2, 0] {  // Odd PEs
+            stream<f32> red = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 1
+            }
+        }
+        dataflow i16 i, i16 j in [2:N-1:2, 0] {  // Even PEs
+            stream<f32> red = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 1
+            }
+        }
+        dataflow i16 i, i16 j in [0, 0] {  // West corner (root)
+            stream<f32> red = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 1
+            }
+        }
+
+
+        // East corner
+        compute i16 i, i16 j in [N-1, 0] {
+            await send(a, red if (N-1) % 2 == 0 else blue)
+        }
+        // Odd PEs
+        compute i16 i, i16 j in [1:N-1:2, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(red) {
+                a[k] = a[k] + x
+                await send(a[k], blue)
+            }
+        }
+        // Even PEs
+        compute i16 i, i16 j in [2:N-1:2, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+                await send(a[k], red)
+            }
+        }
+        // West corner (root)
+        compute i16 i, i16 j in [0, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+               a[k] = a[k] + x
+            }
+            await send(a, out[i, j])
+        }
+    }
+}
