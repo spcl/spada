@@ -20,7 +20,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
                             rect_offset: tuple[int, int] = (0, 0),
                             disable_benchmarking: bool = False,
                             disable_asynchronous: bool = False,
-                            disable_dsd: bool = False) -> list[CodeFile]:
+                            disable_dsd: bool = False,
+                            task_fusion: bool = True) -> list[CodeFile]:
     """
     Lowers a routed Spatial IR kernel into Cerebras CSL code.
 
@@ -30,6 +31,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
                                  Use in memory-limited scenarios.
     :param disable_asynchronous: If True, disables asynchronous task code generation.
     :param disable_dsd: If True, disables DSD operation detection and code generation.
+    :param task_fusion: If True, enables task fusion to reduce number of tasks.
     :return: List of code-file objects that can be written to files. See ``write_code_to_files``.
     """
     # PRECONDITION: Rectangles of dataflow/compute/place do not intersect (comes from Spatial IR)
@@ -85,7 +87,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
         csl_name = f'code_{rect.x_range[0]}_{rect.y_range[0]}.csl'
         rect_code, color_map = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode,
                                                   stream_rects, channel_to_color, disable_benchmarking,
-                                                  disable_asynchronous, disable_dsd)
+                                                  disable_asynchronous, disable_dsd, task_fusion)
         color_maps.append(color_map)
         csl_codes.append(CodeFile(csl_name, rect_code))
 
@@ -215,7 +217,8 @@ def generate_rectangle(kernel: spir.Kernel,
                        channel_to_color: dict[int, int],
                        disable_benchmarking: bool = False,
                        disable_asynchronous: bool = False,
-                       disable_dsd: bool = False) -> tuple[str, dict[str, int]]:
+                       disable_dsd: bool = False,
+                       task_fusion: bool = True) -> tuple[str, dict[str, int]]:
     # Code generation carets
     header = StringIO()
     current_code = StringIO()
@@ -272,14 +275,15 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
             raise ValueError(f"Error in {e.args[0].lineinfo}. Undefined identifier \"{e.args[0].as_ir()}\".")
 
     # Fuse tasks as much as possible to reduce number of resources
-    orig_len = 0
-    len_for_reporting = len(tasks)
-    while orig_len != len(tasks):  # Run to a fixed point
-        orig_len = len(tasks)
-        tasks = tdag.fuse_tasks(tasks, dsds, dtypes, rect, use_memcpy_mode, rect.metadata.compute)
+    if task_fusion:
+        orig_len = 0
+        len_for_reporting = len(tasks)
+        while orig_len != len(tasks):  # Run to a fixed point
+            orig_len = len(tasks)
+            tasks = tdag.fuse_tasks(tasks, dsds, dtypes, rect, use_memcpy_mode, rect.metadata.compute)
 
-    if len(tasks) != len_for_reporting:
-        print(f'P{rect.x_range[0]},{rect.y_range[0]}: Reduced from {len_for_reporting} to {len(tasks)} tasks.')
+        if len(tasks) != len_for_reporting:
+            print(f'P{rect.x_range[0]},{rect.y_range[0]}: Reduced from {len_for_reporting} to {len(tasks)} tasks.')
 
     # Map task IDs to CSL task IDs
     tdag.renumber_tasks(tasks, task_creation_behavior)
