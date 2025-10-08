@@ -47,3 +47,9 @@ _OUTPUT_QUEUE_IDS = {
     'wse3': list(range(0, 8)),  # All queues are equivalent
 }
 OUTPUT_QUEUE_IDS = _OUTPUT_QUEUE_IDS[ARCH]
+
+_HARDWARE_FABRIC_DIMS = {
+    'wse2': (757, 996),
+    'wse3': (762, 1172),
+}
+HARDWARE_FABRIC_DIMS = _HARDWARE_FABRIC_DIMS[ARCH]

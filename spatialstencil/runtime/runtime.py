@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Union, TYPE_CHECKING
 import numpy as np
+import time
 
 if TYPE_CHECKING:
     from spatialstencil.runtime import cerebras_runtime_stub as crt
@@ -92,7 +93,7 @@ class ProgramMetadata:
 ########################################################
 
 
-def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.SdkRuntime, metadata: ProgramMetadata):
+def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.SdkRuntime, metadata: ProgramMetadata, benchmark: bool):
     """
     Copy data to the device, flattening it if necessary.
     This function assumes that the runtime has a method `memcpy_h2d` for copying.
@@ -118,7 +119,7 @@ def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.Sdk
         streaming=not metadata.memcpy_mode,  # Use streaming if not in memcpy mode
         data_type=crt.MemcpyDataType.MEMCPY_32BIT if data.dtype == np.float32 else crt.MemcpyDataType.MEMCPY_16BIT,
         order=crt.MemcpyOrder.ROW_MAJOR if not metadata.inputs[name].column_major else crt.MemcpyOrder.COL_MAJOR,
-        nonblock=True,  # Non-blocking copy
+        nonblock=not benchmark,  # Non-blocking copy if not benchmarking
     )
 
 
@@ -225,6 +226,7 @@ class Program:
 
         # Initialize SDK runtime
         cmaddr = os.environ.get('CM_ADDR', None)
+        self.simulator = cmaddr is None
         self.runtime = crt.SdkRuntime(str(self.out_folder), suppress_simfab_trace=True, cmaddr=cmaddr)
 
         # Store input/output information from metadata
@@ -287,10 +289,12 @@ class Program:
                     raise ValueError(f"Input {name} has wrong shape. Expected {expected_shape}, got {data.shape}")
 
                 # Use flatten_copy to copy data to device
-                flatten_copy(name, data, expected_shape, self.runtime, self.metadata)
+                flatten_copy(name, data, expected_shape, self.runtime, self.metadata, self.benchmark)
 
             # Run the program
             if self.metadata.memcpy_mode:
+                if self.benchmark and not self.simulator:
+                    time.sleep(5.0)
                 print("Launching kernel...", flush=True, end='')
                 if self.benchmark:
                     self.runtime.launch("f_tic", nonblock=False)

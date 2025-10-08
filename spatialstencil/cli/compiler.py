@@ -148,8 +148,13 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         print("Generated output files without compiling.")
         return
 
+    if 'CM_ADDR' in os.environ:
+        fabric_width, fabric_height = csl.HARDWARE_FABRIC_DIMS
+    else:
+        fabric_width, fabric_height = xend, yend
+
     cslc_command = [
-        'cslc', f'--arch={csl.ARCH}', 'layout.csl', f'--fabric-dims={xend},{yend}',
+        'cslc', f'--arch={csl.ARCH}', 'layout.csl', f'--fabric-dims={fabric_width},{fabric_height}',
         f'--fabric-offsets={offset_x + xbegin},{offset_y + ybegin}', '--memcpy', f'--channels={memcpy_channels}'
     ]
     print("Compiling with command:", ' '.join(cslc_command))

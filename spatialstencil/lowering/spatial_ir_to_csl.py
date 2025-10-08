@@ -175,7 +175,7 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
         layout_code.write(f'''
     for (@range(i16, {xb}, {xe}, {xs})) |pe_x| {{
         for (@range(i16, {yb}, {ye}, {ys})) |pe_y| {{
-            @set_tile_code(pe_x, pe_y, "{code_filename}", .{{ .memcpy_params = memcpy.get_params(pe_x), .pe_x = pe_x, .pe_y = pe_y }});
+            @set_tile_code(pe_x, pe_y, "{code_filename}", .{{ .memcpy_params = memcpy.get_params(pe_x) }});
 {routes_per_rectangle[(xb, yb)]}
         }}
     }}\n''')
@@ -233,8 +233,6 @@ def generate_rectangle(kernel: spir.Kernel,
 
     header.write("""
 param memcpy_params: comptime_struct;
-param pe_x: i16;
-param pe_y: i16;
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 """)
 
