@@ -18,6 +18,7 @@ TOTAL=0
 PASSED=0
 FAILED=0
 FAILED_TESTS=()
+RUNS_PER_EXPERIMENT=30
 
 echo -e "${BLUE}================================${NC}"
 echo -e "${BLUE}  Running Benchmark Suite${NC}"
@@ -25,7 +26,7 @@ echo -e "${BLUE}================================${NC}"
 echo ""
 
 shopt -s nullglob
-BENCHMARK_FILES=("$BENCHMARK_DIR"/*_128_128_80.sptl)
+BENCHMARK_FILES=("$BENCHMARK_DIR"/copy.sptl "$BENCHMARK_DIR"/reduce.sptl "$BENCHMARK_DIR"/reduce_pipelined.sptl "$BENCHMARK_DIR"/*_128_128_80.sptl)
 shopt -u nullglob
 
 if [ ${#BENCHMARK_FILES[@]} -eq 0 ]; then
@@ -40,12 +41,19 @@ for benchmark_path in "${BENCHMARK_FILES[@]}"; do
 
 	TOTAL=$((TOTAL + 1))
 
-	echo -e "${BLUE}Running:${NC} ${benchmark_file}"
+	echo -e "${BLUE}Running:${NC} ${benchmark_name}"
 	echo "----------------------------------------"
 
-	mkdir -p $OUTPUT_DIR/$benchmark_file
+	mkdir -p $OUTPUT_DIR/$benchmark_name
 
-	compile_output=$(sptlc "$benchmark_path" "$benchmark_dir" $* |& tee -a $OUTPUT_DIR/$benchmark_file/compile.log)
+	if [[ $benchmark_name == *"_128_128_80"* ]]; then
+		EXTRA_FLAGS=""
+    else
+		echo "Parameterizing with N=128, K=80"
+		EXTRA_FLAGS="-p N=128 -p K=80"
+	fi
+
+	compile_output=$(sptlc "$benchmark_path" "$benchmark_dir" $EXTRA_FLAGS $* |& tee -a $OUTPUT_DIR/$benchmark_file/compile.log)
 	compile_status=$?
 
 	if [ $compile_status -ne 0 ]; then
@@ -55,14 +63,13 @@ for benchmark_path in "${BENCHMARK_FILES[@]}"; do
 		FAILED_TESTS+=("${benchmark_file} (compile exit code: ${compile_status})")
 		echo "----------------------------------------"
 		echo ""
-		rm -rf "$benchmark_dir"
 		continue
 	else
 		echo -e "${GREEN}Compilation succeeded${NC}"
 	fi
 
 	THIS_TEST_FAILED="0"
-	for i in {1..5}; do
+	for i in {1..$RUNS_PER_EXPERIMENT}; do
 		timeout_output=$(timeout -s 9 300 cs_python "$RUNTIME" "$benchmark_dir" --benchmark --randomize |& tee -a $OUTPUT_DIR/$benchmark_file/run${i}.log)
 		runtime_status=$?
 
@@ -76,7 +83,7 @@ for benchmark_path in "${BENCHMARK_FILES[@]}"; do
 		else
 			echo "$timeout_output"
 			cp perf_cycles.npy $OUTPUT_DIR/$benchmark_file/run${i}_cycles.npy
-			echo -e "${GREEN}✓ PASSED${NC}: ${benchmark_file} (${i}/5)"
+			echo -e "${GREEN}✓ PASSED${NC}: ${benchmark_file} (${i}/${RUNS_PER_EXPERIMENT})"
 		fi
 	done
 
@@ -86,8 +93,6 @@ for benchmark_path in "${BENCHMARK_FILES[@]}"; do
 
 	echo "----------------------------------------"
 	echo ""
-
-	rm -rf "$OUTPUT_DIR"
 done
 
 echo -e "${BLUE}================================${NC}"
