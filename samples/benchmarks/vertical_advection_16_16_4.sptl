@@ -281,16 +281,6 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[16, 16] readonly _u_
   place u16 i#4, u16 j#4 in [0:1:2 , 0:16:1] {
     f32[5] _refactored_wcon_1_0_0_0_0#1
   }
-  dataflow u16 i#5, u16 j#5 in [1:2:2 , 0:16:1] {
-    stream<f32> _stream_wcon#1 = relative_stream(-1, 0) {
-      hops = [(-1, 0)], 
-      channel = 0
-    }
-    stream<f32> _stream_wcon#2 = relative_stream(-1, 0) {
-      hops = [(-1, 0)], 
-      channel = 1
-    }
-  }
   dataflow u16 i#5, u16 j#5 in [17:18:2 , 0:16:1] {
     stream<f32> _stream_wcon#1 = relative_stream(-1, 0) {
       hops = [(-1, 0)], 
@@ -312,6 +302,16 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[16, 16] readonly _u_
     }
   }
   dataflow u16 i#5, u16 j#5 in [3:17:2 , 0:16:1] {
+    stream<f32> _stream_wcon#1 = relative_stream(-1, 0) {
+      hops = [(-1, 0)], 
+      channel = 0
+    }
+    stream<f32> _stream_wcon#2 = relative_stream(-1, 0) {
+      hops = [(-1, 0)], 
+      channel = 1
+    }
+  }
+  dataflow u16 i#5, u16 j#5 in [1:2:2 , 0:16:1] {
     stream<f32> _stream_wcon#1 = relative_stream(-1, 0) {
       hops = [(-1, 0)], 
       channel = 0
@@ -429,6 +429,7 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[16, 16] readonly _u_
     }
     awaitall
     await send(utens_stage_0_0_0#1, __kernel_out_0[(i#2 - 1), (j#2 - 0)])
+    awaitall
   }
   compute u16 i#2, u16 j#2 in [2:17:2 , 0:16:1] {
     await receive(u_pos_0_0_0, _u_pos[i#2, j#2])
@@ -540,6 +541,7 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[16, 16] readonly _u_
     }
     awaitall
     await send(utens_stage_0_0_0#1, __kernel_out_0[(i#2 - 1), (j#2 - 0)])
+    awaitall
   }
   compute u16 i#2, u16 j#2 in [3:17:2 , 0:16:1] {
     await receive(u_pos_0_0_0, _u_pos[i#2, j#2])
@@ -651,18 +653,16 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[16, 16] readonly _u_
     }
     awaitall
     await send(utens_stage_0_0_0#1, __kernel_out_0[(i#2 - 1), (j#2 - 0)])
+    awaitall
   }
   compute u16 i#3, u16 j#3 in [17:18:2 , 0:16:1] {
     await receive(wcon_0_0_0, _wcon[i#3, j#3])
     awaitall
     completion _send_comp = send(wcon_0_0_0, _stream_wcon#1)
     await _send_comp
+    awaitall
   }
-  compute u16 i#6, u16 j#6 in [0:1:2 , 0:16:1] {
-    awaitall
-    awaitall
-    awaitall
-    awaitall
-    awaitall
+  compute u16 i, u16 j in [0:1:2 , 0:16:1] {
+
   }
 }
