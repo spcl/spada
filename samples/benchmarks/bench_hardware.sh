@@ -53,14 +53,14 @@ for benchmark_path in "${BENCHMARK_FILES[@]}"; do
 		EXTRA_FLAGS="-p N=128 -p K=80"
 	fi
 
-	compile_output=$(sptlc "$benchmark_path" "$benchmark_dir" $EXTRA_FLAGS $* |& tee -a $OUTPUT_DIR/$benchmark_file/compile.log)
+	compile_output=$(sptlc "$benchmark_path" "$benchmark_dir" $EXTRA_FLAGS $* |& tee -a $OUTPUT_DIR/$benchmark_name/compile.log)
 	compile_status=$?
 
 	if [ $compile_status -ne 0 ]; then
 		echo -e "${RED}Compilation failed${NC}"
 		echo "$compile_output"
 		FAILED=$((FAILED + 1))
-		FAILED_TESTS+=("${benchmark_file} (compile exit code: ${compile_status})")
+		FAILED_TESTS+=("${benchmark_name} (compile exit code: ${compile_status})")
 		echo "----------------------------------------"
 		echo ""
 		continue
@@ -69,8 +69,8 @@ for benchmark_path in "${BENCHMARK_FILES[@]}"; do
 	fi
 
 	THIS_TEST_FAILED="0"
-	for i in {1..$RUNS_PER_EXPERIMENT}; do
-		timeout_output=$(timeout -s 9 300 cs_python "$RUNTIME" "$benchmark_dir" --benchmark --randomize |& tee -a $OUTPUT_DIR/$benchmark_file/run${i}.log)
+	for i in $(seq 1 $RUNS_PER_EXPERIMENT); do
+		timeout_output=$(timeout -s 9 300 cs_python "$RUNTIME" "$benchmark_dir" --benchmark --randomize |& tee -a $OUTPUT_DIR/$benchmark_name/run${i}.log)
 		runtime_status=$?
 
 		if [ $runtime_status -ne 0 ]; then
@@ -82,7 +82,7 @@ for benchmark_path in "${BENCHMARK_FILES[@]}"; do
 			break
 		else
 			echo "$timeout_output"
-			cp perf_cycles.npy $OUTPUT_DIR/$benchmark_file/run${i}_cycles.npy
+			cp perf_cycles.npy $OUTPUT_DIR/$benchmark_name/run${i}_cycles.npy
 			echo -e "${GREEN}✓ PASSED${NC}: ${benchmark_file} (${i}/${RUNS_PER_EXPERIMENT})"
 		fi
 	done

@@ -291,6 +291,8 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     # Map task IDs to CSL task IDs
     tdag.renumber_tasks(tasks, task_creation_behavior)
 
+    print(f'Stats: Using {sum(1 if t.task_type == "local" else 0 for t in tasks)} local tasks, {sum(1 if t.task_type == "data" else 0 for t in tasks)} data tasks, {len(set(color_map.values()))} colors')
+
     # Generate each task
     max_task_id = csl.LOCAL_TASK_IDS[0] - 1
     for i, task in enumerate(tasks):
