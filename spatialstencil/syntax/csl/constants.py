@@ -10,7 +10,7 @@ ARCH = os.environ.get('WSE_ARCH', 'wse2')
 # https://sdk.cerebras.net/csl/language/task-ids?highlight=color#activatable-identifiers
 # NOTE: We also avoid task ID 28 as we reserve it for ``exit_task``
 _CSL_LOCAL_TASK_IDS = {
-    'wse2': list(range(8, 21)) + list(range(24, 28)),
+    'wse2': list(range(8, 21)),
     'wse3': list(range(8, 28)),
 }
 
