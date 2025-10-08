@@ -105,7 +105,10 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice,
     if src_identifier.as_ir() not in dsds or dst_identifier.as_ir() not in dsds:
 
         def _format_indexed_access(value: spir.Identifier | spir.ArraySlice, identifier: spir.Identifier) -> str:
-            dtype = dtypes.get(identifier)
+            if isinstance(identifier, spir.TypedIdentifier):
+                dtype = identifier.dtype
+            else:
+                dtype = dtypes.get(identifier)
             if isinstance(dtype, spir.ArrayType):
                 dims_to_ignore = len(dtype.shape)
             else:
@@ -488,8 +491,8 @@ def emit_map(statement: spir.MapStatement, dsds: UniqueDSDDict, dtypes: dict[spi
 
     # Add parameters for input variables (excluding loop variables, they come from @map iteration)
     for input_var in used_identifiers:
-        if input_var in output_variables:
-            continue
+        # if input_var in output_variables:
+        #     continue
         # Get the type from the variable
         var_dtype = dtypes[input_var]
         if isinstance(var_dtype, spir.ArrayType):
@@ -580,8 +583,8 @@ def emit_map(statement: spir.MapStatement, dsds: UniqueDSDDict, dtypes: dict[spi
 
     # Add input arguments (DSDs for arrays, variables for scalars)
     for input_var in used_identifiers:
-        if input_var in output_variables:
-            continue
+        # if input_var in output_variables:
+        #     continue
         var_key = input_var.as_ir()
         if var_key in dsds:
             # Use DSD for arrays
@@ -619,6 +622,8 @@ def name_to_csl(name: spir.Identifier) -> str:
     :param name: Spatial IR identifier.
     :return: Compilable CSL string representing the identifier.
     """
+    if isinstance(name, spir.TypedIdentifier):
+        return f'var {name_to_csl(name.identifier)}: {dtype_as_csl(name.dtype)}'
     if name.version == 0:
         return name.name
     else:

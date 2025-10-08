@@ -414,9 +414,10 @@ class _ForeachDataTaskToLoopConverter(spir.NodeTransformer):
 
         stream_target.lineinfo = getattr(stream_target, 'lineinfo', node.lineinfo)
 
-        receive_destination = copy.deepcopy(node.stream_variable.identifier)
-        receive_destination.lineinfo = getattr(receive_destination, 'lineinfo', node.lineinfo)
-        receive_statement = spir.ReceiveStatement(receive_destination, stream_target)
+        receive_destination = copy.deepcopy(node.stream_variable)
+        receive_destination.identifier.lineinfo = getattr(receive_destination, 'lineinfo', node.lineinfo)
+        receive_statement = spir.ReceiveStatement(receive_destination.identifier, stream_target)
+        receive_statement.local_array = receive_destination
         receive_statement.lineinfo = node.lineinfo
 
         loop_body = [receive_statement] + body_statements

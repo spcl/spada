@@ -18,7 +18,7 @@
         }
     }
     compute u16 i, u16 j in [N-1:N, 0:1] {
-        await receive(local, inp[i])
+        await receive(local, inp[i, j])
         snd_val = local
         await send(snd_val, westwards_even if N % 2 == 0 else westwards_odd)
     }
@@ -39,7 +39,7 @@
         }
     }
     compute u16 i, u16 j in [1:N-1:2, 0:1] {
-        await receive(local, inp[i])
+        await receive(local, inp[i, j])
         await receive(rcv_val, westwards_rcv)
         rcv_val = rcv_val + local
         await send(rcv_val, westwards)
@@ -59,7 +59,7 @@
         }
     }
     compute u16 i, u16 j in [2:N-1:2, 0:1] {
-        await receive(local, inp[i])
+        await receive(local, inp[i, j])
         await receive(rcv_val, westwards_rcv)
         rcv_val = rcv_val + local
         await send(rcv_val, westwards)
@@ -77,7 +77,7 @@
         }
     }
     compute u16 i, u16 j in [0:1, 0:1] {
-        await receive(local, inp[i])
+        await receive(local, inp[i, j])
         await receive(rcv_val, westwards)
         rcv_val = rcv_val + local
         await send(rcv_val, out)
