@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -o pipefail
-
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -10,7 +8,7 @@ NC='\033[0m'
 
 BENCHMARK_DIR="samples/benchmarks"
 RUNTIME="spatialstencil/runtime/runtime.py"
-OUTPUT_DIR="benchmark_results"
+OUTPUT_DIR="${BM_OUTPUT_DIR:-benchmark_results}"
 
 mkdir $OUTPUT_DIR
 
@@ -21,12 +19,13 @@ FAILED_TESTS=()
 RUNS_PER_EXPERIMENT=100
 
 echo -e "${BLUE}================================${NC}"
-echo -e "${BLUE}  Running Benchmark Suite${NC}"
+echo -e "${BLUE}  Running Benchmark Suite with flags $* ${NC}"
 echo -e "${BLUE}================================${NC}"
 echo ""
 
 shopt -s nullglob
-BENCHMARK_FILES=("$BENCHMARK_DIR"/copy.sptl "$BENCHMARK_DIR"/reduce.sptl "$BENCHMARK_DIR"/reduce_pipelined.sptl "$BENCHMARK_DIR"/*_128_128_80.sptl)
+# BENCHMARK_FILES=("$BENCHMARK_DIR"/copy.sptl "$BENCHMARK_DIR"/reduce.sptl "$BENCHMARK_DIR"/reduce_pipelined.sptl "$BENCHMARK_DIR"/*_128_128_80.sptl)
+BENCHMARK_FILES=("$BENCHMARK_DIR"/*an_128_128_80.sptl)
 shopt -u nullglob
 
 if [ ${#BENCHMARK_FILES[@]} -eq 0 ]; then
@@ -53,12 +52,12 @@ for benchmark_path in "${BENCHMARK_FILES[@]}"; do
 		EXTRA_FLAGS="-p N=128 -p K=80"
 	fi
 
-	compile_output=$(sptlc "$benchmark_path" "$benchmark_dir" $EXTRA_FLAGS $* |& tee -a $OUTPUT_DIR/$benchmark_name/compile.log)
-	compile_status=$?
+	date
+	sptlc "$benchmark_path" "$benchmark_dir" $EXTRA_FLAGS $* |& tee -a $OUTPUT_DIR/$benchmark_name/compile.log
+	compile_status=${PIPESTATUS[0]}
 
 	if [ $compile_status -ne 0 ]; then
 		echo -e "${RED}Compilation failed${NC}"
-		echo "$compile_output"
 		FAILED=$((FAILED + 1))
 		FAILED_TESTS+=("${benchmark_name} (compile exit code: ${compile_status})")
 		echo "----------------------------------------"
@@ -66,26 +65,20 @@ for benchmark_path in "${BENCHMARK_FILES[@]}"; do
 		continue
 	else
 		echo -e "${GREEN}Compilation succeeded${NC}"
+		date
 	fi
 
-	THIS_TEST_FAILED="0"
-	timeout_output=$(timeout -s 9 300 cs_python "$RUNTIME" "$benchmark_dir" --benchmark --randomize --repetitions $RUNS_PER_EXPERIMENT --output-dir $OUTPUT_DIR/$benchmark_name |& tee -a $OUTPUT_DIR/$benchmark_name/run.log)
-	runtime_status=$?
+	timeout -s 9 300 cs_python "$RUNTIME" "$benchmark_dir" --benchmark --randomize --repetitions $RUNS_PER_EXPERIMENT --output-dir $OUTPUT_DIR/$benchmark_name |& tee -a $OUTPUT_DIR/$benchmark_name/run.log
+	runtime_status=${PIPESTATUS[0]}
 
 	if [ $runtime_status -ne 0 ]; then
 		echo -e "${RED}Execution failed${NC}"
-		echo "$timeout_output"
 		FAILED=$((FAILED + 1))
 		FAILED_TESTS+=("${benchmark_file} (run exit code: ${runtime_status})")
-		THIS_TEST_FAILED="1"
-		break
 	else
 		echo "$timeout_output"
-		cp perf_cycles.npy $OUTPUT_DIR/$benchmark_name/run${i}_cycles.npy
-		echo -e "${GREEN}✓ PASSED${NC}: ${benchmark_file} (${i}/${RUNS_PER_EXPERIMENT})"
-	fi
-
-    if [ $THIS_TEST_FAILED = "0" ]; then
+		date
+		echo -e "${GREEN}✓ PASSED${NC}: ${benchmark_file} (${RUNS_PER_EXPERIMENT} experiments run)"
 		PASSED=$((PASSED + 1))
 	fi
 
@@ -94,7 +87,7 @@ for benchmark_path in "${BENCHMARK_FILES[@]}"; do
 done
 
 echo -e "${BLUE}================================${NC}"
-echo -e "${BLUE}  Benchmark Summary${NC}"
+echo -e "${BLUE}  Benchmark Summary with flags $* ${NC}"
 echo -e "${BLUE}================================${NC}"
 echo -e "Total:  $TOTAL"
 echo -e "${GREEN}Passed: $PASSED${NC}"
