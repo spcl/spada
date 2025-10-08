@@ -18,10 +18,11 @@ import subprocess
 @click.option('--disable-benchmarking', is_flag=True, help='Disable benchmarking code generation (and memory overhead)')
 @click.option('--disable-asynchronous', is_flag=True, help='Disable asynchronous task code generation')
 @click.option('--disable-dsd', is_flag=True, help='Disable DSD operation detection and code generation')
+@click.option('--disable-map', is_flag=True, help='Disable @map operation detection and code generation')
 @click.option('--disable-task-fusion', is_flag=True, help='Disable task fusion optimization')
 def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], offset_x: int, offset_y: int,
                        generate_only: bool, disable_benchmarking: bool, disable_asynchronous: bool, disable_dsd: bool,
-                       disable_task_fusion: bool):
+                       disable_map: bool, disable_task_fusion: bool):
     # Parse parameters into dictionary
     kernel_parameters = {}
     for p in param:
@@ -75,6 +76,10 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     if using_memcpy_mode is None:
         # If no stream arguments are present, default to non-memcpy mode
         using_memcpy_mode = False
+
+    if disable_map:
+        from spatialstencil.syntax.csl import statements
+        statements.DISABLE_MAPS = True
 
     # Lower the spatial IR to CSL
     csl_files = s2c.lower_spatial_ir_to_csl(

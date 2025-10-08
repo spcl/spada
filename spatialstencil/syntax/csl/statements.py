@@ -308,6 +308,7 @@ def emit_async_block(statement: spir.AsyncBlock, dsds: UniqueDSDDict, dtypes: di
     return result
 
 
+DISABLE_MAPS = False
 def _is_map_compatible(statement: spir.MapStatement, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier,
                                                                                        spir.IRType]) -> bool:
     """
@@ -318,6 +319,8 @@ def _is_map_compatible(statement: spir.MapStatement, dsds: UniqueDSDDict, dtypes
     :param dtypes: The data types dictionary.
     :return: True if the statement is compatible, False otherwise.
     """
+    if DISABLE_MAPS:
+        return False
 
     def collect_dsd_writes_from_body(body: list[spir.Statement], in_loop: bool = False) -> dict[str, list[bool]]:
         """
@@ -431,6 +434,37 @@ def _is_map_compatible(statement: spir.MapStatement, dsds: UniqueDSDDict, dtypes
     return True
 
 
+class MapArgumentCollector(spir.NodeVisitor):
+
+    def __init__(self, index_identifiers: set[spir.Identifier], dsds: UniqueDSDDict):
+        super().__init__()
+        self.used_identifiers: list[spir.Identifier] = []
+        self.output_variables: list[spir.Identifier] = []
+        self.index_identifiers = index_identifiers
+        self.dsds = dsds
+    
+    def visit_Identifier(self, node: spir.Identifier):
+        if node not in self.used_identifiers and node not in self.index_identifiers:
+            self.used_identifiers.append(node)
+        return self.generic_visit(node)
+
+    def visit_AssignmentStatement(self, node: spir.AssignmentStatement):
+        self.generic_visit(node.source)
+
+        # Do not visit lhs recursively
+        if isinstance(node.destination, spir.ArraySlice):
+            dest_identifier = node.destination.array
+        elif isinstance(node.destination, spir.Identifier):
+            dest_identifier = node.destination
+        else:
+            dest_identifier = None
+        if dest_identifier and dest_identifier.as_ir() in self.dsds:
+            self.output_variables.append(dest_identifier)
+        
+        return node
+
+
+
 def emit_map(statement: spir.MapStatement, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType],
              header_code: StringIO) -> str:
     """
@@ -464,24 +498,14 @@ def emit_map(statement: spir.MapStatement, dsds: UniqueDSDDict, dtypes: dict[spi
         return emit_for(statement, dsds, dtypes, header_code)
 
     # Collect all variables from expressions recursively
-    used_identifiers: list[spir.Identifier] = []
-    output_variables: list[spir.Identifier] = []
     index_identifiers = set(v.identifier for v in statement.variables)
+    mac = MapArgumentCollector(index_identifiers, dsds)
     for substmt in statement.body:
-        for node in substmt.walk():
-            if isinstance(node, spir.Identifier) and node not in used_identifiers and node not in index_identifiers:
-                used_identifiers.append(node)
-                continue
-            elif isinstance(node, spir.AssignmentStatement):
-                if isinstance(node.destination, spir.ArraySlice):
-                    dest_identifier = node.destination.array
-                elif isinstance(node.destination, spir.Identifier):
-                    dest_identifier = node.destination
-                else:
-                    dest_identifier = None
-                if dest_identifier and dest_identifier.as_ir() in dsds:
-                    output_variables.append(dest_identifier)
+        mac.visit(substmt)
 
+    used_identifiers: list[spir.Identifier] = mac.used_identifiers
+    output_variables: list[spir.Identifier] = mac.output_variables
+    
     assert len(output_variables) <= 1, "At most one output DSD is allowed in a CSL @map statement."
 
     # Create a mapping from input variables to parameter names for substitution
