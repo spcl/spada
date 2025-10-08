@@ -45,7 +45,7 @@ for benchmark_path in "${BENCHMARK_FILES[@]}"; do
 
 	mkdir -p $OUTPUT_DIR/$benchmark_file
 
-	compile_output=$(sptlc "$benchmark_path" "$benchmark_dir" |& tee -a $OUTPUT_DIR/$benchmark_file/compile.log)
+	compile_output=$(sptlc "$benchmark_path" "$benchmark_dir" $* |& tee -a $OUTPUT_DIR/$benchmark_file/compile.log)
 	compile_status=$?
 
 	if [ $compile_status -ne 0 ]; then

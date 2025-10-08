@@ -1132,7 +1132,7 @@ def _generate_data_task(
     current_code.write(f"task dtask_{task.task_id}({argname}: {argtype_csl}) void {{\n")
     if stmt.variables:
         current_code.write(
-            f'    var {name_to_csl(stmt.variables[0].identifier)}: i32 = __num_dtask_{task.task_id};\n')
+            f'    var {name_to_csl(stmt.variables[0].identifier)}: {var_dtype_csl} = __num_dtask_{task.task_id};\n')
 
     # Write op contents
     for substmt in stmt.body:
