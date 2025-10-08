@@ -178,7 +178,7 @@ class TestStencilIRParser(unittest.TestCase):
 
     def test_domain_inference(self):
         # Parse stencil samples file
-        gtfuncs = parser.parse_file(os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'stencils.py'))
+        gtfuncs = parser.parse_file(os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'advanced_stencils.py'))
         program = gtfuncs['horizontal_diffusion']
 
         # Lower without a domain
