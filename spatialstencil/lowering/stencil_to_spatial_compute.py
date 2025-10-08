@@ -722,11 +722,18 @@ class HorizontalStencilTransformer(PatternTransformer[sast.AssignOp | sast.Retur
 
             # Build the source expression
             if local is not None:
+                
+                local_array_expr = spa.ArraySlice(
+                    local,
+                    [spa.Expression(var_k)]
+                )
+                
                 src_expr = spa.Expression(spa.BinaryOperator(
-                    spa.Expression(local_id),
+                    spa.Expression(local_array_expr),
                     op,
                     spa.Expression(var_x),
                 ))
+                
             elif factor is not None:
                 # %d = %factor * %b[dx, dy, 0] : f32
                 if isinstance(factor, int):
