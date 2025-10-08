@@ -657,7 +657,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
     await receive(arg1_0_0_0, _arg1[i#3, j#3])
     awaitall
     completion _recv_comp = foreach i32 k, f32 x in [0:80:1], receive(_stream_arg1#2) {
-      _temp_0_0_0[k] = (arg1_0_0_0 + x)
+      _temp_0_0_0[k] = (arg1_0_0_0[k] + x)
     }
     completion _send_comp = send(arg1_0_0_0, _stream_arg1#3)
     await _send_comp
@@ -666,7 +666,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       i16_0_0_0[k#1] = (_temp_0_0_0[k#1] * arg2_0_0_0[k#1])
     }
     completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:80:1], receive(_stream_arg0#3) {
-      i19_0_0_0[k#2] = (arg0_0_0_0 + x#1)
+      i19_0_0_0[k#2] = (arg0_0_0_0[k#2] + x#1)
     }
     await _recv_comp#1
     await map i32 k#3 in [0:80:1] {
@@ -679,14 +679,14 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       arg4_0_0_0#1[k#5] = (arg3_0_0_0[k#5] * i21_0_0_0[k#5])
     }
     completion _recv_comp#2 = foreach i32 k#6, f32 x#2 in [0:80:1], receive(_stream_arg0#5) {
-      _temp_0_0_0#2[k#6] = (arg0_0_0_0 + x#2)
+      _temp_0_0_0#2[k#6] = (arg0_0_0_0[k#6] + x#2)
     }
     await _recv_comp#2
     await map i32 k#7 in [0:80:1] {
       i16_0_0_0#1[k#7] = (_temp_0_0_0#2[k#7] * arg2_0_0_0[k#7])
     }
     completion _recv_comp#3 = foreach i32 k#8, f32 x#3 in [0:80:1], receive(_stream_arg1#4) {
-      i19_0_0_0#1[k#8] = (arg1_0_0_0 + x#3)
+      i19_0_0_0#1[k#8] = (arg1_0_0_0[k#8] + x#3)
     }
     completion _send_comp#3 = send(arg1_0_0_0, _stream_arg1#5)
     await _send_comp#3
@@ -718,7 +718,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
     await receive(arg1_0_0_0, _arg1[i#3, j#3])
     awaitall
     completion _recv_comp = foreach i32 k, f32 x in [0:80:1], receive(_stream_arg1#3) {
-      _temp_0_0_0[k] = (arg1_0_0_0 + x)
+      _temp_0_0_0[k] = (arg1_0_0_0[k] + x)
     }
     completion _send_comp = send(arg1_0_0_0, _stream_arg1#2)
     await _send_comp
@@ -727,7 +727,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       i16_0_0_0[k#1] = (_temp_0_0_0[k#1] * arg2_0_0_0[k#1])
     }
     completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:80:1], receive(_stream_arg0#3) {
-      i19_0_0_0[k#2] = (arg0_0_0_0 + x#1)
+      i19_0_0_0[k#2] = (arg0_0_0_0[k#2] + x#1)
     }
     await _recv_comp#1
     await map i32 k#3 in [0:80:1] {
@@ -740,14 +740,14 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       arg4_0_0_0#1[k#5] = (arg3_0_0_0[k#5] * i21_0_0_0[k#5])
     }
     completion _recv_comp#2 = foreach i32 k#6, f32 x#2 in [0:80:1], receive(_stream_arg0#5) {
-      _temp_0_0_0#2[k#6] = (arg0_0_0_0 + x#2)
+      _temp_0_0_0#2[k#6] = (arg0_0_0_0[k#6] + x#2)
     }
     await _recv_comp#2
     await map i32 k#7 in [0:80:1] {
       i16_0_0_0#1[k#7] = (_temp_0_0_0#2[k#7] * arg2_0_0_0[k#7])
     }
     completion _recv_comp#3 = foreach i32 k#8, f32 x#3 in [0:80:1], receive(_stream_arg1#5) {
-      i19_0_0_0#1[k#8] = (arg1_0_0_0 + x#3)
+      i19_0_0_0#1[k#8] = (arg1_0_0_0[k#8] + x#3)
     }
     completion _send_comp#3 = send(arg1_0_0_0, _stream_arg1#4)
     await _send_comp#3
@@ -779,14 +779,14 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
     await receive(arg1_0_0_0, _arg1[i#3, j#3])
     awaitall
     completion _recv_comp = foreach i32 k, f32 x in [0:80:1], receive(_stream_arg1#3) {
-      _temp_0_0_0[k] = (arg1_0_0_0 + x)
+      _temp_0_0_0[k] = (arg1_0_0_0[k] + x)
     }
     await _recv_comp
     await map i32 k#1 in [0:80:1] {
       i16_0_0_0[k#1] = (_temp_0_0_0[k#1] * arg2_0_0_0[k#1])
     }
     completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:80:1], receive(_stream_arg0#3) {
-      i19_0_0_0[k#2] = (arg0_0_0_0 + x#1)
+      i19_0_0_0[k#2] = (arg0_0_0_0[k#2] + x#1)
     }
     await _recv_comp#1
     await map i32 k#3 in [0:80:1] {
@@ -799,14 +799,14 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       arg4_0_0_0#1[k#5] = (arg3_0_0_0[k#5] * i21_0_0_0[k#5])
     }
     completion _recv_comp#2 = foreach i32 k#6, f32 x#2 in [0:80:1], receive(_stream_arg0#5) {
-      _temp_0_0_0#2[k#6] = (arg0_0_0_0 + x#2)
+      _temp_0_0_0#2[k#6] = (arg0_0_0_0[k#6] + x#2)
     }
     await _recv_comp#2
     await map i32 k#7 in [0:80:1] {
       i16_0_0_0#1[k#7] = (_temp_0_0_0#2[k#7] * arg2_0_0_0[k#7])
     }
     completion _recv_comp#3 = foreach i32 k#8, f32 x#3 in [0:80:1], receive(_stream_arg1#5) {
-      i19_0_0_0#1[k#8] = (arg1_0_0_0 + x#3)
+      i19_0_0_0#1[k#8] = (arg1_0_0_0[k#8] + x#3)
     }
     await _recv_comp#3
     await map i32 k#9 in [0:80:1] {
@@ -836,14 +836,14 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
     await receive(arg1_0_0_0, _arg1[i#3, j#3])
     awaitall
     completion _recv_comp = foreach i32 k, f32 x in [0:80:1], receive(_stream_arg1#3) {
-      _temp_0_0_0[k] = (arg1_0_0_0 + x)
+      _temp_0_0_0[k] = (arg1_0_0_0[k] + x)
     }
     await _recv_comp
     await map i32 k#1 in [0:80:1] {
       i16_0_0_0[k#1] = (_temp_0_0_0[k#1] * arg2_0_0_0[k#1])
     }
     completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:80:1], receive(_stream_arg0#2) {
-      i19_0_0_0[k#2] = (arg0_0_0_0 + x#1)
+      i19_0_0_0[k#2] = (arg0_0_0_0[k#2] + x#1)
     }
     completion _send_comp#1 = send(arg0_0_0_0, _stream_arg0#3)
     await _send_comp#1
@@ -858,7 +858,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       arg4_0_0_0#1[k#5] = (arg3_0_0_0[k#5] * i21_0_0_0[k#5])
     }
     completion _recv_comp#2 = foreach i32 k#6, f32 x#2 in [0:80:1], receive(_stream_arg0#4) {
-      _temp_0_0_0#2[k#6] = (arg0_0_0_0 + x#2)
+      _temp_0_0_0#2[k#6] = (arg0_0_0_0[k#6] + x#2)
     }
     completion _send_comp#2 = send(arg0_0_0_0, _stream_arg0#5)
     await _send_comp#2
@@ -867,7 +867,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       i16_0_0_0#1[k#7] = (_temp_0_0_0#2[k#7] * arg2_0_0_0[k#7])
     }
     completion _recv_comp#3 = foreach i32 k#8, f32 x#3 in [0:80:1], receive(_stream_arg1#5) {
-      i19_0_0_0#1[k#8] = (arg1_0_0_0 + x#3)
+      i19_0_0_0#1[k#8] = (arg1_0_0_0[k#8] + x#3)
     }
     await _recv_comp#3
     await map i32 k#9 in [0:80:1] {
@@ -897,14 +897,14 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
     await receive(arg1_0_0_0, _arg1[i#3, j#3])
     awaitall
     completion _recv_comp = foreach i32 k, f32 x in [0:80:1], receive(_stream_arg1#3) {
-      _temp_0_0_0[k] = (arg1_0_0_0 + x)
+      _temp_0_0_0[k] = (arg1_0_0_0[k] + x)
     }
     await _recv_comp
     await map i32 k#1 in [0:80:1] {
       i16_0_0_0[k#1] = (_temp_0_0_0[k#1] * arg2_0_0_0[k#1])
     }
     completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:80:1], receive(_stream_arg0#3) {
-      i19_0_0_0[k#2] = (arg0_0_0_0 + x#1)
+      i19_0_0_0[k#2] = (arg0_0_0_0[k#2] + x#1)
     }
     completion _send_comp#1 = send(arg0_0_0_0, _stream_arg0#2)
     await _send_comp#1
@@ -919,7 +919,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       arg4_0_0_0#1[k#5] = (arg3_0_0_0[k#5] * i21_0_0_0[k#5])
     }
     completion _recv_comp#2 = foreach i32 k#6, f32 x#2 in [0:80:1], receive(_stream_arg0#5) {
-      _temp_0_0_0#2[k#6] = (arg0_0_0_0 + x#2)
+      _temp_0_0_0#2[k#6] = (arg0_0_0_0[k#6] + x#2)
     }
     completion _send_comp#2 = send(arg0_0_0_0, _stream_arg0#4)
     await _send_comp#2
@@ -928,7 +928,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       i16_0_0_0#1[k#7] = (_temp_0_0_0#2[k#7] * arg2_0_0_0[k#7])
     }
     completion _recv_comp#3 = foreach i32 k#8, f32 x#3 in [0:80:1], receive(_stream_arg1#5) {
-      i19_0_0_0#1[k#8] = (arg1_0_0_0 + x#3)
+      i19_0_0_0#1[k#8] = (arg1_0_0_0[k#8] + x#3)
     }
     await _recv_comp#3
     await map i32 k#9 in [0:80:1] {
@@ -958,7 +958,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
     await receive(arg1_0_0_0, _arg1[i#3, j#3])
     awaitall
     completion _recv_comp = foreach i32 k, f32 x in [0:80:1], receive(_stream_arg1#2) {
-      _temp_0_0_0[k] = (arg1_0_0_0 + x)
+      _temp_0_0_0[k] = (arg1_0_0_0[k] + x)
     }
     completion _send_comp = send(arg1_0_0_0, _stream_arg1#3)
     await _send_comp
@@ -967,7 +967,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       i16_0_0_0[k#1] = (_temp_0_0_0[k#1] * arg2_0_0_0[k#1])
     }
     completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:80:1], receive(_stream_arg0#2) {
-      i19_0_0_0[k#2] = (arg0_0_0_0 + x#1)
+      i19_0_0_0[k#2] = (arg0_0_0_0[k#2] + x#1)
     }
     completion _send_comp#1 = send(arg0_0_0_0, _stream_arg0#3)
     await _send_comp#1
@@ -982,7 +982,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       arg4_0_0_0#1[k#5] = (arg3_0_0_0[k#5] * i21_0_0_0[k#5])
     }
     completion _recv_comp#2 = foreach i32 k#6, f32 x#2 in [0:80:1], receive(_stream_arg0#4) {
-      _temp_0_0_0#2[k#6] = (arg0_0_0_0 + x#2)
+      _temp_0_0_0#2[k#6] = (arg0_0_0_0[k#6] + x#2)
     }
     completion _send_comp#2 = send(arg0_0_0_0, _stream_arg0#5)
     await _send_comp#2
@@ -991,7 +991,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       i16_0_0_0#1[k#7] = (_temp_0_0_0#2[k#7] * arg2_0_0_0[k#7])
     }
     completion _recv_comp#3 = foreach i32 k#8, f32 x#3 in [0:80:1], receive(_stream_arg1#4) {
-      i19_0_0_0#1[k#8] = (arg1_0_0_0 + x#3)
+      i19_0_0_0#1[k#8] = (arg1_0_0_0[k#8] + x#3)
     }
     completion _send_comp#3 = send(arg1_0_0_0, _stream_arg1#5)
     await _send_comp#3
@@ -1023,7 +1023,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
     await receive(arg1_0_0_0, _arg1[i#3, j#3])
     awaitall
     completion _recv_comp = foreach i32 k, f32 x in [0:80:1], receive(_stream_arg1#2) {
-      _temp_0_0_0[k] = (arg1_0_0_0 + x)
+      _temp_0_0_0[k] = (arg1_0_0_0[k] + x)
     }
     completion _send_comp = send(arg1_0_0_0, _stream_arg1#3)
     await _send_comp
@@ -1032,7 +1032,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       i16_0_0_0[k#1] = (_temp_0_0_0[k#1] * arg2_0_0_0[k#1])
     }
     completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:80:1], receive(_stream_arg0#3) {
-      i19_0_0_0[k#2] = (arg0_0_0_0 + x#1)
+      i19_0_0_0[k#2] = (arg0_0_0_0[k#2] + x#1)
     }
     completion _send_comp#1 = send(arg0_0_0_0, _stream_arg0#2)
     await _send_comp#1
@@ -1047,7 +1047,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       arg4_0_0_0#1[k#5] = (arg3_0_0_0[k#5] * i21_0_0_0[k#5])
     }
     completion _recv_comp#2 = foreach i32 k#6, f32 x#2 in [0:80:1], receive(_stream_arg0#5) {
-      _temp_0_0_0#2[k#6] = (arg0_0_0_0 + x#2)
+      _temp_0_0_0#2[k#6] = (arg0_0_0_0[k#6] + x#2)
     }
     completion _send_comp#2 = send(arg0_0_0_0, _stream_arg0#4)
     await _send_comp#2
@@ -1056,7 +1056,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       i16_0_0_0#1[k#7] = (_temp_0_0_0#2[k#7] * arg2_0_0_0[k#7])
     }
     completion _recv_comp#3 = foreach i32 k#8, f32 x#3 in [0:80:1], receive(_stream_arg1#4) {
-      i19_0_0_0#1[k#8] = (arg1_0_0_0 + x#3)
+      i19_0_0_0#1[k#8] = (arg1_0_0_0[k#8] + x#3)
     }
     completion _send_comp#3 = send(arg1_0_0_0, _stream_arg1#5)
     await _send_comp#3
@@ -1088,7 +1088,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
     await receive(arg1_0_0_0, _arg1[i#3, j#3])
     awaitall
     completion _recv_comp = foreach i32 k, f32 x in [0:80:1], receive(_stream_arg1#3) {
-      _temp_0_0_0[k] = (arg1_0_0_0 + x)
+      _temp_0_0_0[k] = (arg1_0_0_0[k] + x)
     }
     completion _send_comp = send(arg1_0_0_0, _stream_arg1#2)
     await _send_comp
@@ -1097,7 +1097,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       i16_0_0_0[k#1] = (_temp_0_0_0[k#1] * arg2_0_0_0[k#1])
     }
     completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:80:1], receive(_stream_arg0#2) {
-      i19_0_0_0[k#2] = (arg0_0_0_0 + x#1)
+      i19_0_0_0[k#2] = (arg0_0_0_0[k#2] + x#1)
     }
     completion _send_comp#1 = send(arg0_0_0_0, _stream_arg0#3)
     await _send_comp#1
@@ -1112,7 +1112,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       arg4_0_0_0#1[k#5] = (arg3_0_0_0[k#5] * i21_0_0_0[k#5])
     }
     completion _recv_comp#2 = foreach i32 k#6, f32 x#2 in [0:80:1], receive(_stream_arg0#4) {
-      _temp_0_0_0#2[k#6] = (arg0_0_0_0 + x#2)
+      _temp_0_0_0#2[k#6] = (arg0_0_0_0[k#6] + x#2)
     }
     completion _send_comp#2 = send(arg0_0_0_0, _stream_arg0#5)
     await _send_comp#2
@@ -1121,7 +1121,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       i16_0_0_0#1[k#7] = (_temp_0_0_0#2[k#7] * arg2_0_0_0[k#7])
     }
     completion _recv_comp#3 = foreach i32 k#8, f32 x#3 in [0:80:1], receive(_stream_arg1#5) {
-      i19_0_0_0#1[k#8] = (arg1_0_0_0 + x#3)
+      i19_0_0_0#1[k#8] = (arg1_0_0_0[k#8] + x#3)
     }
     completion _send_comp#3 = send(arg1_0_0_0, _stream_arg1#4)
     await _send_comp#3
@@ -1153,7 +1153,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
     await receive(arg1_0_0_0, _arg1[i#3, j#3])
     awaitall
     completion _recv_comp = foreach i32 k, f32 x in [0:80:1], receive(_stream_arg1#3) {
-      _temp_0_0_0[k] = (arg1_0_0_0 + x)
+      _temp_0_0_0[k] = (arg1_0_0_0[k] + x)
     }
     completion _send_comp = send(arg1_0_0_0, _stream_arg1#2)
     await _send_comp
@@ -1162,7 +1162,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       i16_0_0_0[k#1] = (_temp_0_0_0[k#1] * arg2_0_0_0[k#1])
     }
     completion _recv_comp#1 = foreach i32 k#2, f32 x#1 in [0:80:1], receive(_stream_arg0#3) {
-      i19_0_0_0[k#2] = (arg0_0_0_0 + x#1)
+      i19_0_0_0[k#2] = (arg0_0_0_0[k#2] + x#1)
     }
     completion _send_comp#1 = send(arg0_0_0_0, _stream_arg0#2)
     await _send_comp#1
@@ -1177,7 +1177,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       arg4_0_0_0#1[k#5] = (arg3_0_0_0[k#5] * i21_0_0_0[k#5])
     }
     completion _recv_comp#2 = foreach i32 k#6, f32 x#2 in [0:80:1], receive(_stream_arg0#5) {
-      _temp_0_0_0#2[k#6] = (arg0_0_0_0 + x#2)
+      _temp_0_0_0#2[k#6] = (arg0_0_0_0[k#6] + x#2)
     }
     completion _send_comp#2 = send(arg0_0_0_0, _stream_arg0#4)
     await _send_comp#2
@@ -1186,7 +1186,7 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
       i16_0_0_0#1[k#7] = (_temp_0_0_0#2[k#7] * arg2_0_0_0[k#7])
     }
     completion _recv_comp#3 = foreach i32 k#8, f32 x#3 in [0:80:1], receive(_stream_arg1#5) {
-      i19_0_0_0#1[k#8] = (arg1_0_0_0 + x#3)
+      i19_0_0_0#1[k#8] = (arg1_0_0_0[k#8] + x#3)
     }
     completion _send_comp#3 = send(arg1_0_0_0, _stream_arg1#4)
     await _send_comp#3
@@ -1214,13 +1214,13 @@ kernel @uvbke<>(stream<f32, 80>[128, 129] readonly _arg0, stream<f32, 80>[129, 1
   compute u16 i#13, u16 j#13 in [0:1:2 , 0:1:2] {
 
   }
-  compute u16 i#13, u16 j#13 in [128:129:2 , 0:1:2] {
+  compute u16 i#13, u16 j#13 in [129:130:2 , 0:1:2] {
 
   }
-  compute u16 i#13, u16 j#13 in [128:129:2 , 128:129:2] {
+  compute u16 i#13, u16 j#13 in [129:130:2 , 129:130:2] {
 
   }
-  compute u16 i#13, u16 j#13 in [0:1:2 , 128:129:2] {
+  compute u16 i#13, u16 j#13 in [0:1:2 , 129:130:2] {
 
   }
 }

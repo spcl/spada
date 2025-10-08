@@ -267,12 +267,13 @@ def create_csl_tasks(
             has_edge = any(e == stmt_task for e, _ in result[pred_task].outgoing)
             if not has_edge:
                 task = result[pred_task]
-                task.statements.append("TERMINATOR")
-                if stmt_task in task_has_activate:
-                    task.outgoing.append((stmt_task, InterTaskEdge.UNBLOCK))
-                else:
-                    task.outgoing.append((stmt_task, InterTaskEdge.ACTIVATE))
-                    task_has_activate.add(stmt_task)
+                if task.task_type == "local":
+                    task.statements.append("TERMINATOR")
+                    if stmt_task in task_has_activate:
+                        task.outgoing.append((stmt_task, InterTaskEdge.UNBLOCK))
+                    else:
+                        task.outgoing.append((stmt_task, InterTaskEdge.ACTIVATE))
+                        task_has_activate.add(stmt_task)
 
     # Assign task IDs for local and data tasks
     current_local_task_id = -1
@@ -334,7 +335,7 @@ def create_csl_tasks(
         elif len(sink_tasks) == 1:  # Save on task IDs if there is only one sink task
             edge_type = InterTaskEdge.SEQUENCE
 
-        if task.statements[-1] != "TERMINATOR" and task.outgoing[-1][0] != -1:
+        if task.statements[-1] != "TERMINATOR" and task.outgoing[-1][0] != -1 and task.task_type == "local":
             task.statements.append("TERMINATOR")
             task.outgoing.append((-1, edge_type))
         elif task.outgoing[-1][0] == -1:  # Modify existing UNBLOCK edge if there is more than one sink

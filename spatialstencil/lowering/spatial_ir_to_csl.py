@@ -304,12 +304,13 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
             sname = stmt.receive_stream.stream_name
             if isinstance(sname, spir.ArraySlice):
                 sname = sname.array
-            if sname.as_ir() + "_H2D" in color_map:
-                color = color_map[sname.as_ir() + "_H2D"]
-            elif sname.as_ir() + "_IN" in color_map:
-                color = color_map[sname.as_ir() + "_IN"]
+            if name_to_csl(sname) + "_H2D" in color_map:
+                color = color_map[name_to_csl(sname) + "_H2D"]
+            elif name_to_csl(sname) + "_IN" in color_map:
+                color = color_map[name_to_csl(sname) + "_IN"]
             else:
-                raise ValueError(f'Cannot find color for stream "{sname.as_ir()}" in data task {i}')
+                print(color_map)
+                raise ValueError(f'Cannot find color for stream "{name_to_csl(sname)}" in data task {i}')
             current_code.write(f'const {prefix}task_{i}_id = @get_data_task_id(@get_color({color}));\n')
 
         max_task_id = max(max_task_id, task.task_id)
@@ -364,7 +365,8 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     # Activate all source tasks
     non_source_tasks = set(n for i, t in enumerate(tasks) for n, _ in t.outgoing if n != i)
     source_tasks = [t for i, t in enumerate(tasks) if i not in non_source_tasks]
-    for i, task in enumerate(source_tasks):
+    for task in source_tasks:
+        i = next(i for i, t in enumerate(tasks) if task is t)
         prefix = "d" if task.task_type == 'data' else ""
         current_code.write(f'    @activate({prefix}task_{i}_id);\n')
     if not source_tasks:
@@ -1071,7 +1073,7 @@ def _generate_data_task(
     current_code: StringIO,
     header: StringIO,
     footer: StringIO,
-    dsds: list[tuple[str, cslstruct.DataStructureDescriptor]],
+    dsds: UniqueDSDDict,
     dtypes: dict[spir.Identifier, spir.IRType],
     color_map: dict[str, int],
     tasks: list[tdag.CSLTask],
@@ -1130,7 +1132,7 @@ def _generate_data_task(
     current_code.write(f"task dtask_{task.task_id}({argname}: {argtype_csl}) void {{\n")
     if stmt.variables:
         current_code.write(
-            f'    var {name_to_csl(stmt.variables[0].identifier)}: {var_dtype_csl} = __num_dtask_{task.task_id};\n')
+            f'    var {name_to_csl(stmt.variables[0].identifier)}: i32 = __num_dtask_{task.task_id};\n')
 
     # Write op contents
     for substmt in stmt.body:
