@@ -9,7 +9,7 @@ from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
 
 from spatialstencil.lowering.versioning import Versioning
 from spatialstencil.syntax.common.types import ScalarType
-from spatialstencil.syntax.spatial_ir.canonical_subgrids import canonicalize_subgrids
+from spatialstencil.syntax.spatial_ir.canonical_subgrids import canonicalize_subgrids, fill_compute_rectangle
 from spatialstencil.syntax.spatial_ir.grid_geometry import split_rectangles
 
 from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
@@ -55,7 +55,7 @@ def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: ChannelStr
     placement_gen = ProgramPlacement(domain_shift, versioning)
     dataflow_gen = ProgramDataflow(domain_shift, versioning)
     compute_gen = ProgramCompute(versioning, dataflow_gen, placement_gen)
-    body = []
+    body: list[spa.Phase | spa.ComputeBlock | spa.DataflowBlock | spa.PlaceBlock] = []
 
     placement_blocks = placement_gen.place_program(stencil)
     body.extend(placement_blocks)
@@ -81,6 +81,9 @@ def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: ChannelStr
 
     kernel = spa.Kernel(name=stencil.name or "", parameters=[], arguments=arguments, body=body)
 
+    # Add a dummy compute block that spans everything
+    kernel = fill_compute_rectangle(kernel)
+
     # Pass that applies rectangle splitting to all phases across block types
     kernel = canonicalize_subgrids(kernel)
     
@@ -95,6 +98,7 @@ def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: ChannelStr
         print(f"ERROR: undefined identifier {id.as_ir()} in block {x_range}, {y_range}")
 
     return kernel
+
 
 
 def _get_domain_shift(stencil: sast.Program) -> tuple:

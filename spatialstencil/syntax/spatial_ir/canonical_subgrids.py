@@ -3,7 +3,54 @@ import copy
 from spatialstencil.syntax.spatial_ir.grid_geometry import split_rectangles
 from spatialstencil.syntax.spatial_ir.irnodes import Kernel, SubgridExpression, DataflowBlock, PlaceBlock, ComputeBlock, \
     Phase
+import spatialstencil.syntax.spatial_ir.irnodes as spa
 
+
+def fill_compute_rectangle(kernel: spa.Kernel, block_variable_type: spa.ScalarType = spa.ScalarType.u16) -> spa.Kernel:
+    """Adds a phase after the kernel with a compute rectangle that encloses all computation, place, dataflow of the existing phases/blocks.
+    """
+    assert isinstance(kernel, spa.Kernel)
+    
+    collector = RectangleCollector()
+    collector.visit(kernel)
+    
+    dummy_compute = spa.ComputeBlock(
+        variables=[
+            spa.TypedIdentifier(block_variable_type, spa.Identifier('i', 0)),
+            spa.TypedIdentifier(block_variable_type, spa.Identifier('j', 0))
+        ],
+        subgrid=spa.SubgridExpression.from_tuple((0, collector.max_x, 1), (0, collector.max_y, 1)),
+        statements=[]
+    )
+    kernel.body.append(
+        spa.Phase(place=[], dataflow=[], compute=[dummy_compute])
+    )
+    
+    return kernel
+
+class RectangleCollector(spa.NodeVisitor):
+    
+    max_x: int
+    max_y: int
+    
+    def __init__(self):
+        super().__init__()
+        self.max_x = 0
+        self.max_y = 0
+    
+    def process_block(self, block: spa.ComputeBlock | spa.DataflowBlock | spa.PlaceBlock):
+        grid = block.get_grid_rect()
+        self.max_x = max(self.max_x, grid[1])
+        self.max_y = max(self.max_y, grid[3])
+    
+    def visit_ComputeBlock(self, block: spa.ComputeBlock):
+        self.process_block(block)
+    
+    def visit_PlaceBlock(self, block: spa.PlaceBlock):
+        self.process_block(block)
+    
+    def visit_DataflowBlock(self, block: spa.DataflowBlock):
+        self.process_block(block)
 
 def canonicalize_subgrids(kernel: Kernel) -> Kernel:
     """
