@@ -269,7 +269,7 @@ def create_csl_tasks(
                 task = result[pred_task]
                 if task.task_type == "local":
                     task.statements.append("TERMINATOR")
-                    if stmt_task in task_has_activate:
+                    if stmt_task in task_has_activate or result[stmt_task].task_type == 'data':
                         task.outgoing.append((stmt_task, InterTaskEdge.UNBLOCK))
                     else:
                         task.outgoing.append((stmt_task, InterTaskEdge.ACTIVATE))
@@ -340,6 +340,23 @@ def create_csl_tasks(
             task.outgoing.append((-1, edge_type))
         elif task.outgoing[-1][0] == -1:  # Modify existing UNBLOCK edge if there is more than one sink
             task.outgoing[-1] = (-1, edge_type)
+
+    # Inject local tasks in front of data tasks with more than one input
+    to_append = []
+    for i, task in enumerate(result):
+        if task.task_type != "data":
+            continue
+        predecessors = set(j for j, t in enumerate(result) if any(o == i for o, _ in t.outgoing))
+        if len(predecessors) > 1:
+            new_id = len(result) + len(to_append)
+            new_task = CSLTask(i, "local", ["TERMINATOR"], [(new_id, InterTaskEdge.UNBLOCK)], blocked=True)
+            to_append.append(task)
+            result[i] = new_task
+            # Make one of the predecessors into an ACTIVATE edge
+            tpred = next(iter(predecessors))
+            result[tpred].outgoing = [(o, InterTaskEdge.ACTIVATE) if o == i else (o, e) for o, e in result[tpred].outgoing]
+
+    result.extend(to_append)
 
     return result
 

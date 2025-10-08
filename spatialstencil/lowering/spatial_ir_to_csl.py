@@ -364,6 +364,21 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         arg_name = argument.split(':')[0].strip().removeprefix('__arg_')
         current_code.write(f'    {arg_name} = __arg_{arg_name};\n')
 
+    # Reset data task counters
+    for i, task in enumerate(tasks):
+        if task.task_type == "data":
+            # Obtain initial parameter value
+            stmt_id = task.statements[0]
+            stmt = rect.metadata.compute.statements[stmt_id]
+            assert isinstance(stmt, spir.ForeachStatement)
+            param_range = stmt.parameter_range[0]
+            current_code.write(f'    __num_dtask_{task.task_id} = {param_range.start.as_ir()};\n')
+        # Also re-block tasks that were unblocked in the previous run
+        if task.blocked:
+            prefix = "d" if task.task_type == 'data' else ""
+            current_code.write(f'    @block({prefix}task_{i}_id);\n')
+
+
     # Activate all source tasks
     non_source_tasks = set(n for i, t in enumerate(tasks) for n, _ in t.outgoing if n != i)
     source_tasks = [t for i, t in enumerate(tasks) if i not in non_source_tasks]
@@ -378,11 +393,11 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
     if not exit_task_sequential:
         current_code.write(f'''
-    const exit_task_id = @get_local_task_id({max_task_id + 1});
-    task exit_task() void {{
-        // On completion, unblock command stream
-        sys_mod.unblock_cmd_stream();
-    }}''')
+const exit_task_id = @get_local_task_id({max_task_id + 1});
+task exit_task() void {{
+    // On completion, unblock command stream
+    sys_mod.unblock_cmd_stream();
+}}''')
 
     # Write benchmarking code
     if not disable_benchmarking:
