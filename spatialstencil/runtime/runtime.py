@@ -203,16 +203,20 @@ def copy_back_benchmark_data(runtime: crt.SdkRuntime, metadata: ProgramMetadata)
 class Program:
     """A program that can be run on a device."""
 
-    def __init__(self, folder: str, benchmark: bool = False):
+    def __init__(self, folder: str, benchmark: bool = False, repetitions: int = 1, output_dir: str = ''):
         """
         Initialize the Program with a folder containing the compiled program.
 
         :param folder: Path to the folder containing the program files
         :param benchmark: Whether to run in benchmark mode (not implemented)
+        :param repetitions: Number of times to rerun the program
+        :param output_dir: Where to store all the results
         """
         self.folder = Path(folder)
         self.out_folder = self.folder / "out"
         self.benchmark = benchmark
+        self.output_dir = Path(output_dir)
+        self.repetitions = repetitions
 
         # Load metadata
         metadata_path = self.folder / "metadata.json"
@@ -223,6 +227,9 @@ class Program:
             metadata = json.load(f)
 
         self.metadata = ProgramMetadata.from_json(metadata)
+
+        if not self.output_dir.exists():
+            os.makedirs(self.output_dir, exist_ok=True)
 
         # Initialize SDK runtime
         cmaddr = os.environ.get('CM_ADDR', None)
@@ -292,16 +299,27 @@ class Program:
                 flatten_copy(name, data, expected_shape, self.runtime, self.metadata, self.benchmark)
 
             # Run the program
-            if self.metadata.memcpy_mode:
-                if self.benchmark and not self.simulator:
-                    time.sleep(5.0)
-                print("Launching kernel...", flush=True, end='')
-                if self.benchmark:
-                    self.runtime.launch("f_tic", nonblock=False)
-                self.runtime.launch(self.metadata.kernel_name, *scalar_args, nonblock=False)
-                if self.benchmark:
-                    self.runtime.launch("f_toc", nonblock=False)
-                print("kernel launched.", flush=True)
+            for i in range(self.repetitions):
+                if self.metadata.memcpy_mode:
+                    if self.benchmark and not self.simulator and i == 0:
+                        time.sleep(5.0)
+                    print("Launching kernel...", flush=True, end='')
+                    if self.benchmark:
+                        self.runtime.launch("f_tic", nonblock=False)
+                    self.runtime.launch(self.metadata.kernel_name, *scalar_args, nonblock=False)
+                    if self.benchmark:
+                        self.runtime.launch("f_toc", nonblock=False)
+                    print("kernel launched.", flush=True)
+
+                    if self.benchmark:
+                        cycle_counts = copy_back_benchmark_data(self.runtime, self.metadata)
+                        num_digits = len(str(self.repetitions))
+                        np.save(self.output_dir / f"perf_cycles_{i:0{num_digits}d}.npy", cycle_counts)
+                        # Print min, max, median cycle counts in a more readable format
+                        print(f"Iteration {i} cycle count stats:\n"
+                                f"  Min:    {np.min(cycle_counts):,}\n"
+                                f"  Max:    {np.max(cycle_counts):,}\n"
+                                f"  Median: {np.median(cycle_counts).astype(np.uint64):,}")
 
             # Copy outputs back from device
             results = {}
@@ -322,9 +340,9 @@ class Program:
 
             print("Copy-back complete.", flush=True)
 
-            if self.benchmark:
+            if self.benchmark and not self.metadata.memcpy_mode:
                 cycle_counts = copy_back_benchmark_data(self.runtime, self.metadata)
-                np.save("perf_cycles.npy", cycle_counts)
+                np.save(self.output_dir / "perf_cycles.npy", cycle_counts)
                 # Print min, max, median cycle counts in a more readable format
                 print(f"Cycle count stats:\n"
                       f"  Min:    {np.min(cycle_counts):,}\n"
@@ -347,11 +365,13 @@ if __name__ == "__main__":
     parser.add_argument("input_files", nargs="*", help="Input .npy files for the program")
     parser.add_argument("--benchmark", action="store_true", help="Run in benchmark mode")
     parser.add_argument("--randomize", action="store_true", help="Randomize input data instead of loading from files")
+    parser.add_argument("--repetitions", default=1, type=int, help="Number of repetitions to run")
+    parser.add_argument("--output-dir", default='', help="Output directory for files")
 
     args = parser.parse_args()
 
     # Load the program
-    program = Program(args.program_folder, args.benchmark)
+    program = Program(args.program_folder, args.benchmark, args.repetitions, args.output_dir)
 
     # Load input arrays from .npy files
     inputs = []
@@ -389,5 +409,5 @@ if __name__ == "__main__":
     # Save outputs to .npy files
     for name, output in outputs.items():
         output_file = f"OUT_{name}.npy"
-        np.save(output_file, output)
+        np.save(program.output_dir / output_file, output)
         print(f"Output saved to {output_file}")
