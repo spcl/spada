@@ -371,8 +371,9 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
             stmt_id = task.statements[0]
             stmt = rect.metadata.compute.statements[stmt_id]
             assert isinstance(stmt, spir.ForeachStatement)
-            param_range = stmt.parameter_range[0]
-            current_code.write(f'    __num_dtask_{task.task_id} = {param_range.start.as_ir()};\n')
+            if stmt.parameter_range:
+                param_range = stmt.parameter_range[0]
+                current_code.write(f'    __num_dtask_{task.task_id} = {param_range.start.as_ir()};\n')
         # Also re-block tasks that were unblocked in the previous run
         if task.blocked:
             prefix = "d" if task.task_type == 'data' else ""
