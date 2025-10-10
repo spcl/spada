@@ -79,6 +79,10 @@ def print_summary(results: list[tuple[str, int, bool, str]]):
     print("SUMMARY")
     print("=" * 80)
     
+    import pandas as pd
+    df = pd.DataFrame([{'Program': Path(filename).name[:-5], "Flop": flop_count} for filename, flop_count, _, _, in successful])
+    df.to_csv("flops.csv")
+
     if successful:
         print(f"\nSuccessfully analyzed {len(successful)} file(s):")
         print("-" * 80)
