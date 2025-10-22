@@ -257,6 +257,11 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     if use_memcpy_mode:
         canonicalization.convert_foreach_data_tasks_to_loops(rect, dtypes, kernel.arguments)
 
+    if not disable_benchmarking:
+        benchmark_preamble, benchmark_postamble = _generate_benchmarking_code(header, footer)
+    else:
+        benchmark_preamble = benchmark_postamble = ''
+
     # Convert compute block subgraphs into tasks:
     #    * Make task DAG out of computations
     #    * Any node that has two or more incoming edges (i.e., requires wait) initiates a new task
@@ -291,7 +296,9 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     # Map task IDs to CSL task IDs
     tdag.renumber_tasks(tasks, task_creation_behavior)
 
-    print(f'Stats: Using {sum(1 if t.task_type == "local" else 0 for t in tasks)} local tasks, {sum(1 if t.task_type == "data" else 0 for t in tasks)} data tasks, {len(set(color_map.values()))} colors')
+    print(
+        f'Stats: Using {sum(1 if t.task_type == "local" else 0 for t in tasks)} local tasks, {sum(1 if t.task_type == "data" else 0 for t in tasks)} data tasks, {len(set(color_map.values()))} colors'
+    )
 
     # Generate each task
     max_task_id = csl.LOCAL_TASK_IDS[0] - 1
@@ -319,7 +326,8 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         if task.task_type == 'local':
             current_code.write(f'task task_{task.task_id}() void {{\n')
             try:
-                _generate_task_code(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map, tasks)
+                _generate_task_code(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map, tasks,
+                                    benchmark_postamble)
             except KeyError as e:
                 # If a KeyError occurs with an identifier, it means that it is not defined in the current scope
                 identifier = e.args[0]
@@ -359,6 +367,10 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     current_code.write(f'''\nfn {kernel.name}({", ".join(scalar_arguments)}) void {{
 ''')
 
+    # Write benchmarking code
+    if not disable_benchmarking:
+        current_code.write(benchmark_preamble)
+
     # Copy scalar arguments to local variables
     for argument in scalar_arguments:
         arg_name = argument.split(':')[0].strip().removeprefix('__arg_')
@@ -379,7 +391,6 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
             prefix = "d" if task.task_type == 'data' else ""
             current_code.write(f'    @block({prefix}task_{i}_id);\n')
 
-
     # Activate all source tasks
     non_source_tasks = set(n for i, t in enumerate(tasks) for n, _ in t.outgoing if n != i)
     source_tasks = [t for i, t in enumerate(tasks) if i not in non_source_tasks]
@@ -388,6 +399,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         prefix = "d" if task.task_type == 'data' else ""
         current_code.write(f'    @activate({prefix}task_{i}_id);\n')
     if not source_tasks:
+        current_code.write(benchmark_postamble)
         # Unblock command stream if function is empty
         current_code.write(f'    sys_mod.unblock_cmd_stream();\n')
     current_code.write('}\n')
@@ -396,13 +408,10 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         current_code.write(f'''
 const exit_task_id = @get_local_task_id({max_task_id + 1});
 task exit_task() void {{
+    {benchmark_postamble}
     // On completion, unblock command stream
     sys_mod.unblock_cmd_stream();
 }}''')
-
-    # Write benchmarking code
-    if not disable_benchmarking:
-        _generate_benchmarking_code(header, current_code, footer)
 
     # Finalize footer
     footer.write(f'''
@@ -1165,9 +1174,9 @@ def _generate_data_task(
 
 
 def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringIO, header: StringIO, footer: StringIO,
-                        dsds: list[tuple[str, cslstruct.DataStructureDescriptor]],
-                        dtypes: dict[spir.Identifier, spir.IRType], color_map: dict[str,
-                                                                                    int], tasks: list[tdag.CSLTask]):
+                        dsds: list[tuple[str, cslstruct.DataStructureDescriptor]], dtypes: dict[spir.Identifier,
+                                                                                                spir.IRType],
+                        color_map: dict[str, int], tasks: list[tdag.CSLTask], postamble: str):
     """
     Generates a local task from a CSL task.
     This function converts statements to DSD operations or generates appropriate code.
@@ -1181,6 +1190,7 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
     :param dtypes: A dictionary mapping identifiers to their defined types.
     :param color_map: Dictionary mapping each stream to its respective color id ({name}_color also works).
     :param tasks: A list of all tasks in the kernel.
+    :param postamble: The code to be added at the end of the kernel.
     """
     # Convert task contents:
     # Convert receives/sends from/to arguments to memcpy
@@ -1223,6 +1233,7 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
 
         if next_task == -1 and itedge == tdag.InterTaskEdge.SEQUENCE:
             # Run exit task directly
+            current_code.write(postamble)
             current_code.write(f'    sys_mod.unblock_cmd_stream();\n')
             continue
 
@@ -1243,13 +1254,13 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
                 current_code.write(f'    @unblock({task_id});\n')
 
 
-def _generate_benchmarking_code(header: StringIO, current_code: StringIO, footer: StringIO):
+def _generate_benchmarking_code(header: StringIO, footer: StringIO):
     """
     Generates benchmarking code in the header, current code, and footer.
     
     :param header: A code generator stream for a file's header (where the declarations are).
-    :param current_code: The caret to the code generator at the current position (global).
     :param footer: A code generator stream for a file's footer (the comptime block where the array would be exported).
+    :return: A tuple of (benchmark_preamble, benchmark_postamble) strings to insert into the current code.
     """
     # Generate tsc counters, functions, and imports in header
     header.write("""// Benchmarking counters
@@ -1258,25 +1269,21 @@ var __benchmark_start = @zeros([3]u16);
 var __benchmark_start_ptr = &__benchmark_start;
 var __benchmark_stop = @zeros([3]u16);
 var __benchmark_stop_ptr = &__benchmark_stop;
+""")
 
-fn f_tic() void {
-    timestamp.enable_tsc();
+    benchmark_preamble = """    timestamp.enable_tsc();
     timestamp.get_timestamp(&__benchmark_start);
-    sys_mod.unblock_cmd_stream();
-}
-
-fn f_toc() void {
-      timestamp.get_timestamp(&__benchmark_stop);
-      timestamp.disable_tsc();
-      sys_mod.unblock_cmd_stream();
-}""")
+"""
+    benchmark_postamble = """    timestamp.get_timestamp(&__benchmark_stop);
+    timestamp.disable_tsc();
+"""
 
     # Generate exports for function names and counters in footer
     footer.write('\n    // Benchmarking exports\n')
-    footer.write('    @export_symbol(f_tic);\n')
-    footer.write('    @export_symbol(f_toc);\n')
     footer.write('    @export_symbol(__benchmark_start_ptr, "__benchmark_start");\n')
     footer.write('    @export_symbol(__benchmark_stop_ptr, "__benchmark_stop");\n')
+
+    return benchmark_preamble, benchmark_postamble
 
 
 def _generate_benchmarking_code_in_layout(layout_code: StringIO):
@@ -1287,8 +1294,6 @@ def _generate_benchmarking_code_in_layout(layout_code: StringIO):
     """
     # Generate exports for function names and counters in layout block
     layout_code.write('\n    // Benchmarking exports\n')
-    layout_code.write('    @export_name("f_tic", fn()void);\n')
-    layout_code.write('    @export_name("f_toc", fn()void);\n')
     layout_code.write('    @export_name("__benchmark_start", *[3]u16,  true);\n')
     layout_code.write('    @export_name("__benchmark_stop", *[3]u16,  true);\n')
 
