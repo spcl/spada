@@ -452,9 +452,9 @@ def _collect_colors_globally(kernel: spir.Kernel, rectangles: list[Rectangle[PEB
                 continue  # Unused stream
             outbound, inbound = sends_recvs[stream_decl.stream_name]
             if outbound:
-                channel_is_written.add(stream_decl.routing.channel)
+                channel_is_written.add(stream_decl.stream.routing.channel)
             if inbound:
-                channel_is_read.add(stream_decl.routing.channel)
+                channel_is_read.add(stream_decl.stream.routing.channel)
 
     # Allocate colors for each channel
     max_channel = max(channel_is_read.union(channel_is_written), default=-1)
@@ -538,21 +538,20 @@ def _allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Ke
     # Collect colors from streams in dataflow
     for stream_decl in rect.metadata.dataflow.statements:
         name = name_to_csl(stream_decl.stream_name)
-        cdir = 'x' if stream_decl.dx.eval() != 0 else 'y'
 
         if stream_decl.stream_name not in sends_recvs:
             continue  # Unused stream
         outbound, inbound = sends_recvs[stream_decl.stream_name]
-        if stream_decl.routing is None:
+        if stream_decl.stream.routing is None:
             raise SyntaxError(f'Non-routed stream "{name}". When generating CSL, Spatial IR code must have all streams '
                               'routed.')
-        if stream_decl.routing.channel == 'auto':
+        if stream_decl.stream.routing.channel == 'auto':
             raise SyntaxError(f'"auto" stream channel found in stream "{name}". All streams must be concretized prior '
                               'to lowering to CSL')
 
         if outbound:
             # Look up channel in color map
-            this_color = channel_to_color[channel_offset + stream_decl.routing.channel]
+            this_color = channel_to_color[channel_offset + stream_decl.stream.routing.channel]
 
             # Add to mapping
             result[name + "_OUT"] = csl.COLORS[this_color]
@@ -561,7 +560,7 @@ def _allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Ke
 
         if inbound:
             # Look up channel in color map
-            this_color = channel_to_color[channel_offset + stream_decl.routing.channel]
+            this_color = channel_to_color[channel_offset + stream_decl.stream.routing.channel]
 
             # Add to mapping
             result[name + "_IN"] = csl.COLORS[this_color]
@@ -678,7 +677,7 @@ def _dsd_from_array(array_candidates: dict[str, tuple[spir.FieldDeclaration, lis
     )
 
 
-def _dsd_from_stream(stream_candidates: dict[str, tuple[spir.RelativeStreamDeclaration | spir.KernelArgument,
+def _dsd_from_stream(stream_candidates: dict[str, tuple[spir.StreamDeclaration | spir.KernelArgument,
                                                         int | spir.Expression]],
                      node: spir.Identifier | spir.ArraySlice):
     ident = node if isinstance(node, spir.Identifier) else node.array
@@ -719,12 +718,12 @@ def _collect_unique_dsds(
     # 3. An argument that is a stream or an array of streams in non memcpy mode, or buffer_size > 1 in memcpy mode.
 
     # Collect metadata from dataflow and place blocks
-    stream_candidates: dict[str, tuple[spir.RelativeStreamDeclaration | spir.KernelArgument,
+    stream_candidates: dict[str, tuple[spir.StreamDeclaration | spir.KernelArgument,
                                        int | spir.Expression]] = {}
     array_candidates: dict[str, tuple[spir.FieldDeclaration, list[int | spir.Expression]]] = {}
     stream_args: set[spir.Identifier] = set()
     for df_statement in rect.dataflow.statements:
-        if isinstance(df_statement, spir.RelativeStreamDeclaration):
+        if isinstance(df_statement, spir.StreamDeclaration):
             buffer_size = df_statement.dtype.buffer_size or None
             stream_candidates[df_statement.stream_name.as_ir()] = (df_statement, buffer_size)
     for place_statement in rect.place.statements:
@@ -1024,8 +1023,9 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
             if sent:
                 color_name_outbound = f'@get_color({color_map[name_to_csl(stream.stream_name) + "_OUT"]})'
 
-            if len(stream.routing.hops) == 1:  # Inbound and outbound generated together
-                route = _route_dir(*stream.routing.hops[0].offset)
+            assert isinstance(stream.stream, spir.RelativeStreamDeclaration)
+            if len(stream.stream.routing.hops) == 1:  # Inbound and outbound generated together
+                route = _route_dir(*stream.stream.routing.hops[0].offset)
                 if sent:
                     routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
                         color_name_outbound, 'RAMP', route[1])
@@ -1040,7 +1040,7 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
                         routing_instructions.add(routing_inst)
             else:  # Multi-hop
                 if sent:
-                    first_hop = stream.routing.hops[0]
+                    first_hop = stream.stream.routing.hops[0]
                     route = ('RAMP', _route_dir(*first_hop.offset)[1])
                     routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
                         color_name_outbound, route[0], route[1])
@@ -1049,7 +1049,7 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
                         routing_instructions.add(routing_inst)
                     cur_offx = 0
                     cur_offy = 0
-                    for hop in stream.routing.hops[1:]:
+                    for hop in stream.stream.routing.hops[1:]:
                         route = _route_dir(*hop.offset)
                         cur_offx += hop.offset[0]
                         cur_offy += hop.offset[1]
@@ -1061,7 +1061,7 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
                 if received:
                     cur_offx = 0
                     cur_offy = 0
-                    last_hop = stream.routing.hops[-1]
+                    last_hop = stream.stream.routing.hops[-1]
                     route = (_route_dir(*last_hop.offset)[0], 'RAMP')
                     routing_inst = INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
                         cur_offx, cur_offy, color_name_inbound, route[0], route[1])
@@ -1070,7 +1070,7 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
                         routing_instructions.add(routing_inst)
                     cur_offx += last_hop.offset[0]
                     cur_offy += last_hop.offset[1]
-                    for hop in reversed(stream.routing.hops[:-1]):
+                    for hop in reversed(stream.stream.routing.hops[:-1]):
                         route = _route_dir(*hop.offset)
                         routing_inst = INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
                             cur_offx, cur_offy, color_name_inbound, route[0], route[1])

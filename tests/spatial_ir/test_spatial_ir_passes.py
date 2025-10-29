@@ -20,23 +20,26 @@ def test_canonicalize_singlephase():
         parameters=[],
         arguments=[],
         body=[
-            spir.DataflowBlock([spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('i', 0)), 
-                                spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('j', 0))],
-                               spir.SubgridExpression(_make_range(0, 20), _make_range(0, 30)), [
-                                   spir.RelativeStreamDeclaration(
-                                       spir.StreamType(spir.ScalarType.f32), spir.Identifier('s', 0), _make_number(-1),
-                                       _make_number(1))
-                               ]),
-            spir.ComputeBlock([spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('i', 0)), 
-                               spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('j', 0))],
-                              spir.SubgridExpression(_make_range(0, 30), _make_range(0, 30)), []),
-            spir.DataflowBlock([spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('i', 0)), 
-                                spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('j', 0))],
-                               spir.SubgridExpression(_make_range(20, 30), _make_range(0, 30)), [
-                                   spir.RelativeStreamDeclaration(
-                                       spir.StreamType(spir.ScalarType.f32), spir.Identifier('s', 0), _make_number(1),
-                                       _make_number(-1))
-                               ])
+            spir.DataflowBlock([
+                spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('i', 0)),
+                spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('j', 0))
+            ], spir.SubgridExpression(_make_range(0, 20), _make_range(0, 30)), [
+                spir.StreamDeclaration(
+                    spir.StreamType(spir.ScalarType.f32), spir.Identifier('s', 0),
+                    spir.RelativeStreamDeclaration(_make_number(-1), _make_number(1)))
+            ]),
+            spir.ComputeBlock([
+                spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('i', 0)),
+                spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('j', 0))
+            ], spir.SubgridExpression(_make_range(0, 30), _make_range(0, 30)), []),
+            spir.DataflowBlock([
+                spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('i', 0)),
+                spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('j', 0))
+            ], spir.SubgridExpression(_make_range(20, 30), _make_range(0, 30)), [
+                spir.StreamDeclaration(
+                    spir.StreamType(spir.ScalarType.f32), spir.Identifier('s', 0),
+                    spir.RelativeStreamDeclaration(_make_number(1), _make_number(-1)))
+            ])
         ])
     ckernel = canonicalization.canonicalize_phases(kernel)
     assert ckernel.as_ir() == '''kernel @test<>() {
@@ -60,24 +63,28 @@ def test_canonicalize_multiphase():
         parameters=[],
         arguments=[],
         body=[
-            spir.DataflowBlock([spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('i', 0)), 
-                                spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('j', 0))],
-                               spir.SubgridExpression(_make_range(0, 20), _make_range(0, 30)), [
-                                   spir.RelativeStreamDeclaration(
-                                       spir.StreamType(spir.ScalarType.f32), spir.Identifier('s', 0), _make_number(-1),
-                                       _make_number(1))
-                               ]),
-            spir.ComputeBlock([spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('i', 0)), 
-                               spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('j', 0))],
-                              spir.SubgridExpression(_make_range(0, 30), _make_range(0, 30)), []),
+            spir.DataflowBlock([
+                spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('i', 0)),
+                spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('j', 0))
+            ], spir.SubgridExpression(_make_range(0, 20), _make_range(0, 30)), [
+                spir.StreamDeclaration(
+                    spir.StreamType(spir.ScalarType.f32), spir.Identifier('s', 0),
+                    spir.RelativeStreamDeclaration(_make_number(-1), _make_number(1)))
+            ]),
+            spir.ComputeBlock([
+                spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('i', 0)),
+                spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('j', 0))
+            ], spir.SubgridExpression(_make_range(0, 30), _make_range(0, 30)), []),
             spir.Phase([], [], []),
-            spir.DataflowBlock([spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('i', 0)), 
-                                spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('j', 0))],
-                               spir.SubgridExpression(_make_range(20, 30), _make_range(0, 30)), [
-                                   spir.RelativeStreamDeclaration(
-                                       spir.StreamType(spir.ScalarType.f32), spir.Identifier('s', 0), _make_number(1),
-                                       _make_number(-1))
-                               ])
+            spir.DataflowBlock([
+                spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('i', 0)),
+                spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('j', 0))
+            ], spir.SubgridExpression(_make_range(20, 30), _make_range(0, 30)), [
+                spir.StreamDeclaration(
+                    spir.StreamType(spir.ScalarType.f32), spir.Identifier('s', 0), 
+                    spir.RelativeStreamDeclaration(_make_number(1), _make_number(-1))
+                )
+            ])
         ])
     ckernel = canonicalization.canonicalize_phases(kernel)
     assert ckernel.as_ir() == '''kernel @test<>() {

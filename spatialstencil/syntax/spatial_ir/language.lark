@@ -40,6 +40,7 @@ array_type : standard_type "[" value_expr ("," value_expr)* "]"
 
 // Annotations
 !annotation : "readonly" | "writeonly" | "compiletime"
+!field_decl_qualifier : "extern"
 annotations : annotation (annotation)*
 
 ?builtin_type : array_type | standard_type
@@ -112,12 +113,15 @@ subgrid_expression_2d : "[" range_expression "," range_expression "]"
 // Declarations and routing
 
 !auto : "auto"
+!direction : "in" | "out"
 hop : "(" posneg_integer_literal "," posneg_integer_literal ")"  // 2D at the moment, might expand
 hops : "[" hop ("," hop)* "]"
 routing : "hops" "=" (auto | hops) "," "channel" "=" (auto | integer_literal)
+relative_stream_declaration : "relative_stream" "(" value_expr "," value_expr ")" ("{" routing "}")?
+extern_stream_declaration : "extern_stream" "(" direction ")" ("{" routing "}")?
 
-field_declaration : builtin_type identifier  (";")? //(";" | NEWLINE)
-stream_declaration : stream_type identifier "=" "relative_stream" "(" value_expr "," value_expr ")" ("{" routing "}")?  (";")?
+field_declaration : field_decl_qualifier? builtin_type identifier  (";")? //(";" | NEWLINE)
+stream_declaration : stream_type identifier "=" (relative_stream_declaration | extern_stream_declaration) (";")?
 vars : identifier ("," identifier)*
 typed_var : scalar_type identifier
 typed_vars : typed_var ("," typed_var)*

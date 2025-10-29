@@ -39,6 +39,8 @@ class TreeToSpatialIR(lark.Transformer):
     false = lambda self, _: False
     prefix = lambda self, _: None
     auto = lambda self, _: 'auto'
+    direction = lambda self, val: str(val[0])
+    field_decl_qualifier = lambda self, val: str(val[0])
 
     def NEWLINE(self, args):
         return None
@@ -162,11 +164,18 @@ class TreeToSpatialIR(lark.Transformer):
     range_expression = irnodes.RangeExpression.from_lark
 
     # Declarations and routing
+    def field_declaration(self, args):
+        is_extern = False
+        if len(args) == 3:
+            qualifier, *args = args
+            if qualifier == 'extern':
+                is_extern = True
+        return irnodes.FieldDeclaration(*args, is_extern=is_extern)
+
     def hop(self, args):
         return irnodes.RoutingHop(tuple(args))
 
     routing = irnodes.RoutingDeclaration.from_lark
-    field_declaration = irnodes.FieldDeclaration.from_lark
     subgrid_expression_2d = irnodes.SubgridExpression.from_lark
 
     def hop(self, args):
@@ -174,7 +183,13 @@ class TreeToSpatialIR(lark.Transformer):
         return irnodes.RoutingHop(o)
 
     def stream_declaration(self, args):
+        return irnodes.StreamDeclaration(*args)
+
+    def relative_stream_declaration(self, args):
         return irnodes.RelativeStreamDeclaration(*args)
+
+    def extern_stream_declaration(self, args):
+        return irnodes.ExternStreamDeclaration(*args)
 
     # Scopes
     def _scope_wrapper(self, cls, args):
