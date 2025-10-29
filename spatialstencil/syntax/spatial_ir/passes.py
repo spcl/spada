@@ -157,7 +157,9 @@ def constexpr_propagation(kernel: spa.Kernel) -> spa.Kernel:
 
 
 def mark_readonly_writeonly_arguments(kernel: spa.Kernel) -> spa.Kernel:
-    """Marks readonly and writeonly arguments based on their usage in the kernel. Modifies the kernel in place and returns it.
+    """
+    Marks readonly and writeonly arguments based on their usage in the kernel.
+    Modifies the kernel in place and returns it.
     """
 
     visitor = ArgumentUseVisitor()
@@ -171,6 +173,54 @@ def mark_readonly_writeonly_arguments(kernel: spa.Kernel) -> spa.Kernel:
         arg.writeonly = arg.identifier in writeonly
 
     return kernel
+
+
+class _PlaceFieldPruner(spa.NodeTransformer):
+
+    def __init__(self, used_keys: set[spa.Identifier]):
+        super().__init__()
+        self.used_keys = used_keys
+
+    def visit_FieldDeclaration(self, node: spa.FieldDeclaration):
+        if node.field_name not in self.used_keys:
+            return None
+        return node
+
+
+class _IdentifierUsageCollector(spa.NodeVisitor):
+
+    def __init__(self):
+        super().__init__()
+        self.used: set[spa.Identifier] = set()
+
+    def collect(self, node: spa.SpatialNode) -> set[spa.Identifier]:
+        self.visit(node)
+        return self.used
+
+    def visit_PlaceBlock(self, node: spa.PlaceBlock):
+        # Do not traverse into place blocks
+        return node
+
+    def visit_DataflowBlock(self, node: spa.DataflowBlock):
+        # Do not traverse into dataflow blocks
+        return node
+
+    def visit_Identifier(self, node: spa.Identifier):
+        self.used.add(node)
+        return node
+
+
+def prune_unused_fields(kernel: spa.Kernel) -> spa.Kernel:
+    """
+    Prune unreferenced place fields.
+    The pass mutates ``kernel`` in place, and drops any ``place`` declarations that are left unused.
+
+    :param kernel: The kernel to prune.
+    :return: The pruned kernel.
+    """
+    used_keys = _IdentifierUsageCollector().collect(kernel)
+    pruner = _PlaceFieldPruner(used_keys)
+    return pruner.visit(kernel)
 
 
 class ArgumentUseVisitor(spa.NodeVisitor):
@@ -317,16 +367,15 @@ def eliminate_extraneous_copies(kernel: spa.Kernel) -> spa.Kernel:
     * the identifier can be replaced with the original source without any
       intervening writes to that source.
 
-    The pass mutates *kernel* in place, erases qualifying copy statements, and
-    renames later uses of their destinations when needed. Afterwards, it drops
-    any ``place`` declarations that are left unused.
+    The pass mutates ``kernel`` in place, erases qualifying copy statements, and
+    renames later uses of their destinations when needed.
+
+    :param kernel: The kernel to optimize.
+    :return: The optimized kernel.
     """
 
     eliminator = _ExtraneousCopyEliminator(is_copy)
     eliminator.transform_kernel(kernel)
-    used_keys = _IdentifierUsageCollector().collect(kernel)
-    pruner = _PlaceFieldPruner(used_keys)
-    pruner.visit(kernel)
     return kernel
 
 
@@ -480,49 +529,6 @@ class _CopyDecision(enum.Enum):
     REMOVE_UNUSED = enum.auto()
     RENAME_USES = enum.auto()
     KEEP = enum.auto()
-
-
-class _PlaceFieldPruner(spa.NodeTransformer):
-
-    def __init__(self, used_keys: set[tuple[str, int]]):
-        super().__init__()
-        self._used_keys = used_keys
-
-    def visit_PlaceBlock(self, node: spa.PlaceBlock):
-        node.variables = [self.visit(var) for var in node.variables]
-        node.subgrid = self.visit(node.subgrid)
-        node.statements = [stmt for stmt in node.statements if _identifier_key(stmt.field_name) in self._used_keys]
-        return node
-
-
-class _IdentifierUsageCollector(spa.NodeVisitor):
-
-    def __init__(self):
-        super().__init__()
-        self._used: set[tuple[str, int]] = set()
-
-    def collect(self, node: spa.SpatialNode) -> set[tuple[str, int]]:
-        self.visit(node)
-        return self._used
-
-    def visit_Identifier(self, node: spa.Identifier):
-        self._used.add(_identifier_key(node))
-        return node
-
-    def visit_FieldDeclaration(self, node: spa.FieldDeclaration):
-        if isinstance(node.dtype, spa.SpatialNode):
-            self.visit(node.dtype)
-        return node
-
-    def visit_TypedIdentifier(self, node: spa.TypedIdentifier):
-        if isinstance(node.dtype, spa.SpatialNode):
-            self.visit(node.dtype)
-        return node
-
-    def visit_KernelArgument(self, node: spa.KernelArgument):
-        if isinstance(node.dtype, spa.SpatialNode):
-            self.visit(node.dtype)
-        return node
 
 
 class _IdentifierRenameTransformer(spa.NodeTransformer):
