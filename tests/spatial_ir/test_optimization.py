@@ -36,6 +36,7 @@ def test_remove_copy_prior_to_send() -> None:
     kernel = parse_kernel(code)
 
     passes.eliminate_extraneous_copies(kernel)
+    passes.prune_unused_fields(kernel)
 
     compute = _get_block(kernel, spa.ComputeBlock)
     assert len(compute.statements) == 1
@@ -66,6 +67,7 @@ def test_chain_of_copies_is_removed() -> None:
     kernel = parse_kernel(code)
 
     passes.eliminate_extraneous_copies(kernel)
+    passes.prune_unused_fields(kernel)
 
     compute = _get_block(kernel, spa.ComputeBlock)
     assert len(compute.statements) == 1
@@ -130,6 +132,7 @@ def test_map_copy_removed_and_fields_pruned() -> None:
     kernel = parse_kernel(code)
 
     passes.eliminate_extraneous_copies(kernel)
+    passes.prune_unused_fields(kernel)
 
     compute = _get_block(kernel, spa.ComputeBlock)
     send_stmt = compute.statements[-1]
@@ -192,6 +195,7 @@ def test_rename_propagates_into_for_loop() -> None:
     kernel = parse_kernel(code)
 
     passes.eliminate_extraneous_copies(kernel)
+    passes.prune_unused_fields(kernel)
 
     compute = _get_block(kernel, spa.ComputeBlock)
     loop = next(stmt for stmt in compute.statements if isinstance(stmt, spa.ForStatement))
@@ -223,6 +227,7 @@ def test_rename_propagates_into_foreach_loop() -> None:
     kernel = parse_kernel(code)
 
     passes.eliminate_extraneous_copies(kernel)
+    passes.prune_unused_fields(kernel)
 
     compute = _get_block(kernel, spa.ComputeBlock)
     foreach_stmt = next(stmt for stmt in compute.statements if isinstance(stmt, spa.ForeachStatement))
