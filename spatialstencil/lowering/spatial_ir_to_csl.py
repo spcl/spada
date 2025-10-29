@@ -54,6 +54,9 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     # Check if we are streaming or using memcpy mode
     use_memcpy_mode = analysis.kernel_uses_memcpy_mode(kernel)
 
+    # Prune unused fields from place blocks
+    kernel = passes.prune_unused_fields(kernel)
+
     # Create mapping between SpIR blocks and PE rectangles. Creates empty blocks as necessary
     rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
 
