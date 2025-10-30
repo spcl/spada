@@ -61,7 +61,7 @@ def concretize_parameters(kernel: spa.Kernel, **parameters: int) -> spa.Kernel:
     param_names = [p.name for p in kernel.parameters]
     for param in parameters.keys():
         if param not in param_names:
-            warnings.warn(f'Parameter {param} is not a parameter of kernel {kernel.name}')
+            warnings.warn(f"Parameter {param} is not a parameter of kernel {kernel.name}")
 
     return Concretizer(parameters).visit(kernel)
 
@@ -81,9 +81,9 @@ class ConstExprPropagation(spa.NodeTransformer):
         value: spa.Expression = self.generic_visit(node.value)
         if isinstance(value.value, spa.ConstantLiteral):
             restype = _result_type_of(value.value.dtype, optype=node.op)
-            if node.op == '+':
+            if node.op == "+":
                 cval = +value.value.value
-            elif node.op == '-':
+            elif node.op == "-":
                 cval = -value.value.value
             else:
                 raise TypeError(f'Unrecognized unary operator "{node.op}"')
@@ -97,29 +97,29 @@ class ConstExprPropagation(spa.NodeTransformer):
         right: spa.Expression = self.generic_visit(node.right)
         if isinstance(left.value, spa.ConstantLiteral) and isinstance(right.value, spa.ConstantLiteral):
             restype = _result_type_of(left.value.dtype, right.value.dtype, optype=node.op)
-            if node.op == '+':
+            if node.op == "+":
                 result = left.value.value + right.value.value
-            elif node.op == '-':
+            elif node.op == "-":
                 result = left.value.value - right.value.value
-            elif node.op == '*':
+            elif node.op == "*":
                 result = left.value.value * right.value.value
-            elif node.op == '/':
+            elif node.op == "/":
                 result = left.value.value / right.value.value
-            elif node.op == '//':
+            elif node.op == "//":
                 result = left.value.value // right.value.value
-            elif node.op == '%':
+            elif node.op == "%":
                 result = left.value.value % right.value.value
-            elif node.op == '==':
+            elif node.op == "==":
                 result = left.value.value == right.value.value
-            elif node.op == '!=':
+            elif node.op == "!=":
                 result = left.value.value == right.value.value
-            elif node.op == '<':
+            elif node.op == "<":
                 result = left.value.value == right.value.value
-            elif node.op == '<=':
+            elif node.op == "<=":
                 result = left.value.value == right.value.value
-            elif node.op == '>':
+            elif node.op == ">":
                 result = left.value.value == right.value.value
-            elif node.op == '>=':
+            elif node.op == ">=":
                 result = left.value.value == right.value.value
             else:
                 raise TypeError(f'Unrecognized binary operator "{node.op}"')
@@ -133,8 +133,11 @@ class ConstExprPropagation(spa.NodeTransformer):
         cond: spa.Expression = self.generic_visit(node.cond)
         iftrue: spa.Expression = self.generic_visit(node.if_true)
         iffalse: spa.Expression = self.generic_visit(node.if_false)
-        if (isinstance(cond.value, spa.ConstantLiteral) and isinstance(iftrue.value, spa.ConstantLiteral) and
-                isinstance(iffalse.value, spa.ConstantLiteral)):
+        if (
+            isinstance(cond.value, spa.ConstantLiteral)
+            and isinstance(iftrue.value, spa.ConstantLiteral)
+            and isinstance(iffalse.value, spa.ConstantLiteral)
+        ):
             restype = _result_type_of(iftrue.value.dtype, iffalse.value.dtype, optype=None)
             result = iftrue.value.value if cond.value.value else iffalse.value.value
             return spa.ConstantLiteral(result, restype)
@@ -226,10 +229,10 @@ def prune_unused_fields(kernel: spa.Kernel) -> spa.Kernel:
 class ArgumentUseVisitor(spa.NodeVisitor):
     """
     Visits a kernel and collects all uses of each argument:
-    
+
     - is it being read?
     - is it being written to?
-    
+
     Then, we can get the readonly and writeonly arguments from this.
     """
 
@@ -293,29 +296,30 @@ class CopyCandidate:
     source: spa.Identifier
 
 
-def _normalised_indices(indices: list[spa.Expression | int]) -> tuple[str, ...] | None:
-    normalised: list[str] = []
+def _normalized_indices(indices: list[spa.Expression | int]) -> tuple[str, ...] | None:
+    normalized: list[str] = []
     for index in indices:
         if isinstance(index, spa.Expression):
-            normalised.append(index.as_ir())
+            normalized.append(index.as_ir())
         elif isinstance(index, int):
-            normalised.append(str(index))
+            normalized.append(str(index))
         else:
             return None
-    return tuple(normalised)
+    return tuple(normalized)
 
 
 def _extract_access(
-        node: spa.Identifier | spa.ArraySlice | spa.Expression) -> tuple[spa.Identifier, tuple[str, ...]] | None:
+    node: spa.Identifier | spa.ArraySlice | spa.Expression,
+) -> tuple[spa.Identifier, tuple[str, ...]] | None:
     if isinstance(node, spa.Expression):
         return _extract_access(node.value)
     if isinstance(node, spa.Identifier):
         return node, ()
     if isinstance(node, spa.ArraySlice) and isinstance(node.array, spa.Identifier):
-        normalised = _normalised_indices(node.indices)
-        if normalised is None:
+        normalized = _normalized_indices(node.indices)
+        if normalized is None:
             return None
-        return node.array, normalised
+        return node.array, normalized
     return None
 
 
@@ -333,9 +337,9 @@ def _copy_candidate_from_assignment(assignment: spa.AssignmentStatement) -> Copy
 
 def is_copy(statement: spa.AssignmentStatement | spa.MapStatement) -> CopyCandidate | None:
     """
-    Return copy details when *statement* represents a simple data movement.
+    Return copy details when a statement represents a simple data movement.
 
-    The predicate recognises assignments or map statements that merely forward
+    The predicate recognizes assignments or map statements that merely forward
     data from one identifier to another without additional computation.
 
     :param statement: The statement to analyze.
@@ -358,7 +362,7 @@ def is_copy(statement: spa.AssignmentStatement | spa.MapStatement) -> CopyCandid
 
 def eliminate_extraneous_copies(kernel: spa.Kernel) -> spa.Kernel:
     """
-    Remove redundant copy statements and prune unreferenced place fields.
+    Remove redundant copy statements.
 
     A copy is considered redundant when ``is_copy`` identifies it as such and it
     can be deleted without changing program semantics. Safe removal requires:
@@ -373,23 +377,36 @@ def eliminate_extraneous_copies(kernel: spa.Kernel) -> spa.Kernel:
     :param kernel: The kernel to optimize.
     :return: The optimized kernel.
     """
-
-    eliminator = _ExtraneousCopyEliminator(is_copy)
+    copies_to_remove = _ExtraneousCopyIdentifier()
+    copies_to_remove.visit(kernel)
+    eliminator = _ExtraneousCopyEliminator(copies_to_remove.copy_candidates)
     eliminator.transform_kernel(kernel)
     return kernel
 
 
-def _identifier_key(identifier: spa.Identifier) -> tuple[str, int]:
-    return identifier.name, identifier.version
+class _ExtraneousCopyIdentifier(spa.NodeVisitor):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.copy_candidates: list[spa.SpatialNode] = []
+
+    def visit_AssignmentStatement(self, node: spa.AssignmentStatement):
+        if is_copy(node):
+            self.copy_candidates.append(node)
+        return self.generic_visit(node)
+
+    def visit_MapStatement(self, node: spa.MapStatement):
+        if is_copy(node):
+            self.copy_candidates.append(node)
+        return self.generic_visit(node)
 
 
 class _ExtraneousCopyEliminator:
 
     def __init__(
         self,
-        predicate: Callable[[spa.AssignmentStatement | spa.MapStatement], CopyCandidate | None],
+        candidates: list[spa.SpatialNode],
     ) -> None:
-        self._predicate = predicate
+        self.candidates = candidates
 
     def transform_kernel(self, kernel: spa.Kernel) -> None:
         new_body: list[spa.PlaceBlock | spa.DataflowBlock | spa.ComputeBlock | spa.Phase] = []
@@ -402,21 +419,17 @@ class _ExtraneousCopyEliminator:
         if isinstance(node, spa.ComputeBlock):
             self._transform_compute_block(node)
         elif isinstance(node, spa.Phase):
-            for place_block in node.place:
-                self._transform_top_level(place_block)
-            for dataflow_block in node.dataflow:
-                self._transform_top_level(dataflow_block)
             for compute_block in node.compute:
-                self._transform_top_level(compute_block)
+                self._transform_compute_block(compute_block)
 
     def _transform_compute_block(self, block: spa.ComputeBlock) -> None:
-        rename_map: dict[tuple[str, int], spa.Identifier] = {}
+        rename_map: dict[spa.Identifier, spa.Identifier] = {}
         block.statements = self._process_sequence(block.statements, rename_map)
 
     def _process_sequence(
         self,
         statements: list[spa.Statement],
-        rename_map: dict[tuple[str, int], spa.Identifier],
+        rename_map: dict[spa.Identifier, spa.Identifier],
         allow_removal: bool = True,
     ) -> list[spa.Statement]:
         result: list[spa.Statement] = []
@@ -427,7 +440,7 @@ class _ExtraneousCopyEliminator:
 
             stmt_for_analysis = copy.deepcopy(stmt)
             if rename_map:
-                stmt_for_analysis = _IdentifierRenameTransformer(rename_map).visit(stmt_for_analysis)
+                stmt_for_analysis = FindAndReplace(rename_map).visit(stmt_for_analysis)
 
             if isinstance(stmt_for_analysis, (spa.AssignmentStatement, spa.MapStatement)):
                 candidate = self._predicate(stmt_for_analysis)
@@ -438,7 +451,7 @@ class _ExtraneousCopyEliminator:
                 dest_key = _identifier_key(candidate.destination)
                 src_identifier = self._resolve_identifier(candidate.source, rename_map)
                 decision = self._analyze_copy_effect(
-                    statements[index + 1:],
+                    statements[index + 1 :],
                     dest_key,
                     _identifier_key(src_identifier),
                     rename_map,
@@ -460,8 +473,9 @@ class _ExtraneousCopyEliminator:
 
         return result
 
-    def _transform_statement(self, stmt: spa.Statement, rename_map: dict[tuple[str, int],
-                                                                         spa.Identifier]) -> spa.Statement:
+    def _transform_statement(
+        self, stmt: spa.Statement, rename_map: dict[tuple[str, int], spa.Identifier]
+    ) -> spa.Statement:
         if isinstance(stmt, spa.ForStatement):
             stmt.body = self._process_sequence(stmt.body, rename_map.copy(), allow_removal=False)
         elif isinstance(stmt, spa.AsyncBlock):
@@ -472,8 +486,9 @@ class _ExtraneousCopyEliminator:
             stmt.body = self._process_sequence(stmt.body, rename_map.copy(), allow_removal=False)
         return stmt
 
-    def _resolve_identifier(self, identifier: spa.Identifier, rename_map: dict[tuple[str, int],
-                                                                               spa.Identifier]) -> spa.Identifier:
+    def _resolve_identifier(
+        self, identifier: spa.Identifier, rename_map: dict[tuple[str, int], spa.Identifier]
+    ) -> spa.Identifier:
         key = _identifier_key(identifier)
         seen: set[tuple[str, int]] = set()
         current = identifier
@@ -496,7 +511,7 @@ class _ExtraneousCopyEliminator:
         dest_key: tuple[str, int],
         source_key: tuple[str, int],
         rename_map: dict[tuple[str, int], spa.Identifier],
-    ) -> '_CopyDecision':
+    ) -> "_CopyDecision":
         temp_map = rename_map.copy()
         dest_used = False
         source_written = False
@@ -599,13 +614,13 @@ class _ReadWriteCollector(spa.NodeVisitor):
         super().__init__()
         self.reads: set[tuple[str, int]] = set()
         self.writes: set[tuple[str, int]] = set()
-        self._context_stack: list[str] = ['read']
+        self._context_stack: list[str] = ["read"]
 
     def visit_AssignmentStatement(self, node: spa.AssignmentStatement):
-        self._context_stack.append('write')
+        self._context_stack.append("write")
         self.visit(node.destination)
         self._context_stack.pop()
-        self._context_stack.append('read')
+        self._context_stack.append("read")
         self.visit(node.source)
         self._context_stack.pop()
 
@@ -615,51 +630,51 @@ class _ReadWriteCollector(spa.NodeVisitor):
         self.visit(node.array)
         self._context_stack.pop()
         for idx in node.indices:
-            self._context_stack.append('read')
+            self._context_stack.append("read")
             self.visit(idx)
             self._context_stack.pop()
 
     def visit_Identifier(self, node: spa.Identifier):
         key = _identifier_key(node)
-        if self._context_stack[-1] == 'write':
+        if self._context_stack[-1] == "write":
             self.writes.add(key)
         else:
             self.reads.add(key)
 
     def visit_SendStatement(self, node: spa.SendStatement):
-        self._context_stack.append('read')
+        self._context_stack.append("read")
         self.visit(node.local_array)
         self.visit(node.stream_name)
         self._context_stack.pop()
         if node.completion_name:
-            self._context_stack.append('write')
+            self._context_stack.append("write")
             self.visit(node.completion_name)
             self._context_stack.pop()
 
     def visit_ReceiveStatement(self, node: spa.ReceiveStatement):
-        self._context_stack.append('write')
+        self._context_stack.append("write")
         self.visit(node.local_array)
         self._context_stack.pop()
-        self._context_stack.append('read')
+        self._context_stack.append("read")
         self.visit(node.stream_name)
         self._context_stack.pop()
         if node.completion_name:
-            self._context_stack.append('write')
+            self._context_stack.append("write")
             self.visit(node.completion_name)
             self._context_stack.pop()
 
     def visit_ReceiveGenerator(self, node: spa.ReceiveGenerator):
-        self._context_stack.append('read')
+        self._context_stack.append("read")
         self.visit(node.stream_name)
         self._context_stack.pop()
 
     def visit_ForeachStatement(self, node: spa.ForeachStatement):
-        self._context_stack.append('write')
+        self._context_stack.append("write")
         for var in node.variables:
             self.visit(var)
         self.visit(node.stream_variable)
         self._context_stack.pop()
-        self._context_stack.append('read')
+        self._context_stack.append("read")
         for rng in node.parameter_range:
             self.visit(rng)
         self.visit(node.receive_stream)
@@ -667,32 +682,32 @@ class _ReadWriteCollector(spa.NodeVisitor):
         for stmt in node.body:
             self.visit(stmt)
         if node.completion_name:
-            self._context_stack.append('write')
+            self._context_stack.append("write")
             self.visit(node.completion_name)
             self._context_stack.pop()
 
     def visit_MapStatement(self, node: spa.MapStatement):
-        self._context_stack.append('write')
+        self._context_stack.append("write")
         for var in node.variables:
             self.visit(var)
         self._context_stack.pop()
-        self._context_stack.append('read')
+        self._context_stack.append("read")
         for rng in node.range_expression:
             self.visit(rng)
         self._context_stack.pop()
         for stmt in node.body:
             self.visit(stmt)
         if node.completion_name:
-            self._context_stack.append('write')
+            self._context_stack.append("write")
             self.visit(node.completion_name)
             self._context_stack.pop()
 
     def visit_ForStatement(self, node: spa.ForStatement):
-        self._context_stack.append('write')
+        self._context_stack.append("write")
         for var in node.variables:
             self.visit(var)
         self._context_stack.pop()
-        self._context_stack.append('read')
+        self._context_stack.append("read")
         for rng in node.range_expression:
             self.visit(rng)
         self._context_stack.pop()
@@ -701,41 +716,41 @@ class _ReadWriteCollector(spa.NodeVisitor):
 
     def visit_AsyncBlock(self, node: spa.AsyncBlock):
         if node.completion_name is not None:
-            self._context_stack.append('write')
+            self._context_stack.append("write")
             self.visit(node.completion_name)
             self._context_stack.pop()
         for stmt in node.body:
             self.visit(stmt)
 
     def visit_AwaitCompletionStatement(self, node: spa.AwaitCompletionStatement):
-        self._context_stack.append('read')
+        self._context_stack.append("read")
         self.visit(node.completion_name)
         self._context_stack.pop()
 
     def visit_Completion(self, node: spa.Completion):
-        self._context_stack.append('write')
+        self._context_stack.append("write")
         self.visit(node.name)
         self._context_stack.pop()
 
     def visit_TypedIdentifier(self, node: spa.TypedIdentifier):
-        self._context_stack.append('write')
+        self._context_stack.append("write")
         self.visit(node.identifier)
         self._context_stack.pop()
 
     def visit_FieldDeclaration(self, node: spa.FieldDeclaration):
-        self._context_stack.append('write')
+        self._context_stack.append("write")
         self.visit(node.field_name)
         self._context_stack.pop()
 
     def visit_KernelArgument(self, node: spa.KernelArgument):
-        self._context_stack.append('write')
+        self._context_stack.append("write")
         self.visit(node.identifier)
         self._context_stack.pop()
 
     def visit_RangeExpression(self, node: spa.RangeExpression):
         for expr in (node.start, node.stop, node.step):
             if expr is not None:
-                self._context_stack.append('read')
+                self._context_stack.append("read")
                 self.visit(expr)
                 self._context_stack.pop()
 

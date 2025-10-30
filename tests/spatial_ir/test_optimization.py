@@ -1,12 +1,15 @@
 from spatialstencil.syntax.spatial_ir import irnodes as spa
 from spatialstencil.syntax.spatial_ir import parser, passes
+from typing import TypeVar
+import pytest
 
+T = TypeVar('T')
 
 def parse_kernel(code: str) -> spa.Kernel:
     return parser.parse_string(code, "test.sptl")
 
 
-def _get_block(kernel: spa.Kernel, block_type: type) -> spa.SpatialNode:
+def _get_block(kernel: spa.Kernel, block_type: type[T]) -> T:
     for stmt in kernel.body:
         if isinstance(stmt, block_type):
             return stmt
@@ -239,6 +242,38 @@ def test_rename_propagates_into_foreach_loop() -> None:
     assert "tmp" not in {decl.field_name.name for decl in place.statements}
 
 
+@pytest.mark.parametrize('internal_value', ('tmp', 'val', 'out'))
+def test_write_after_read_copy(internal_value: str) -> None:
+    code = f"""
+    kernel @for_loop_copy<N>(stream<f32, 1>[N] writeonly output) {{
+        place u16 i, u16 j in [0:N, 0:1] {{
+            f32 tmp;
+            f32 val;
+            f32 out;
+            f32 out2;
+        }}
+        compute u16 i, u16 j in [0:N, 0:1] {{
+            tmp = 0;
+            for u16 k in [0:2] {{
+                out = tmp;
+                tmp = {internal_value} + k;
+            }}
+        }}
+    }}"""
+    kernel = parse_kernel(code)
+
+    passes.eliminate_extraneous_copies(kernel)
+    passes.prune_unused_fields(kernel)
+
+    compute = _get_block(kernel, spa.ComputeBlock)
+    loop = next(stmt for stmt in compute.statements if isinstance(stmt, spa.ForStatement))
+    body_assign = _first_assignment(loop.body)
+    assert isinstance(body_assign.source.value, spa.Identifier)
+    assert body_assign.source.value.name == "val"
+
+    place = _get_block(kernel, spa.PlaceBlock)
+    assert "tmp" not in {decl.field_name.name for decl in place.statements}
+
+
 if __name__ == '__main__':
-    import pytest
     pytest.main([__file__])
