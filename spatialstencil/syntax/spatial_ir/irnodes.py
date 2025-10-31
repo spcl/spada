@@ -321,7 +321,7 @@ class ArraySlice(SpatialNode):
         assert isinstance(self.array, Identifier)
         assert isinstance(self.indices, list)
         assert all(isinstance(idx, (Expression, RangeExpression)) for idx in self.indices)
- 
+
     def as_ir(self, indent: int = 0) -> str:
         index_strs = []
         for idx in self.indices:

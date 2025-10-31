@@ -133,11 +133,8 @@ class ConstExprPropagation(spa.NodeTransformer):
         cond: spa.Expression = self.generic_visit(node.cond)
         iftrue: spa.Expression = self.generic_visit(node.if_true)
         iffalse: spa.Expression = self.generic_visit(node.if_false)
-        if (
-            isinstance(cond.value, spa.ConstantLiteral)
-            and isinstance(iftrue.value, spa.ConstantLiteral)
-            and isinstance(iffalse.value, spa.ConstantLiteral)
-        ):
+        if (isinstance(cond.value, spa.ConstantLiteral) and isinstance(iftrue.value, spa.ConstantLiteral) and
+                isinstance(iffalse.value, spa.ConstantLiteral)):
             restype = _result_type_of(iftrue.value.dtype, iffalse.value.dtype, optype=None)
             result = iftrue.value.value if cond.value.value else iffalse.value.value
             return spa.ConstantLiteral(result, restype)
@@ -310,9 +307,17 @@ def _normalized_indices(indices: list[spa.Expression | int]) -> tuple[str, ...] 
 
 def _extract_access(
     node: spa.Identifier | spa.ArraySlice | spa.Expression,
+    allow_constants: bool,
 ) -> tuple[spa.Identifier, tuple[str, ...]] | None:
     if isinstance(node, spa.Expression):
-        return _extract_access(node.value)
+        if allow_constants:
+            try:  # Try to evaluate constant expressions
+                val = node.eval()
+                if val is not node.value:
+                    return node.value, None
+            except ValueError:
+                pass
+        return _extract_access(node.value, False)
     if isinstance(node, spa.Identifier):
         return node, ()
     if isinstance(node, spa.ArraySlice) and isinstance(node.array, spa.Identifier):
@@ -324,13 +329,13 @@ def _extract_access(
 
 
 def _copy_candidate_from_assignment(assignment: spa.AssignmentStatement) -> CopyCandidate | None:
-    dest_access = _extract_access(assignment.destination)
+    dest_access = _extract_access(assignment.destination, False)
     if dest_access is None:
         return None
-    src_access = _extract_access(assignment.source)
+    src_access = _extract_access(assignment.source, True)
     if src_access is None:
         return None
-    if dest_access[1] != src_access[1]:
+    if src_access[1] is not None and dest_access[1] != src_access[1]:
         return None
     return CopyCandidate(dest_access[0], src_access[0])
 
@@ -367,9 +372,10 @@ def eliminate_extraneous_copies(kernel: spa.Kernel) -> spa.Kernel:
     A copy is considered redundant when ``is_copy`` identifies it as such and it
     can be deleted without changing program semantics. Safe removal requires:
 
-    * the copied identifier is never read again (the copy is dead), **or**
+    * the copied identifier is never read again (the copy is dead),
     * the identifier can be replaced with the original source without any
-      intervening writes to that source.
+      intervening writes to that source, **or**
+    * dst is managed memory (not an external stream or field).
 
     The pass mutates ``kernel`` in place, erases qualifying copy statements, and
     renames later uses of their destinations when needed.
@@ -385,6 +391,7 @@ def eliminate_extraneous_copies(kernel: spa.Kernel) -> spa.Kernel:
 
 
 class _ExtraneousCopyIdentifier(spa.NodeVisitor):
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.copy_candidates: list[spa.SpatialNode] = []
@@ -442,18 +449,15 @@ class _ExtraneousCopyEliminator:
             if rename_map:
                 stmt_for_analysis = FindAndReplace(rename_map).visit(stmt_for_analysis)
 
-            if isinstance(stmt_for_analysis, (spa.AssignmentStatement, spa.MapStatement)):
-                candidate = self._predicate(stmt_for_analysis)
-            else:
-                candidate = None
+            candidate = is_copy(stmt_for_analysis)
 
             if candidate and allow_removal:
-                dest_key = _identifier_key(candidate.destination)
+                dest_key = candidate.destination
                 src_identifier = self._resolve_identifier(candidate.source, rename_map)
                 decision = self._analyze_copy_effect(
-                    statements[index + 1 :],
+                    statements[index + 1:],
                     dest_key,
-                    _identifier_key(src_identifier),
+                    src_identifier,
                     rename_map,
                 )
                 if decision == _CopyDecision.REMOVE_UNUSED:
@@ -466,16 +470,15 @@ class _ExtraneousCopyEliminator:
 
             transformed = self._transform_statement(stmt, rename_map)
             if rename_map:
-                transformed = _IdentifierRenameTransformer(rename_map).visit(transformed)
+                transformed = FindAndReplace(rename_map).visit(transformed)
             result.append(transformed)
             self._clear_killed_mappings(transformed, rename_map)
             index += 1
 
         return result
 
-    def _transform_statement(
-        self, stmt: spa.Statement, rename_map: dict[tuple[str, int], spa.Identifier]
-    ) -> spa.Statement:
+    def _transform_statement(self, stmt: spa.Statement, rename_map: dict[tuple[str, int],
+                                                                         spa.Identifier]) -> spa.Statement:
         if isinstance(stmt, spa.ForStatement):
             stmt.body = self._process_sequence(stmt.body, rename_map.copy(), allow_removal=False)
         elif isinstance(stmt, spa.AsyncBlock):
@@ -486,18 +489,21 @@ class _ExtraneousCopyEliminator:
             stmt.body = self._process_sequence(stmt.body, rename_map.copy(), allow_removal=False)
         return stmt
 
-    def _resolve_identifier(
-        self, identifier: spa.Identifier, rename_map: dict[tuple[str, int], spa.Identifier]
-    ) -> spa.Identifier:
-        key = _identifier_key(identifier)
+    def _resolve_identifier(self, identifier: spa.Identifier, rename_map: dict[tuple[str, int],
+                                                                               spa.Identifier]) -> spa.Identifier:
+        key = identifier
         seen: set[tuple[str, int]] = set()
         current = identifier
+        try:
+            hash(key)
+        except TypeError:
+            return current
         while key in rename_map:
             if key in seen:
                 break
             seen.add(key)
             current = rename_map[key]
-            key = _identifier_key(current)
+            key = current
         return current
 
     def _clear_killed_mappings(self, stmt: spa.Statement, rename_map: dict[tuple[str, int], spa.Identifier]) -> None:
@@ -519,7 +525,7 @@ class _ExtraneousCopyEliminator:
         for stmt in remaining:
             stmt_copy = copy.deepcopy(stmt)
             if temp_map:
-                stmt_copy = _IdentifierRenameTransformer(temp_map).visit(stmt_copy)
+                stmt_copy = FindAndReplace(temp_map).visit(stmt_copy)
             reads, writes = _collect_reads_writes(stmt_copy)
 
             if dest_key in writes:
@@ -527,7 +533,12 @@ class _ExtraneousCopyEliminator:
                     return _CopyDecision.RENAME_USES if not source_written else _CopyDecision.KEEP
                 return _CopyDecision.REMOVE_UNUSED
 
-            if source_key in writes:
+            try:
+                hash(source_key)
+                source_is_hashable = True
+            except TypeError:
+                source_is_hashable = False
+            if source_is_hashable and source_key in writes:
                 source_written = True
 
             if dest_key in reads:
@@ -544,68 +555,6 @@ class _CopyDecision(enum.Enum):
     REMOVE_UNUSED = enum.auto()
     RENAME_USES = enum.auto()
     KEEP = enum.auto()
-
-
-class _IdentifierRenameTransformer(spa.NodeTransformer):
-
-    def __init__(self, mapping: dict[tuple[str, int], spa.Identifier]):
-        super().__init__()
-        self._mapping = mapping
-        self._lvalue_stack: list[bool] = [False]
-
-    def visit_Identifier(self, node: spa.Identifier):
-        if self._lvalue_stack[-1]:
-            return node
-        key = _identifier_key(node)
-        seen: set[tuple[str, int]] = set()
-        replacement = node
-        while key in self._mapping and key not in seen:
-            seen.add(key)
-            replacement = self._mapping[key]
-            key = _identifier_key(replacement)
-        return copy.deepcopy(replacement)
-
-    def visit_AssignmentStatement(self, node: spa.AssignmentStatement):
-        node.source = self.visit(node.source)
-        self._lvalue_stack.append(True)
-        node.destination = self.visit(node.destination)
-        self._lvalue_stack.pop()
-        return node
-
-    def visit_ArraySlice(self, node: spa.ArraySlice):
-        in_lvalue = self._lvalue_stack[-1]
-        self._lvalue_stack.append(in_lvalue)
-        node.array = self.visit(node.array)
-        self._lvalue_stack.pop()
-        node.indices = [self.visit(idx) for idx in node.indices]
-        return node
-
-    def visit_TypedIdentifier(self, node: spa.TypedIdentifier):
-        self._lvalue_stack.append(True)
-        node.identifier = self.visit(node.identifier)
-        self._lvalue_stack.pop()
-        return node
-
-    def visit_FieldDeclaration(self, node: spa.FieldDeclaration):
-        self._lvalue_stack.append(True)
-        node.field_name = self.visit(node.field_name)
-        self._lvalue_stack.pop()
-        return node
-
-    def visit_Completion(self, node: spa.Completion):
-        self._lvalue_stack.append(True)
-        node.name = self.visit(node.name)
-        self._lvalue_stack.pop()
-        return node
-
-    def visit_KernelArgument(self, node: spa.KernelArgument):
-        self._lvalue_stack.append(True)
-        node.identifier = self.visit(node.identifier)
-        self._lvalue_stack.pop()
-        return node
-
-    def generic_visit(self, node):
-        return super().generic_visit(node)
 
 
 class _ReadWriteCollector(spa.NodeVisitor):
@@ -635,7 +584,7 @@ class _ReadWriteCollector(spa.NodeVisitor):
             self._context_stack.pop()
 
     def visit_Identifier(self, node: spa.Identifier):
-        key = _identifier_key(node)
+        key = node
         if self._context_stack[-1] == "write":
             self.writes.add(key)
         else:

@@ -5,6 +5,7 @@ import pytest
 
 T = TypeVar('T')
 
+
 def parse_kernel(code: str) -> spa.Kernel:
     return parser.parse_string(code, "test.sptl")
 
@@ -242,6 +243,67 @@ def test_rename_propagates_into_foreach_loop() -> None:
     assert "tmp" not in {decl.field_name.name for decl in place.statements}
 
 
+@pytest.mark.parametrize('is_array', [True, False])
+def test_copy_constant_propagation(is_array: bool) -> None:
+    dtype = '[8]' if is_array else ''
+    code = f"""
+    kernel @copy_const<N>(stream<f32, {8 if is_array else 1}>[N] writeonly output) {{
+        place u16 i, u16 j in [0:N, 0:1] {{
+            f32{dtype} tmp;
+            f32{dtype} val;
+            f32{dtype} val2;
+        }}
+        compute u16 i, u16 j in [0:N, 0:1] {{
+            tmp = 0;
+            val = tmp;
+            val2 = tmp + 1;
+            await send(val, output[i]);
+            await send(val2, output[i]);
+        }}
+    }}"""
+    kernel = parse_kernel(code)
+
+    passes.eliminate_extraneous_copies(kernel)
+    passes.prune_unused_fields(kernel)
+
+    compute = _get_block(kernel, spa.ComputeBlock)
+    assert len(compute.statements) == 2
+    place = _get_block(kernel, spa.PlaceBlock)
+    assert "tmp" not in {decl.field_name.name for decl in place.statements}
+
+
+def test_swap() -> None:
+    code = """
+    kernel @swap<N>(stream<f32, 1>[N] writeonly output) {
+        place u16 i, u16 j in [0:N, 0:1] {
+            f32 tmp;
+            f32 src;
+            f32 dst;
+            f32 res;
+        }
+        compute u16 i, u16 j in [0:N, 0:1] {
+            tmp = src;
+            src = dst;
+            dst = tmp;
+            res = dst + 2 * src;
+            await send(res, output[i]);
+        }
+    }"""
+    kernel = parse_kernel(code)
+
+    passes.eliminate_extraneous_copies(kernel)
+    passes.prune_unused_fields(kernel)
+
+    compute = _get_block(kernel, spa.ComputeBlock)
+    assert len(compute.statements) == 4
+    assign_stmts = [stmt for stmt in compute.statements if isinstance(stmt, spa.AssignmentStatement)]
+    assert len(assign_stmts) == 3
+    assert assign_stmts[0].destination.name == "tmp"
+    assert assign_stmts[1].destination.name == "src"
+    assert assign_stmts[2].destination.name == "res"
+
+
+
 @pytest.mark.parametrize('internal_value', ('tmp', 'val', 'out'))
 def test_write_after_read_copy(internal_value: str) -> None:
     code = f"""
@@ -269,7 +331,7 @@ def test_write_after_read_copy(internal_value: str) -> None:
     loop = next(stmt for stmt in compute.statements if isinstance(stmt, spa.ForStatement))
     body_assign = _first_assignment(loop.body)
     assert isinstance(body_assign.source.value, spa.Identifier)
-    assert body_assign.source.value.name == "val"
+    assert body_assign.source.value.name == "tmp"
 
     place = _get_block(kernel, spa.PlaceBlock)
     assert "tmp" not in {decl.field_name.name for decl in place.statements}
