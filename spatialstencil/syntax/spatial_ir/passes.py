@@ -437,7 +437,8 @@ class _ExtraneousCopyEliminator:
         self,
         statements: list[spa.Statement],
         rename_map: dict[spa.Identifier, spa.Identifier],
-        allow_removal: bool = True,
+        allow_dead_removal: bool = True,
+        allow_alias_elimination: bool = True,
     ) -> list[spa.Statement]:
         result: list[spa.Statement] = []
         index = 0
@@ -451,7 +452,7 @@ class _ExtraneousCopyEliminator:
 
             candidate = is_copy(stmt_for_analysis)
 
-            if candidate and allow_removal:
+            if candidate:
                 dest_key = candidate.destination
                 src_identifier = self._resolve_identifier(candidate.source, rename_map)
                 decision = self._analyze_copy_effect(
@@ -461,12 +462,14 @@ class _ExtraneousCopyEliminator:
                     rename_map,
                 )
                 if decision == _CopyDecision.REMOVE_UNUSED:
-                    index += 1
-                    continue
-                if decision == _CopyDecision.RENAME_USES:
-                    rename_map[dest_key] = src_identifier
-                    index += 1
-                    continue
+                    if allow_dead_removal:
+                        index += 1
+                        continue
+                elif decision == _CopyDecision.RENAME_USES:
+                    if allow_alias_elimination:
+                        rename_map[dest_key] = src_identifier
+                        index += 1
+                        continue
 
             transformed = self._transform_statement(stmt, rename_map)
             if rename_map:
@@ -477,22 +480,42 @@ class _ExtraneousCopyEliminator:
 
         return result
 
-    def _transform_statement(self, stmt: spa.Statement, rename_map: dict[tuple[str, int],
+    def _transform_statement(self, stmt: spa.Statement, rename_map: dict[spa.Identifier,
                                                                          spa.Identifier]) -> spa.Statement:
         if isinstance(stmt, spa.ForStatement):
-            stmt.body = self._process_sequence(stmt.body, rename_map.copy(), allow_removal=False)
+            stmt.body = self._process_sequence(
+                stmt.body,
+                rename_map.copy(),
+                allow_dead_removal=False,
+                allow_alias_elimination=True,
+            )
         elif isinstance(stmt, spa.AsyncBlock):
-            stmt.body = self._process_sequence(stmt.body, rename_map.copy(), allow_removal=False)
+            stmt.body = self._process_sequence(
+                stmt.body,
+                rename_map.copy(),
+                allow_dead_removal=False,
+                allow_alias_elimination=False,
+            )
         elif isinstance(stmt, spa.ForeachStatement):
-            stmt.body = self._process_sequence(stmt.body, rename_map.copy(), allow_removal=False)
+            stmt.body = self._process_sequence(
+                stmt.body,
+                rename_map.copy(),
+                allow_dead_removal=False,
+                allow_alias_elimination=False,
+            )
         elif isinstance(stmt, spa.MapStatement):
-            stmt.body = self._process_sequence(stmt.body, rename_map.copy(), allow_removal=False)
+            stmt.body = self._process_sequence(
+                stmt.body,
+                rename_map.copy(),
+                allow_dead_removal=False,
+                allow_alias_elimination=True,
+            )
         return stmt
 
-    def _resolve_identifier(self, identifier: spa.Identifier, rename_map: dict[tuple[str, int],
+    def _resolve_identifier(self, identifier: spa.Identifier, rename_map: dict[spa.Identifier,
                                                                                spa.Identifier]) -> spa.Identifier:
         key = identifier
-        seen: set[tuple[str, int]] = set()
+        seen: set[spa.Identifier] = set()
         current = identifier
         try:
             hash(key)
@@ -506,7 +529,7 @@ class _ExtraneousCopyEliminator:
             key = current
         return current
 
-    def _clear_killed_mappings(self, stmt: spa.Statement, rename_map: dict[tuple[str, int], spa.Identifier]) -> None:
+    def _clear_killed_mappings(self, stmt: spa.Statement, rename_map: dict[spa.Identifier, spa.Identifier]) -> None:
         reads, writes = _collect_reads_writes(stmt)
         for key in writes:
             rename_map.pop(key, None)
@@ -514,9 +537,9 @@ class _ExtraneousCopyEliminator:
     def _analyze_copy_effect(
         self,
         remaining: list[spa.Statement],
-        dest_key: tuple[str, int],
-        source_key: tuple[str, int],
-        rename_map: dict[tuple[str, int], spa.Identifier],
+        dest_key: spa.Identifier,
+        source_key: spa.Identifier,
+        rename_map: dict[spa.Identifier, spa.Identifier],
     ) -> "_CopyDecision":
         temp_map = rename_map.copy()
         dest_used = False
@@ -538,8 +561,14 @@ class _ExtraneousCopyEliminator:
                 source_is_hashable = True
             except TypeError:
                 source_is_hashable = False
+
             if source_is_hashable and source_key in writes:
-                source_written = True
+                writes_source = True
+                if isinstance(stmt_copy, spa.AssignmentStatement) and isinstance(stmt_copy.destination, spa.Identifier):
+                    if stmt_copy.destination == source_key and dest_key in reads:
+                        writes_source = False
+                if writes_source:
+                    source_written = True
 
             if dest_key in reads:
                 if source_written:
