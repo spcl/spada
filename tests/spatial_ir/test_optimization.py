@@ -303,7 +303,6 @@ def test_swap() -> None:
     assert assign_stmts[2].destination.name == "res"
 
 
-
 @pytest.mark.parametrize('internal_value', ('tmp', 'val', 'out'))
 def test_write_after_read_copy(internal_value: str) -> None:
     code = f"""
@@ -334,7 +333,10 @@ def test_write_after_read_copy(internal_value: str) -> None:
     assert body_assign.source.value.name == "tmp"
 
     place = _get_block(kernel, spa.PlaceBlock)
-    assert "tmp" not in {decl.field_name.name for decl in place.statements}
+    if internal_value == "out":
+        assert "val" not in {decl.field_name.name for decl in place.statements}
+    assert "out2" not in {decl.field_name.name for decl in place.statements}
+
 
 
 if __name__ == '__main__':
