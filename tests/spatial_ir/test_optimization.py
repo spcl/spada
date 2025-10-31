@@ -328,6 +328,46 @@ def test_write_after_read_copy(internal_value: str) -> None:
 
     compute = _get_block(kernel, spa.ComputeBlock)
     loop = next(stmt for stmt in compute.statements if isinstance(stmt, spa.ForStatement))
+    if internal_value == "out":
+        assert len(loop.body) == 1
+    else:
+        body_assign = _first_assignment(loop.body)
+        assert isinstance(body_assign.source.value, spa.Identifier)
+        assert body_assign.source.value.name == "tmp"
+
+    place = _get_block(kernel, spa.PlaceBlock)
+    if internal_value == "out":
+        assert {decl.field_name.name for decl in place.statements} == {"tmp"}
+
+    assert "out2" not in {decl.field_name.name for decl in place.statements}
+
+
+@pytest.mark.parametrize('internal_value', ('tmp', 'val', 'out'))
+def test_elide_in_loop(internal_value: str) -> None:
+    code = f"""
+    kernel @for_loop_copy<N>(stream<f32, 1>[N] writeonly output) {{
+        place u16 i, u16 j in [0:N, 0:1] {{
+            f32 tmp;
+            f32 val;
+            f32 out;
+            f32 out2;
+        }}
+        compute u16 i, u16 j in [0:N, 0:1] {{
+            tmp = 0;
+            for u16 k in [0:2] {{
+                out = tmp;
+                out2 = {internal_value};
+                tmp = out2 + k;
+            }}
+        }}
+    }}"""
+    kernel = parse_kernel(code)
+
+    passes.eliminate_extraneous_copies(kernel)
+    passes.prune_unused_fields(kernel)
+
+    compute = _get_block(kernel, spa.ComputeBlock)
+    loop = next(stmt for stmt in compute.statements if isinstance(stmt, spa.ForStatement))
     body_assign = _first_assignment(loop.body)
     assert isinstance(body_assign.source.value, spa.Identifier)
     assert body_assign.source.value.name == "tmp"
@@ -336,7 +376,6 @@ def test_write_after_read_copy(internal_value: str) -> None:
     if internal_value == "out":
         assert "val" not in {decl.field_name.name for decl in place.statements}
     assert "out2" not in {decl.field_name.name for decl in place.statements}
-
 
 
 if __name__ == '__main__':
