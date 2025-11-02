@@ -60,6 +60,9 @@ class ConstantLiteral(SpatialNode):
         """
         return self.value
 
+    def __hash__(self) -> int:
+        return hash((ConstantLiteral, self.value, self.dtype))
+
 
 # Parameters
 @dataclass

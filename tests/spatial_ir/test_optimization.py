@@ -211,7 +211,7 @@ def test_rename_propagates_into_for_loop() -> None:
     assert "tmp" not in {decl.field_name.name for decl in place.statements}
 
 
-def test_rename_propagates_into_foreach_loop() -> None:
+def test_foreach_copy_not_aliased() -> None:
     code = """
     kernel @foreach_copy<N>(stream<f32, 1>[N] readonly input, stream<f32, 1>[N] writeonly output) {
         place u16 i, u16 j in [0:N, 0:1] {
@@ -234,13 +234,86 @@ def test_rename_propagates_into_foreach_loop() -> None:
     passes.prune_unused_fields(kernel)
 
     compute = _get_block(kernel, spa.ComputeBlock)
+    first_stmt = compute.statements[0]
+    assert isinstance(first_stmt, spa.AssignmentStatement)
+    assert isinstance(first_stmt.destination, spa.Identifier)
+    assert first_stmt.destination.name == "tmp"
+
     foreach_stmt = next(stmt for stmt in compute.statements if isinstance(stmt, spa.ForeachStatement))
     body_assign = _first_assignment(foreach_stmt.body)
     assert isinstance(body_assign.source.value, spa.Identifier)
-    assert body_assign.source.value.name == "val"
+    assert body_assign.source.value.name == "tmp"
 
     place = _get_block(kernel, spa.PlaceBlock)
-    assert "tmp" not in {decl.field_name.name for decl in place.statements}
+    assert "tmp" in {decl.field_name.name for decl in place.statements}
+
+
+def test_async_block_copy_not_aliased() -> None:
+    code = """
+    kernel @async_alias<N>(stream<f32, 1>[N] writeonly output) {
+        place u16 i, u16 j in [0:N, 0:1] {
+            f32 tmp;
+            f32 val;
+            f32 out;
+        }
+        compute u16 i, u16 j in [0:N, 0:1] {
+            tmp = val;
+            completion c = async {
+                out = tmp;
+            };
+            await c;
+            await send(out, output[i]);
+        }
+    }
+    """
+    kernel = parse_kernel(code)
+
+    passes.eliminate_extraneous_copies(kernel)
+
+    compute = _get_block(kernel, spa.ComputeBlock)
+    first_stmt = compute.statements[0]
+    assert isinstance(first_stmt, spa.AssignmentStatement)
+    assert isinstance(first_stmt.destination, spa.Identifier)
+    assert first_stmt.destination.name == "tmp"
+
+    async_stmt = next(stmt for stmt in compute.statements if isinstance(stmt, spa.AsyncBlock))
+    body_assign = _first_assignment(async_stmt.body)
+    assert isinstance(body_assign.source.value, spa.Identifier)
+    assert body_assign.source.value.name == "tmp"
+
+
+def test_foreach_body_keeps_internal_copy() -> None:
+    code = """
+    kernel @foreach_internal_copy<N>(stream<f32, 1>[N] readonly input, stream<f32, 1>[N] writeonly output) {
+        place u16 i, u16 j in [0:N, 0:1] {
+            f32 tmp;
+            f32 out;
+        }
+        compute u16 i, u16 j in [0:N, 0:1] {
+            await foreach u16 k, f32 elem in [0:2], receive(input[i]) {
+                tmp = elem;
+                out = tmp;
+            };
+            await send(out, output[i]);
+        }
+    }
+    """
+    kernel = parse_kernel(code)
+
+    passes.eliminate_extraneous_copies(kernel)
+
+    compute = _get_block(kernel, spa.ComputeBlock)
+    foreach_stmt = next(stmt for stmt in compute.statements if isinstance(stmt, spa.ForeachStatement))
+    assert len([stmt for stmt in foreach_stmt.body if isinstance(stmt, spa.AssignmentStatement)]) == 2
+
+    body_assign = _first_assignment(foreach_stmt.body)
+    assert isinstance(body_assign.source.value, spa.Identifier)
+    assert body_assign.source.value.name == "elem"
+
+    second_assign = foreach_stmt.body[1]
+    assert isinstance(second_assign, spa.AssignmentStatement)
+    assert isinstance(second_assign.source.value, spa.Identifier)
+    assert second_assign.source.value.name == "tmp"
 
 
 @pytest.mark.parametrize('is_array', [True, False])
