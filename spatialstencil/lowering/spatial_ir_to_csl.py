@@ -71,6 +71,9 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
         if e.args and isinstance(e.args[0], spir.Identifier):
             raise ValueError(f"Error in {e.args[0].lineinfo}. Undefined identifier \"{e.args[0].as_ir()}\".")
 
+    # Lower arguments to extern fields/streams
+    canonicalization.lower_arguments_to_extern(rectangles, kernel)
+
     # Collect scalar argument types
     scalar_argument_types = []
     scalar_arguments = []
@@ -291,7 +294,9 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     # Map task IDs to CSL task IDs
     tdag.renumber_tasks(tasks, task_creation_behavior)
 
-    print(f'Stats: Using {sum(1 if t.task_type == "local" else 0 for t in tasks)} local tasks, {sum(1 if t.task_type == "data" else 0 for t in tasks)} data tasks, {len(set(color_map.values()))} colors')
+    print(
+        f'Stats: Using {sum(1 if t.task_type == "local" else 0 for t in tasks)} local tasks, {sum(1 if t.task_type == "data" else 0 for t in tasks)} data tasks, {len(set(color_map.values()))} colors'
+    )
 
     # Generate each task
     max_task_id = csl.LOCAL_TASK_IDS[0] - 1
@@ -378,7 +383,6 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         if task.blocked:
             prefix = "d" if task.task_type == 'data' else ""
             current_code.write(f'    @block({prefix}task_{i}_id);\n')
-
 
     # Activate all source tasks
     non_source_tasks = set(n for i, t in enumerate(tasks) for n, _ in t.outgoing if n != i)
@@ -718,8 +722,7 @@ def _collect_unique_dsds(
     # 3. An argument that is a stream or an array of streams in non memcpy mode, or buffer_size > 1 in memcpy mode.
 
     # Collect metadata from dataflow and place blocks
-    stream_candidates: dict[str, tuple[spir.StreamDeclaration | spir.KernelArgument,
-                                       int | spir.Expression]] = {}
+    stream_candidates: dict[str, tuple[spir.StreamDeclaration | spir.KernelArgument, int | spir.Expression]] = {}
     array_candidates: dict[str, tuple[spir.FieldDeclaration, list[int | spir.Expression]]] = {}
     stream_args: set[spir.Identifier] = set()
     for df_statement in rect.dataflow.statements:

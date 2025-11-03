@@ -137,13 +137,20 @@ def consolidate_rectangles_to_equivalence_classes(kernel: spir.Kernel) -> list[R
         rect = block.get_grid_rect()
         rect_to_stride[rect] = block.get_grid_stride()
         if isinstance(block, spir.PlaceBlock):
-            assert result[rect].place is None
-            result[rect].place = block
+            if result[rect].place is not None:
+                result[rect].place.statements.extend(block.statements)
+                block.statements.clear()
+            else:
+                result[rect].place = block
         elif isinstance(block, spir.DataflowBlock):
-            assert result[rect].dataflow is None
-            result[rect].dataflow = block
+            if result[rect].dataflow is not None:
+                result[rect].dataflow.statements.extend(block.statements)
+                block.statements.clear()
+            else:
+                result[rect].dataflow = block
         elif isinstance(block, spir.ComputeBlock):
-            assert result[rect].compute is None
+            if result[rect].compute is not None:
+                raise ValueError('Multiple compute blocks found for the same rectangle after inlining phases.')
             result[rect].compute = block
 
     # Fill in remainder of PEBlock with empty scopes (e.g., blocks without dataflow)
@@ -445,3 +452,71 @@ def convert_foreach_data_tasks_to_loops(rect: Rectangle[PEBlock], dtypes: dict[s
     :param kernel_arguments: The list of kernel arguments, used to determine which identifiers are arguments.
     """
     rect.metadata.compute = _ForeachDataTaskToLoopConverter(dtypes, kernel_arguments).visit(rect.metadata.compute)
+
+
+def lower_arguments_to_extern(rectangles: list[Rectangle[PEBlock]], kernel: spir.Kernel) -> None:
+    """
+    Lowers stream arguments to extern stream declarations in a dataflow or place block.
+    Keeps kernel arguments for stream extent computation.
+    Scalar arguments are unaffected.
+
+    :param rectangles: A list of PE block rectangles to modify.
+    :param kernel: The kernel whose arguments are being lowered.
+    :note: Modifies the kernel in-place.
+    """
+    # Create dataflow or place block depending on argument types
+    stream_decls: list[spir.StreamDeclaration] = []
+    field_decls: list[spir.FieldDeclaration] = []
+
+    # Create declarations
+    for arg in kernel.arguments:
+        dtype = arg.dtype
+        if isinstance(dtype, spir.ArrayType):
+            dtype = dtype.base_type
+
+        if isinstance(dtype, spir.StreamType):
+            if dtype.buffer_size is not None:
+                field_decls.append(
+                    spir.FieldDeclaration(
+                        dtype=spir.ArrayType(dtype.element_type, [dtype.buffer_size]),
+                        field_name=arg.identifier,
+                        is_extern=True))
+            else:
+                if arg.readonly or (not arg.readonly and not arg.writeonly):
+                    extern_decl = spir.StreamDeclaration(
+                        stream_name=arg.identifier,
+                        dtype=dtype,
+                        stream=spir.ExternStreamDeclaration('in', routing=spir.RoutingDeclaration()))
+                    stream_decls.append(extern_decl)
+                if arg.writeonly or (not arg.readonly and not arg.writeonly):
+                    extern_decl = spir.StreamDeclaration(
+                        stream_name=arg.identifier,
+                        dtype=dtype,
+                        stream=spir.ExternStreamDeclaration('out', routing=spir.RoutingDeclaration()))
+                    stream_decls.append(extern_decl)
+
+    # Replace all index expressions of our newly created extern streams/fields
+    extern_names = set(decl.stream_name for decl in stream_decls) | set(decl.field_name for decl in field_decls)
+
+    class _ArgumentReplacer(spir.NodeTransformer):
+
+        def visit_ArraySlice(self, node: spir.ArraySlice):
+            if node.array in extern_names:
+                return node.array
+            return self.generic_visit(node)
+
+    replacer = _ArgumentReplacer()
+
+    # Insert dataflow and place blocks for every compute block
+    # (unused fields/streams will be pruned later)
+    for rect in rectangles:
+        if stream_decls:
+            rect.metadata.dataflow.statements.extend(copy.deepcopy(stream_decls))
+        if field_decls:
+            rect.metadata.place.statements.extend(copy.deepcopy(field_decls))
+
+        for stmt in rect.metadata.compute.statements:
+            stmt = replacer.visit(stmt)
+
+    # Remove arguments from kernel
+    kernel.arguments = [arg for arg in kernel.arguments if arg.identifier not in extern_names]
