@@ -533,8 +533,7 @@ class FieldsDefinedCheck(spir.NodeVisitor):
         identifier = stmt.local_array
         if isinstance(identifier, spir.Identifier):
             self.check_access(identifier)
-        else:
-            assert isinstance(identifier, spir.ArraySlice)
+        elif isinstance(identifier, spir.ArraySlice):
             self.check_access(identifier.array)
 
     def visit_ArraySlice(self, access: spir.ArraySlice):

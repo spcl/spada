@@ -315,7 +315,7 @@ def _extract_access(
                 val = node.eval()
                 if val is not node.value:
                     return node.value, None
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
         return _extract_access(node.value, False)
     if isinstance(node, spa.Identifier):
@@ -336,6 +336,8 @@ def _copy_candidate_from_assignment(assignment: spa.AssignmentStatement) -> Copy
     if src_access is None:
         return None
     if src_access[1] is not None and dest_access[1] != src_access[1]:
+        return None
+    if src_access[1] is None and dest_access[1]:  # Set scalar into array index
         return None
     return CopyCandidate(dest_access[0], src_access[0])
 

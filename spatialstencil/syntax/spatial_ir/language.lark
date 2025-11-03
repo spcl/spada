@@ -98,7 +98,7 @@ annotations : annotation (annotation)*
 
 value_expr : test     // Basic value type. See operator precedence for more information
 
-call_arguments: test ("," test)*
+call_arguments: value_expr ("," value_expr)*
 subscript_slice : value_expr ("," value_expr)*
 subscript : identifier "[" subscript_slice "]"
 

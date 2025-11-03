@@ -21,7 +21,9 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
                             disable_benchmarking: bool = False,
                             disable_asynchronous: bool = False,
                             disable_dsd: bool = False,
-                            task_fusion: bool = True) -> list[CodeFile]:
+                            task_fusion: bool = True,
+                            copy_elision: bool = True,
+                            prune_memory: bool = True) -> list[CodeFile]:
     """
     Lowers a routed Spatial IR kernel into Cerebras CSL code.
 
@@ -32,6 +34,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     :param disable_asynchronous: If True, disables asynchronous task code generation.
     :param disable_dsd: If True, disables DSD operation detection and code generation.
     :param task_fusion: If True, enables task fusion to reduce number of tasks.
+    :param copy_elision: If True, enables copy elision optimization pass.
+    :param prune_memory: If True, enables unused field pruning optimization pass.
     :return: List of code-file objects that can be written to files. See ``write_code_to_files``.
     """
     # PRECONDITION: Rectangles of dataflow/compute/place do not intersect (comes from Spatial IR)
@@ -54,8 +58,13 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     # Check if we are streaming or using memcpy mode
     use_memcpy_mode = analysis.kernel_uses_memcpy_mode(kernel)
 
+    # Perform optimization passes
+    if copy_elision:
+        passes.eliminate_extraneous_copies(kernel)
+
     # Prune unused fields from place blocks
-    kernel = passes.prune_unused_fields(kernel)
+    if prune_memory:
+        kernel = passes.prune_unused_fields(kernel)
 
     # Create mapping between SpIR blocks and PE rectangles. Creates empty blocks as necessary
     rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
@@ -67,9 +76,6 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     try:
         canonicalization.lower_bulk_communication(rectangles)
         canonicalization.lower_array_assignment(rectangles)
-        # TODO(later): Optimize out one extra copy
-        # if use_memcpy_mode:
-        #     canonicalization.remove_memcpy_stream_operators(kernel, rectangles)
     except KeyError as e:
         if e.args and isinstance(e.args[0], spir.Identifier):
             raise ValueError(f"Error in {e.args[0].lineinfo}. Undefined identifier \"{e.args[0].as_ir()}\".")
@@ -294,7 +300,9 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     # Map task IDs to CSL task IDs
     tdag.renumber_tasks(tasks, task_creation_behavior)
 
-    print(f'Stats: Using {sum(1 if t.task_type == "local" else 0 for t in tasks)} local tasks, {sum(1 if t.task_type == "data" else 0 for t in tasks)} data tasks, {len(set(color_map.values()))} colors')
+    print(
+        f'Stats: Using {sum(1 if t.task_type == "local" else 0 for t in tasks)} local tasks, {sum(1 if t.task_type == "data" else 0 for t in tasks)} data tasks, {len(set(color_map.values()))} colors'
+    )
 
     # Generate each task
     max_task_id = csl.LOCAL_TASK_IDS[0] - 1
@@ -381,7 +389,6 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         if task.blocked:
             prefix = "d" if task.task_type == 'data' else ""
             current_code.write(f'    @block({prefix}task_{i}_id);\n')
-
 
     # Activate all source tasks
     non_source_tasks = set(n for i, t in enumerate(tasks) for n, _ in t.outgoing if n != i)
@@ -773,7 +780,8 @@ def _collect_unique_dsds(
                 if extents is not None:  # Use buffer size
                     extents = extents if isinstance(extents, int) else extents.eval()
                 else:  # Infer from receive count
-                    if isinstance(dtypes[stmt.local_array], spir.ScalarType):
+                    if isinstance(stmt.local_array, spir.ConstantLiteral) or isinstance(
+                            dtypes[stmt.local_array], spir.ScalarType):
                         # Scalar receive
                         extents = 1
                     else:
@@ -792,7 +800,8 @@ def _collect_unique_dsds(
                 if extents is not None:  # Use buffer size
                     extents = extents if isinstance(extents, int) else extents.eval()
                 else:  # Infer from send count
-                    if isinstance(dtypes[stmt.local_array], spir.ScalarType):
+                    if isinstance(stmt.local_array, spir.ConstantLiteral) or isinstance(
+                            dtypes[stmt.local_array], spir.ScalarType):
                         # Scalar send
                         extents = 1
                     else:
@@ -874,8 +883,8 @@ def _collect_unique_dsds(
             if extents is not None:  # Use buffer size
                 extents = extents if isinstance(extents, int) else extents.eval()
             else:  # Infer from send count
-                if isinstance(substmt.local_array, spir.ArraySlice) or isinstance(dtypes[substmt.local_array],
-                                                                                  spir.ScalarType):
+                if isinstance(substmt.local_array, (spir.ArraySlice, spir.ConstantLiteral)) or isinstance(
+                        dtypes[substmt.local_array], spir.ScalarType):
                     # Scalar send
                     extents = 1
                 else:

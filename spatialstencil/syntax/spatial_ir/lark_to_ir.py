@@ -149,6 +149,8 @@ class TreeToSpatialIR(lark.Transformer):
             completion = None
             func, arguments = args[1:]
 
+        arguments = (a.value for a in arguments)
+
         if func == 'send':
             return irnodes.SendStatement(*arguments, completion_name=completion)
         elif func == 'receive':
