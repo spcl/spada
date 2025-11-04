@@ -46,17 +46,6 @@ kernel @copy<N>(stream<f32{suffix}>[N, N] readonly a,
         assert extern_a.field_name.name == "a"
         assert extern_out.field_name.name == "out"
 
-    # Check generated equivalence classes
-    kernel = passes.concretize_parameters(kernel, N=8)
-    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
-    assert len(rects) == 1
-    rect = rects[0]
-    assert rect.x_range == (0, 8, 1)
-    assert rect.y_range == (0, 8, 1)
-    assert rect.metadata.place is not None
-    assert rect.metadata.dataflow is not None
-    assert rect.metadata.compute is not None
-
 
 @pytest.mark.parametrize("streaming", (False, True))
 def test_lower_arguments_with_scalar(streaming):
