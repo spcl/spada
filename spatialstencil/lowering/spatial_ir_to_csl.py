@@ -709,13 +709,7 @@ def _collect_unique_dsds(
                     # Dynamic shape, must create a DSD
                     pass
 
-                # Support extern fields as streams
-                if place_statement.is_extern and len(place_statement.dtype.shape) == 1:
-                    # NOTE: I don't like this. It mimics the behavior for kernel arguments, but should not be necessary.
-                    # TODO: Try to fix
-                    stream_candidates[place_statement.field_name.as_ir()] = (place_statement, place_statement.dtype.shape[0])
-                else:
-                    array_candidates[place_statement.field_name.as_ir()] = (place_statement, place_statement.dtype.shape)
+                array_candidates[place_statement.field_name.as_ir()] = (place_statement, place_statement.dtype.shape)
 
     # Find used DSDs in compute block
     # TODO: Infer input/output queue ID based on concurrency
@@ -768,28 +762,31 @@ def _collect_unique_dsds(
                 output_queue_id_ctr += 1
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
-            if isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
+            if isinstance(stmt, spir.SendStatement):
                 # If the send statement sends from a local array, create another DSD
+                # Do the same for the stream
                 # This case does not apply for receive statements, as they would be lowered to foreach statements
-                if stmt.local_array.as_ir() in array_candidates:
-                    _, shape = array_candidates[stmt.local_array.as_ir()]
-                    if len(shape) == 1:
-                        dsd_type = cslstruct.DSDType.mem1d
-                        extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
-                        indices = ['__index']
-                    else:
-                        dsd_type = cslstruct.DSDType.mem4d
-                        extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
-                        indices = [f'__index_{i}' for i in range(len(shape))]
+                for arr in (stmt.local_array, stmt.stream_name):
+                    if arr.as_ir() in array_candidates:
+                        _, shape = array_candidates[arr.as_ir()]
+                        if len(shape) == 1:
+                            dsd_type = cslstruct.DSDType.mem1d
+                            extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
+                            indices = ['__index']
+                        else:
+                            dsd_type = cslstruct.DSDType.mem4d
+                            extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
+                            indices = [f'__index_{i}' for i in range(len(shape))]
 
-                    dsd = cslstruct.MemoryDSD(
-                        dsd_type,
-                        name_to_csl(stmt.local_array),
-                        extents,
-                        indices,
-                        indices,
-                    )
-                    dsds[stmt.local_array.as_ir()].append((f"{name_to_csl(stmt.local_array)}_dsd", dsd))
+                        dsd = cslstruct.MemoryDSD(
+                            dsd_type,
+                            name_to_csl(arr),
+                            extents,
+                            indices,
+                            indices,
+                        )
+                        dsds[arr.as_ir()].append((f"{name_to_csl(arr)}_dsd", dsd))
+
         elif isinstance(stmt, spir.ForeachStatement):
             # If the foreach statement has a stream generator, it is a DSD
             # unless only the receive generator is given (streaming, no range provided).
