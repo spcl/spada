@@ -427,41 +427,44 @@ def _collect_colors_globally(kernel: spir.Kernel, rectangles: list[Rectangle[PEB
     :return: Dictionary mapping each channel to its respective color.
     """
     channel_to_color: dict[int, int] = {}
-    color_offset: int = 0
-
-    # Collect colors from kernel arguments if in streaming mode
-    if not use_memcpy_mode:
-        for arg in kernel.arguments:
-            if arg.compiletime:
-                continue
-            is_input = not arg.writeonly
-            is_output = not arg.readonly
-
-            if ((isinstance(arg.dtype, spir.StreamType) and arg.dtype.buffer_size is None) or
-                (isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType) and
-                 arg.dtype.base_type.buffer_size is None)):
-
-                if is_input:
-                    color_offset += 1
-                if is_output:
-                    color_offset += 1
 
     # Collect, for each rectangle, which channels are being read from and written to
     channel_is_read = set()
     channel_is_written = set()
+    auto_stream_is_read = set()
+    auto_stream_is_written = set()
     for rect in rectangles:
         sends_recvs = analysis.sends_and_receives(rect.metadata.compute)
         for stream_decl in rect.metadata.dataflow.statements:
             if stream_decl.stream_name not in sends_recvs:
                 continue  # Unused stream
             outbound, inbound = sends_recvs[stream_decl.stream_name]
+            if stream_decl.stream.routing.channel == "auto":
+                if outbound:
+                    auto_stream_is_written.add(stream_decl.stream_name)
+                if inbound:
+                    auto_stream_is_read.add(stream_decl.stream_name)
+                continue  # Skip remainder of "auto" channels and assign them below
             if outbound:
                 channel_is_written.add(stream_decl.stream.routing.channel)
             if inbound:
                 channel_is_read.add(stream_decl.stream.routing.channel)
 
-    # Allocate colors for each channel
     max_channel = max(channel_is_read.union(channel_is_written), default=-1)
+
+    # Assign all "auto" channels
+    for rect in rectangles:
+        for stream_decl in rect.metadata.dataflow.statements:
+            if stream_decl.stream.routing.channel == "auto":
+                stream_decl.stream.routing.channel = max_channel + 1
+                if stream_decl.stream_name in auto_stream_is_written:
+                    channel_is_written.add(max_channel + 1)
+                if stream_decl.stream_name in auto_stream_is_read:
+                    channel_is_read.add(max_channel + 1)
+                max_channel += 1
+
+    # Allocate colors for each channel
+    color_offset = 0
     for channel in range(max_channel + 1):
         if channel in channel_to_color:
             continue
@@ -495,45 +498,7 @@ def _allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Ke
     :return: Dictionary mapping each stream to its respective color
     """
     result: dict[str, int] = {}
-    wrote_header: bool = False
     channel_offset: int = 0
-
-    # Collect colors from kernel arguments if in streaming mode
-    if not use_memcpy_mode:
-        input_args = []
-        output_args = []
-        for arg in kernel.arguments:
-            if arg.compiletime:
-                continue
-            if not stream_extents.is_valid(arg.identifier,
-                                           rect):  # Skip arguments that are not participating in this rectangle
-                continue
-            if arg.readonly:
-                input_args.append((False, arg))
-            elif arg.writeonly:
-                output_args.append((True, arg))
-            else:
-                input_args.append((False, arg))
-                output_args.append((True, arg))
-
-        for is_output, arg in input_args + output_args:
-            if ((isinstance(arg.dtype, spir.StreamType) and arg.dtype.buffer_size is None) or
-                (isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType) and
-                 arg.dtype.base_type.buffer_size is None)):
-                if not wrote_header:
-                    header.write('\n// Streaming memcpy colors\n')
-                    wrote_header = True
-
-                # If the argument is a stream, allocate a color for h2d and d2h transfers
-                name = name_to_csl(arg.identifier)
-                if not is_output:
-                    result[name + "_H2D"] = csl.COLORS[channel_offset]
-                    channel_offset += 1
-                    header.write(f'const {name}_H2D_color: color = @get_color({result[name + "_H2D"]});\n')
-                else:
-                    result[name + "_D2H"] = csl.COLORS[channel_offset]
-                    channel_offset += 1
-                    header.write(f'const {name}_D2H_color: color = @get_color({result[name + "_D2H"]});\n')
 
     if rect.metadata.dataflow.statements:
         header.write('\n// Colors\n')
@@ -729,6 +694,8 @@ def _collect_unique_dsds(
         if isinstance(df_statement, spir.StreamDeclaration):
             buffer_size = df_statement.dtype.buffer_size or None
             stream_candidates[df_statement.stream_name.as_ir()] = (df_statement, buffer_size)
+            if isinstance(df_statement.stream, spir.ExternStreamDeclaration):
+                stream_args.add(df_statement.stream_name)
     for place_statement in rect.place.statements:
         if isinstance(place_statement, spir.FieldDeclaration):
             if isinstance(place_statement.dtype, spir.ArrayType):
@@ -743,15 +710,6 @@ def _collect_unique_dsds(
                     pass
 
                 array_candidates[place_statement.field_name.as_ir()] = (place_statement, place_statement.dtype.shape)
-    for arg in kernel.arguments:
-        if isinstance(arg.dtype, spir.StreamType):
-            buffer_size = arg.dtype.buffer_size or 1
-            stream_candidates[arg.identifier.as_ir()] = (arg, buffer_size)
-            stream_args.add(arg.identifier)
-        elif isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType):
-            buffer_size = arg.dtype.base_type.buffer_size or 1
-            stream_candidates[arg.identifier.as_ir()] = (arg, buffer_size)
-            stream_args.add(arg.identifier)
 
     # Find used DSDs in compute block
     # TODO: Infer input/output queue ID based on concurrency
@@ -1026,7 +984,9 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
             if sent:
                 color_name_outbound = f'@get_color({color_map[name_to_csl(stream.stream_name) + "_OUT"]})'
 
-            assert isinstance(stream.stream, spir.RelativeStreamDeclaration)
+            if isinstance(stream.stream, spir.ExternStreamDeclaration):
+                continue  # Extern streams do not have on-chip routing
+
             if len(stream.stream.routing.hops) == 1:  # Inbound and outbound generated together
                 route = _route_dir(*stream.stream.routing.hops[0].offset)
                 if sent:

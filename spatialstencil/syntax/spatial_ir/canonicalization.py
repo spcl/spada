@@ -394,8 +394,6 @@ class _ForeachDataTaskToLoopConverter(spir.NodeTransformer):
 
     def visit_ForeachStatement(self, node: spir.ForeachStatement):
         from spatialstencil.syntax.csl import dsd_ops
-        if dsd_ops._get_id(node.receive_stream.stream_name) not in self.kernel_arguments:
-            return self.generic_visit(node)
         if dsd_ops.get_dsd_op(self.dtypes, node) is not None:
             return self.generic_visit(node)
 
