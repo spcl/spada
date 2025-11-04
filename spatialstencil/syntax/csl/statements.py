@@ -109,13 +109,9 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice,
                 dtype = identifier.dtype
             else:
                 dtype = dtypes.get(identifier)
-            if isinstance(dtype, spir.ArrayType):
-                dims_to_ignore = len(dtype.shape)
-            else:
-                dims_to_ignore = 0
             if isinstance(value, spir.ArraySlice):
                 indices: list[str] = []
-                for idx in value.indices[dims_to_ignore:]:
+                for idx in value.indices:
                     if isinstance(idx, spir.Expression):
                         indices.append(emit_expression(idx, dsds, dtypes))
                     elif isinstance(idx, spir.RangeExpression):

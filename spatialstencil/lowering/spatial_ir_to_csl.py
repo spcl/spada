@@ -709,7 +709,13 @@ def _collect_unique_dsds(
                     # Dynamic shape, must create a DSD
                     pass
 
-                array_candidates[place_statement.field_name.as_ir()] = (place_statement, place_statement.dtype.shape)
+                # Support extern fields as streams
+                if place_statement.is_extern and len(place_statement.dtype.shape) == 1:
+                    # NOTE: I don't like this. It mimics the behavior for kernel arguments, but should not be necessary.
+                    # TODO: Try to fix
+                    stream_candidates[place_statement.field_name.as_ir()] = (place_statement, place_statement.dtype.shape[0])
+                else:
+                    array_candidates[place_statement.field_name.as_ir()] = (place_statement, place_statement.dtype.shape)
 
     # Find used DSDs in compute block
     # TODO: Infer input/output queue ID based on concurrency
