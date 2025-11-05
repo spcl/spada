@@ -572,6 +572,8 @@ def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, foote
 
     # Add arguments to header and footer
     for field in place.statements:
+        if not field.is_extern:
+            continue
         if not isinstance(field.dtype, spir.ArrayType):  # Skip scalar arguments
             continue
         name = name_to_csl(field.field_name)
