@@ -334,63 +334,11 @@ def lower_array_assignment(rectangles: list[Rectangle[PEBlock]]) -> None:
         rect.metadata.compute = _ArrayAssignmentLowerer(rect.metadata.place).visit(rect.metadata.compute)
 
 
-class _MemCpyStreamOperatorRemover(spir.NodeTransformer):
-
-    def __init__(self, stream_args: set[spir.Identifier]):
-        super().__init__()
-        self.stream_args = stream_args
-
-    def visit_ReceiveStatement(self, node: spir.ReceiveStatement):
-        if isinstance(node.stream_name, spir.Identifier) and node.stream_name in self.stream_args:
-            return None
-        if isinstance(node.stream_name, spir.ArraySlice) and node.stream_name.array in self.stream_args:
-            return None
-        return self.generic_visit(node)
-
-    def visit_SendStatement(self, node: spir.SendStatement):
-        if isinstance(node.stream_name, spir.Identifier) and node.stream_name in self.stream_args:
-            return None
-        if isinstance(node.stream_name, spir.ArraySlice) and node.stream_name.array in self.stream_args:
-            return None
-        return self.generic_visit(node)
-
-    def visit_ForeachStatement(self, node: spir.ForeachStatement):
-        if isinstance(node.receive_stream.stream_name,
-                      spir.Identifier) and node.receive_stream.stream_name in self.stream_args:
-            return None
-        if isinstance(node.receive_stream.stream_name,
-                      spir.ArraySlice) and node.receive_stream.stream_name.array in self.stream_args:
-            return None
-        return self.generic_visit(node)
-
-
-def remove_memcpy_stream_operators(kernel: spir.Kernel, rectangles: list[Rectangle[PEBlock]]) -> None:
-    """
-    Removes receives/sends/foreach loops that involve kernel arguments from the given rectangles in memcpy mode.
-    This pass is performed because memcpy mode will already copy the memory in and out outside the kernel code.
-
-    :param kernel: The kernel to modify.
-    :param rectangles: A list of PE block rectangles to modify.
-    """
-    stream_args: set[spir.Identifier] = set()
-    for arg in kernel.arguments:
-        if isinstance(arg.dtype, spir.StreamType):
-            stream_args.add(arg.identifier)
-        elif isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType):
-            stream_args.add(arg.identifier)
-
-    # TODO(later): Verify that each stream argument is used once, and then replace every occurrence of the stream
-    #              argument with its internal name.
-    for rect in rectangles:
-        rect.metadata.compute = _MemCpyStreamOperatorRemover(stream_args).visit(rect.metadata.compute)
-
-
 class _ForeachDataTaskToLoopConverter(spir.NodeTransformer):
 
-    def __init__(self, dtypes: dict[spir.Identifier, spir.IRType], kernel_arguments: list[spir.KernelArgument]):
+    def __init__(self, dtypes: dict[spir.Identifier, spir.IRType]):
         super().__init__()
         self.dtypes = dtypes
-        self.kernel_arguments = set(k.identifier for k in kernel_arguments)
 
     def visit_ForeachStatement(self, node: spir.ForeachStatement):
         from spatialstencil.syntax.csl import dsd_ops
@@ -439,17 +387,15 @@ class _ForeachDataTaskToLoopConverter(spir.NodeTransformer):
         return loop_statement
 
 
-def convert_foreach_data_tasks_to_loops(rect: Rectangle[PEBlock], dtypes: dict[spir.Identifier, spir.IRType],
-                                        kernel_arguments: list[spir.KernelArgument]) -> None:
+def convert_foreach_data_tasks_to_loops(rect: Rectangle[PEBlock], dtypes: dict[spir.Identifier, spir.IRType]) -> None:
     """
     Converts foreach blocks on input arguments to (async) loop blocks in memcpy mode.
     This pass is performed because memcpy mode will already copy the memory in and out outside the kernel code.
 
     :param rect: A single PE block rectangle to modify.
     :param dtypes: A mapping of identifier to its type in the given rectangle.
-    :param kernel_arguments: The list of kernel arguments, used to determine which identifiers are arguments.
     """
-    rect.metadata.compute = _ForeachDataTaskToLoopConverter(dtypes, kernel_arguments).visit(rect.metadata.compute)
+    rect.metadata.compute = _ForeachDataTaskToLoopConverter(dtypes).visit(rect.metadata.compute)
 
 
 def lower_arguments_to_extern(rectangles: list[Rectangle[PEBlock]], kernel: spir.Kernel) -> None:

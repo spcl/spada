@@ -258,7 +258,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
     # Preprocess potential data tasks to convert to loops if possible
     if use_memcpy_mode:
-        canonicalization.convert_foreach_data_tasks_to_loops(rect, dtypes, kernel.arguments)
+        canonicalization.convert_foreach_data_tasks_to_loops(rect, dtypes)
 
     # Convert compute block subgraphs into tasks:
     #    * Make task DAG out of computations

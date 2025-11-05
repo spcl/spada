@@ -54,7 +54,9 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
 
     # Argument checks
     using_memcpy_mode = None
+    argnames = []
     for arg in kernel.arguments:
+        argnames.append(arg.identifier.name)
         # Change all shapes to be lists of integers
         if isinstance(arg.dtype, spa.ArrayType):
             arg.dtype.shape = [dim.eval() if isinstance(dim, spa.Expression) else int(dim) for dim in arg.dtype.shape]
@@ -136,7 +138,7 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         "kernel_name": kernel.name,
         "inputs": input_args,
         "outputs": output_args,
-        "argument_order": [a.identifier.name for a in kernel.arguments],
+        "argument_order": argnames,
         "memcpy_mode": using_memcpy_mode,
         "fabric_dims": [xend - xbegin, yend - ybegin],
         "kernel_dims": kernel_dims,
