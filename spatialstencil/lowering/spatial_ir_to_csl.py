@@ -64,9 +64,6 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     try:
         canonicalization.lower_bulk_communication(rectangles)
         canonicalization.lower_array_assignment(rectangles)
-        # TODO(later): Optimize out one extra copy
-        # if use_memcpy_mode:
-        #     canonicalization.remove_memcpy_stream_operators(kernel, rectangles)
     except KeyError as e:
         if e.args and isinstance(e.args[0], spir.Identifier):
             raise ValueError(f"Error in {e.args[0].lineinfo}. Undefined identifier \"{e.args[0].as_ir()}\".")
@@ -189,17 +186,26 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
         layout_code.write(rinst + '\n')
 
     # Emit symbol names for arguments and kernel
-    layout_code.write('\n    // Arguments\n')
-    for argument in kernel.arguments:
-        dtype = argument.dtype
-        if isinstance(argument.dtype, spir.ArrayType) and isinstance(argument.dtype.base_type, spir.StreamType):
-            pass
-        elif isinstance(argument.dtype, spir.StreamType):
-            # Support scalar streams
-            dtype = spir.ArrayType(argument.dtype, [1])
+    layout_code.write('\n    // Extern fields\n')
+    # Gather extern fields from kernel arguments
+    extern_fields: list[spir.FieldDeclaration] = []
+    for rect in rectangles:
+        place_block = rect.metadata.place
+        for field in place_block.statements:
+            if field.is_extern:
+                if any(field.field_name == ef.field_name for ef in extern_fields):
+                    continue
+                extern_fields.append(field)
 
-        layout_code.write(
-            f'    @export_name("{argument.identifier.name}", {dtype_as_csl(dtype, export=True)}, true);\n')
+    for field in extern_fields:
+        dtype = field.dtype
+        if isinstance(field.dtype, spir.ArrayType) and isinstance(field.dtype.base_type, spir.StreamType):
+            pass
+        elif isinstance(field.dtype, spir.StreamType):
+            # Support scalar streams
+            dtype = spir.ArrayType(field.dtype, [1])
+
+        layout_code.write(f'    @export_name("{field.field_name.name}", {dtype_as_csl(dtype, export=True)}, true);\n')
 
     # Generate benchmarking code
     if not disable_benchmarking:
@@ -557,25 +563,22 @@ def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, foote
         header.write(f'var {name}: {dtype_as_csl(field_dec.dtype)};\n')
 
     # Add arguments to header and footer
-    if use_memcpy_mode:
-        for argument in kernel.arguments:
-            if not isinstance(argument.dtype, spir.ArrayType):  # Skip scalar arguments
-                continue
-            name = name_to_csl(argument.identifier)
-            if isinstance(argument.dtype, spir.ArrayType) and isinstance(argument.dtype.base_type, spir.StreamType):
-                assert argument.dtype.base_type.buffer_size is not None, f'Argument {argument.identifier.name} has no buffer size defined'
-                # Ignore array size in arguments, as they are spatially mapped
-                size = argument.dtype.base_type.buffer_size.eval()
-                ptrtype = dtype_as_csl(argument.dtype, export=True)
-            else:
-                size = 1
-                ptrtype = dtype_as_csl(spir.ArrayType(argument.dtype, [1]), export=True)
+    for field in place.statements:
+        if not isinstance(field.dtype, spir.ArrayType):  # Skip scalar arguments
+            continue
+        name = name_to_csl(field.field_name)
+        if isinstance(field.dtype, spir.ArrayType):
+            # Ignore array size in arguments, as they are spatially mapped
+            ptrtype = dtype_as_csl(field.dtype, export=True)
+        else:
+            ptrtype = dtype_as_csl(spir.ArrayType(field.dtype, [1]), export=True)
 
-            header.write(f'var {name}: [{size}]'
-                         f'{dtype_as_csl(argument.dtype.element_type.element_type.element_type)};\n')
-            header.write(f'var __{name}_ptr: {ptrtype} = &{name};\n')
-            footer.write(f'    @export_symbol(__{name}_ptr, "{name}");\n')
-    else:
+        #header.write(f'var {name}: [{size}]'
+        #                f'{dtype_as_csl(field.dtype.element_type.element_type.element_type)};\n')
+        header.write(f'var __{name}_ptr: {ptrtype} = &{name};\n')
+        footer.write(f'    @export_symbol(__{name}_ptr, "{name}");\n')
+    
+    if not use_memcpy_mode:
         # TODO(later): Some scaffolding for streaming indices within rectangle code
         pass
 
