@@ -345,11 +345,14 @@ class _ForeachDataTaskToLoopConverter(spir.NodeTransformer):
         if dsd_ops.get_dsd_op(self.dtypes, node) is not None:
             return self.generic_visit(node)
 
+        if isinstance(self.dtypes[node.receive_stream.stream_name], spir.StreamType):
+            return self.generic_visit(node)
+
         body_statements = [self.visit(stmt) for stmt in node.body]
         loop_variables = [copy.deepcopy(var) for var in node.variables]
         loop_ranges = [copy.deepcopy(rng) for rng in node.parameter_range]
         stream_target = copy.deepcopy(node.receive_stream.stream_name)
-        if loop_ranges:
+        if isinstance(self.dtypes[stream_target], spir.ArrayType) and loop_ranges:
             index_exprs = []
             for var in loop_variables:
                 idx_identifier = copy.deepcopy(var.identifier)

@@ -809,7 +809,8 @@ def _collect_unique_dsds(
             if not stmt.parameter_range:
                 if stream_name not in stream_args:
                     raise SyntaxError(f'Foreach generator "{stream_name.as_ir()}" without a defined '
-                                      f'range must only be used with a kernel argument.\n  In line {stmt.lineinfo}')
+                                      f'range must only be used with a kernel argument or extern_stream.'
+                                      f'\n  In line {stmt.lineinfo}')
                 # A data task will be created instead (handled in _generate_data_task)
             else:
                 if stream_name.as_ir() in stream_candidates:
@@ -862,9 +863,43 @@ def _collect_unique_dsds(
             output_queue_id_ctr += 1
             dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
-        def _visit_dsd(substmt, in_foreach_or_map):
-            if isinstance(substmt, spir.SendStatement) and in_foreach_or_map:
+        def _visit_nested_receive(substmt: spir.ReceiveStatement):
+            if substmt.stream_name.as_ir() not in stream_candidates:
+                return
+            # Stream DSD (i.e., await receive in a lowered for loop)
+            stream_name = substmt.stream_name
+            dsd_type = cslstruct.DSDType.fabin
+            dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
+            extents = stream_candidates[stream_name.as_ir()][1]
+            if extents is not None:  # Use buffer size
+                extents = extents if isinstance(extents, int) else extents.eval()
+            else:  # Infer from receive count
+                if isinstance(substmt.local_array, spir.TypedIdentifier):
+                    local_array = substmt.local_array.identifier
+                else:
+                    local_array = substmt.local_array
+                if isinstance(local_array, spir.ArraySlice) or isinstance(dtypes[local_array],
+                                                                         spir.ScalarType):
+                    # Scalar receive
+                    extents = 1
+                else:
+                    extents = functools.reduce(
+                        lambda a, b: a * b,
+                        [s.eval() if not isinstance(s, int) else s for s in dtypes[local_array].shape], 1)
+            fabric_color = f'{name_to_csl(stream_name)}_color'
+            nonlocal input_queue_id_ctr
+            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
+                                      csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)])
+            input_queue_id_ctr += 1
+            dsds[stream_name.as_ir()].append((dsd_name, dsd))
+
+        def _visit_dsd(substmt, in_scope, in_assignment):
+            if isinstance(substmt, spir.SendStatement) and in_scope:
                 _visit_nested_send(substmt)
+                return
+            if isinstance(substmt, spir.ReceiveStatement):
+                if in_scope:
+                    _visit_nested_receive(substmt)
                 return
             if (isinstance(substmt, spir.Identifier) and substmt.as_ir() in array_candidates and
                     substmt.as_ir() not in dsds):
@@ -877,7 +912,7 @@ def _collect_unique_dsds(
                 return
             if substmt.array.as_ir() not in array_candidates:
                 return
-            if not in_foreach_or_map:
+            if not in_scope:
                 return
 
             dsd = _dsd_from_array(array_candidates, substmt)
@@ -921,36 +956,53 @@ class DSDVisitor(spir.NodeVisitor):
         self.toplevel = toplevel
         self.in_foreach = False
         self.in_map = False
+        self.in_for = False
+        self.in_assignment = False
         super().__init__()
 
     def visit_ForeachStatement(self, node: spir.ForeachStatement):
+        old_scope = self.in_foreach
         self.in_foreach = True
         self.generic_visit(node)
-        self.in_foreach = False
+        self.in_foreach = old_scope
 
     def visit_MapStatement(self, node: spir.MapStatement):
+        old_scope = self.in_map
         self.in_map = True
         self.generic_visit(node)
-        self.in_map = False
+        self.in_map = old_scope
+
+    def visit_ForStatement(self, node: spir.ForStatement):
+        old_scope = self.in_for
+        self.in_for = True
+        self.generic_visit(node)
+        self.in_for = old_scope
 
     def visit_Identifier(self, node: spir.Identifier):
-        self.callback(node, self.in_foreach or self.in_map)
+        self.callback(node, self.in_foreach or self.in_map, self.in_assignment)
         return
 
     def visit_SendStatement(self, node: spir.SendStatement):
-        self.callback(node, self.in_foreach or self.in_map)
+        self.callback(node, self.in_foreach or self.in_map, self.in_assignment)
+        return
+
+    def visit_ReceiveStatement(self, node: spir.ReceiveStatement):
+        self.callback(node, self.in_foreach or self.in_map, self.in_assignment)
         return
 
     def visit_ArraySlice(self, node: spir.ArraySlice):
-        self.callback(node, self.in_foreach or self.in_map)
+        self.callback(node, self.in_foreach or self.in_map, self.in_assignment)
         # Do not visit internal identifier
         return
 
     def visit_AssignmentStatement(self, node: spir.AssignmentStatement):
+        old_assignment = self.in_assignment
+        self.in_assignment = True
         if self.toplevel and isinstance(node.destination, spir.ArraySlice):
             self.generic_visit(node.source)  # Do not visit assignment to array slice
         else:
             self.generic_visit(node)
+        self.in_assignment = old_assignment
         return
 
 
