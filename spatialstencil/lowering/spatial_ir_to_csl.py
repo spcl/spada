@@ -71,6 +71,10 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     # Lower arguments to extern fields/streams
     canonicalization.lower_arguments_to_extern(rectangles, kernel)
 
+    # Add benchmarking fields
+    if not disable_benchmarking:
+        _add_benchmarking_fields(rectangles)
+
     # Collect scalar argument types
     scalar_argument_types = []
     scalar_arguments = []
@@ -207,10 +211,6 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
 
         layout_code.write(f'    @export_name("{field.field_name.name}", {dtype_as_csl(dtype, export=True)}, true);\n')
 
-    # Generate benchmarking code
-    if not disable_benchmarking:
-        _generate_benchmarking_code_in_layout(layout_code)
-
     layout_code.write(f'''
     // Kernel
     @export_name("{kernel.name}", fn({", ".join(scalar_argument_types)})void);
@@ -267,7 +267,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         canonicalization.convert_foreach_data_tasks_to_loops(rect, dtypes)
 
     if not disable_benchmarking:
-        benchmark_preamble, benchmark_postamble = _generate_benchmarking_code(header, footer)
+        benchmark_preamble, benchmark_postamble = _generate_benchmarking_code(header)
     else:
         benchmark_preamble = benchmark_postamble = ''
 
@@ -587,7 +587,7 @@ def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, foote
         #                f'{dtype_as_csl(field.dtype.element_type.element_type.element_type)};\n')
         header.write(f'var __{name}_ptr: {ptrtype} = &{name};\n')
         footer.write(f'    @export_symbol(__{name}_ptr, "{name}");\n')
-    
+
     if not use_memcpy_mode:
         # TODO(later): Some scaffolding for streaming indices within rectangle code
         pass
@@ -878,8 +878,7 @@ def _collect_unique_dsds(
                     local_array = substmt.local_array.identifier
                 else:
                     local_array = substmt.local_array
-                if isinstance(local_array, spir.ArraySlice) or isinstance(dtypes[local_array],
-                                                                         spir.ScalarType):
+                if isinstance(local_array, spir.ArraySlice) or isinstance(dtypes[local_array], spir.ScalarType):
                     # Scalar receive
                     extents = 1
                 else:
@@ -1276,21 +1275,16 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
                 current_code.write(f'    @unblock({task_id});\n')
 
 
-def _generate_benchmarking_code(header: StringIO, footer: StringIO):
+def _generate_benchmarking_code(header: StringIO):
     """
-    Generates benchmarking code in the header, current code, and footer.
+    Generates benchmarking code in the header and current code.
     
     :param header: A code generator stream for a file's header (where the declarations are).
-    :param footer: A code generator stream for a file's footer (the comptime block where the array would be exported).
     :return: A tuple of (benchmark_preamble, benchmark_postamble) strings to insert into the current code.
     """
-    # Generate tsc counters, functions, and imports in header
+    # Generate tsc imports in header
     header.write("""// Benchmarking counters
 const timestamp = @import_module("<time>");
-var __benchmark_start = @zeros([3]u16);
-var __benchmark_start_ptr = &__benchmark_start;
-var __benchmark_stop = @zeros([3]u16);
-var __benchmark_stop_ptr = &__benchmark_stop;
 """)
 
     benchmark_preamble = """    timestamp.enable_tsc();
@@ -1300,24 +1294,27 @@ var __benchmark_stop_ptr = &__benchmark_stop;
     timestamp.disable_tsc();
 """
 
-    # Generate exports for function names and counters in footer
-    footer.write('\n    // Benchmarking exports\n')
-    footer.write('    @export_symbol(__benchmark_start_ptr, "__benchmark_start");\n')
-    footer.write('    @export_symbol(__benchmark_stop_ptr, "__benchmark_stop");\n')
-
     return benchmark_preamble, benchmark_postamble
 
 
-def _generate_benchmarking_code_in_layout(layout_code: StringIO):
+def _add_benchmarking_fields(rectangles: list[Rectangle[PEBlock]]):
     """
-    Generates benchmarking code in the layout file's footer.
-
-    :param layout_code: A code generator stream for the layout code block.
+    Adds benchmarking variables to the code as extern fields.
+    :param rectangles: The rectangles to modify.
     """
-    # Generate exports for function names and counters in layout block
-    layout_code.write('\n    // Benchmarking exports\n')
-    layout_code.write('    @export_name("__benchmark_start", *[3]u16,  true);\n')
-    layout_code.write('    @export_name("__benchmark_stop", *[3]u16,  true);\n')
+    for rect in rectangles:
+        rect.metadata.place.statements.append(
+            spir.FieldDeclaration(
+                field_name=spir.Identifier('__benchmark_start', 0),
+                dtype=spir.ArrayType(spir.ScalarType.u16, [3]),
+                is_extern=True,
+            ))
+        rect.metadata.place.statements.append(
+            spir.FieldDeclaration(
+                field_name=spir.Identifier('__benchmark_stop', 0),
+                dtype=spir.ArrayType(spir.ScalarType.u16, [3]),
+                is_extern=True,
+            ))
 
 
 def _collect_identifier_types(rect: PEBlock,
