@@ -403,9 +403,8 @@ def convert_foreach_data_tasks_to_loops(rect: Rectangle[PEBlock], dtypes: dict[s
 
 def lower_arguments_to_extern(rectangles: list[Rectangle[PEBlock]], kernel: spir.Kernel) -> None:
     """
-    Lowers stream arguments to extern stream declarations in a dataflow or place block.
-    Keeps kernel arguments for stream extent computation.
-    Scalar arguments are unaffected.
+    Lowers stream arguments to extern field declarations in a place block or 
+    extern stream declarations in a dataflow block. Scalar arguments are unaffected.
 
     :param rectangles: A list of PE block rectangles to modify.
     :param kernel: The kernel whose arguments are being lowered.
