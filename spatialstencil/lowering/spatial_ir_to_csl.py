@@ -80,6 +80,13 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
         if e.args and isinstance(e.args[0], spir.Identifier):
             raise ValueError(f"Error in {e.args[0].lineinfo}. Undefined identifier \"{e.args[0].as_ir()}\".")
 
+    # Lower arguments to extern fields/streams
+    canonicalization.lower_arguments_to_extern(rectangles, kernel)
+
+    # Add benchmarking fields
+    if not disable_benchmarking:
+        _add_benchmarking_fields(rectangles)
+
     # Collect scalar argument types
     scalar_argument_types = []
     scalar_arguments = []
@@ -195,21 +202,26 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
         layout_code.write(rinst + '\n')
 
     # Emit symbol names for arguments and kernel
-    layout_code.write('\n    // Arguments\n')
-    for argument in kernel.arguments:
-        dtype = argument.dtype
-        if isinstance(argument.dtype, spir.ArrayType) and isinstance(argument.dtype.base_type, spir.StreamType):
+    layout_code.write('\n    // Extern fields\n')
+    # Gather extern fields from kernel arguments
+    extern_fields: list[spir.FieldDeclaration] = []
+    for rect in rectangles:
+        place_block = rect.metadata.place
+        for field in place_block.statements:
+            if field.is_extern:
+                if any(field.field_name == ef.field_name for ef in extern_fields):
+                    continue
+                extern_fields.append(field)
+
+    for field in extern_fields:
+        dtype = field.dtype
+        if isinstance(field.dtype, spir.ArrayType) and isinstance(field.dtype.base_type, spir.StreamType):
             pass
-        elif isinstance(argument.dtype, spir.StreamType):
+        elif isinstance(field.dtype, spir.StreamType):
             # Support scalar streams
-            dtype = spir.ArrayType(argument.dtype, [1])
+            dtype = spir.ArrayType(field.dtype, [1])
 
-        layout_code.write(
-            f'    @export_name("{argument.identifier.name}", {dtype_as_csl(dtype, export=True)}, true);\n')
-
-    # Generate benchmarking code
-    if not disable_benchmarking:
-        _generate_benchmarking_code_in_layout(layout_code)
+        layout_code.write(f'    @export_name("{field.field_name.name}", {dtype_as_csl(dtype, export=True)}, true);\n')
 
     layout_code.write(f'''
     // Kernel
@@ -264,7 +276,12 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
     # Preprocess potential data tasks to convert to loops if possible
     if use_memcpy_mode:
-        canonicalization.convert_foreach_data_tasks_to_loops(rect, dtypes, kernel.arguments)
+        canonicalization.convert_foreach_data_tasks_to_loops(rect, dtypes)
+
+    if not disable_benchmarking:
+        benchmark_preamble, benchmark_postamble = _generate_benchmarking_code(header)
+    else:
+        benchmark_preamble = benchmark_postamble = ''
 
     # Convert compute block subgraphs into tasks:
     #    * Make task DAG out of computations
@@ -330,7 +347,8 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         if task.task_type == 'local':
             current_code.write(f'task task_{task.task_id}() void {{\n')
             try:
-                _generate_task_code(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map, tasks)
+                _generate_task_code(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map, tasks,
+                                    benchmark_postamble)
             except KeyError as e:
                 # If a KeyError occurs with an identifier, it means that it is not defined in the current scope
                 identifier = e.args[0]
@@ -370,6 +388,10 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     current_code.write(f'''\nfn {kernel.name}({", ".join(scalar_arguments)}) void {{
 ''')
 
+    # Write benchmarking code
+    if not disable_benchmarking:
+        current_code.write(benchmark_preamble)
+
     # Copy scalar arguments to local variables
     for argument in scalar_arguments:
         arg_name = argument.split(':')[0].strip().removeprefix('__arg_')
@@ -398,6 +420,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         prefix = "d" if task.task_type == 'data' else ""
         current_code.write(f'    @activate({prefix}task_{i}_id);\n')
     if not source_tasks:
+        current_code.write(benchmark_postamble)
         # Unblock command stream if function is empty
         current_code.write(f'    sys_mod.unblock_cmd_stream();\n')
     current_code.write('}\n')
@@ -406,13 +429,10 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         current_code.write(f'''
 const exit_task_id = @get_local_task_id({max_task_id + 1});
 task exit_task() void {{
+    {benchmark_postamble}
     // On completion, unblock command stream
     sys_mod.unblock_cmd_stream();
 }}''')
-
-    # Write benchmarking code
-    if not disable_benchmarking:
-        _generate_benchmarking_code(header, current_code, footer)
 
     # Finalize footer
     footer.write(f'''
@@ -433,41 +453,44 @@ def _collect_colors_globally(kernel: spir.Kernel, rectangles: list[Rectangle[PEB
     :return: Dictionary mapping each channel to its respective color.
     """
     channel_to_color: dict[int, int] = {}
-    color_offset: int = 0
-
-    # Collect colors from kernel arguments if in streaming mode
-    if not use_memcpy_mode:
-        for arg in kernel.arguments:
-            if arg.compiletime:
-                continue
-            is_input = not arg.writeonly
-            is_output = not arg.readonly
-
-            if ((isinstance(arg.dtype, spir.StreamType) and arg.dtype.buffer_size is None) or
-                (isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType) and
-                 arg.dtype.base_type.buffer_size is None)):
-
-                if is_input:
-                    color_offset += 1
-                if is_output:
-                    color_offset += 1
 
     # Collect, for each rectangle, which channels are being read from and written to
     channel_is_read = set()
     channel_is_written = set()
+    auto_stream_is_read = set()
+    auto_stream_is_written = set()
     for rect in rectangles:
         sends_recvs = analysis.sends_and_receives(rect.metadata.compute)
         for stream_decl in rect.metadata.dataflow.statements:
             if stream_decl.stream_name not in sends_recvs:
                 continue  # Unused stream
             outbound, inbound = sends_recvs[stream_decl.stream_name]
+            if stream_decl.stream.routing.channel == "auto":
+                if outbound:
+                    auto_stream_is_written.add(stream_decl.stream_name)
+                if inbound:
+                    auto_stream_is_read.add(stream_decl.stream_name)
+                continue  # Skip remainder of "auto" channels and assign them below
             if outbound:
-                channel_is_written.add(stream_decl.routing.channel)
+                channel_is_written.add(stream_decl.stream.routing.channel)
             if inbound:
-                channel_is_read.add(stream_decl.routing.channel)
+                channel_is_read.add(stream_decl.stream.routing.channel)
+
+    max_channel = max(channel_is_read.union(channel_is_written), default=-1)
+
+    # Assign all "auto" channels
+    for rect in rectangles:
+        for stream_decl in rect.metadata.dataflow.statements:
+            if stream_decl.stream.routing.channel == "auto":
+                stream_decl.stream.routing.channel = max_channel + 1
+                if stream_decl.stream_name in auto_stream_is_written:
+                    channel_is_written.add(max_channel + 1)
+                if stream_decl.stream_name in auto_stream_is_read:
+                    channel_is_read.add(max_channel + 1)
+                max_channel += 1
 
     # Allocate colors for each channel
-    max_channel = max(channel_is_read.union(channel_is_written), default=-1)
+    color_offset = 0
     for channel in range(max_channel + 1):
         if channel in channel_to_color:
             continue
@@ -501,45 +524,7 @@ def _allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Ke
     :return: Dictionary mapping each stream to its respective color
     """
     result: dict[str, int] = {}
-    wrote_header: bool = False
     channel_offset: int = 0
-
-    # Collect colors from kernel arguments if in streaming mode
-    if not use_memcpy_mode:
-        input_args = []
-        output_args = []
-        for arg in kernel.arguments:
-            if arg.compiletime:
-                continue
-            if not stream_extents.is_valid(arg.identifier,
-                                           rect):  # Skip arguments that are not participating in this rectangle
-                continue
-            if arg.readonly:
-                input_args.append((False, arg))
-            elif arg.writeonly:
-                output_args.append((True, arg))
-            else:
-                input_args.append((False, arg))
-                output_args.append((True, arg))
-
-        for is_output, arg in input_args + output_args:
-            if ((isinstance(arg.dtype, spir.StreamType) and arg.dtype.buffer_size is None) or
-                (isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType) and
-                 arg.dtype.base_type.buffer_size is None)):
-                if not wrote_header:
-                    header.write('\n// Streaming memcpy colors\n')
-                    wrote_header = True
-
-                # If the argument is a stream, allocate a color for h2d and d2h transfers
-                name = name_to_csl(arg.identifier)
-                if not is_output:
-                    result[name + "_H2D"] = csl.COLORS[channel_offset]
-                    channel_offset += 1
-                    header.write(f'const {name}_H2D_color: color = @get_color({result[name + "_H2D"]});\n')
-                else:
-                    result[name + "_D2H"] = csl.COLORS[channel_offset]
-                    channel_offset += 1
-                    header.write(f'const {name}_D2H_color: color = @get_color({result[name + "_D2H"]});\n')
 
     if rect.metadata.dataflow.statements:
         header.write('\n// Colors\n')
@@ -548,21 +533,20 @@ def _allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Ke
     # Collect colors from streams in dataflow
     for stream_decl in rect.metadata.dataflow.statements:
         name = name_to_csl(stream_decl.stream_name)
-        cdir = 'x' if stream_decl.dx.eval() != 0 else 'y'
 
         if stream_decl.stream_name not in sends_recvs:
             continue  # Unused stream
         outbound, inbound = sends_recvs[stream_decl.stream_name]
-        if stream_decl.routing is None:
+        if stream_decl.stream.routing is None:
             raise SyntaxError(f'Non-routed stream "{name}". When generating CSL, Spatial IR code must have all streams '
                               'routed.')
-        if stream_decl.routing.channel == 'auto':
+        if stream_decl.stream.routing.channel == 'auto':
             raise SyntaxError(f'"auto" stream channel found in stream "{name}". All streams must be concretized prior '
                               'to lowering to CSL')
 
         if outbound:
             # Look up channel in color map
-            this_color = channel_to_color[channel_offset + stream_decl.routing.channel]
+            this_color = channel_to_color[channel_offset + stream_decl.stream.routing.channel]
 
             # Add to mapping
             result[name + "_OUT"] = csl.COLORS[this_color]
@@ -571,7 +555,7 @@ def _allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Ke
 
         if inbound:
             # Look up channel in color map
-            this_color = channel_to_color[channel_offset + stream_decl.routing.channel]
+            this_color = channel_to_color[channel_offset + stream_decl.stream.routing.channel]
 
             # Add to mapping
             result[name + "_IN"] = csl.COLORS[this_color]
@@ -599,25 +583,24 @@ def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, foote
         header.write(f'var {name}: {dtype_as_csl(field_dec.dtype)};\n')
 
     # Add arguments to header and footer
-    if use_memcpy_mode:
-        for argument in kernel.arguments:
-            if not isinstance(argument.dtype, spir.ArrayType):  # Skip scalar arguments
-                continue
-            name = name_to_csl(argument.identifier)
-            if isinstance(argument.dtype, spir.ArrayType) and isinstance(argument.dtype.base_type, spir.StreamType):
-                assert argument.dtype.base_type.buffer_size is not None, f'Argument {argument.identifier.name} has no buffer size defined'
-                # Ignore array size in arguments, as they are spatially mapped
-                size = argument.dtype.base_type.buffer_size.eval()
-                ptrtype = dtype_as_csl(argument.dtype, export=True)
-            else:
-                size = 1
-                ptrtype = dtype_as_csl(spir.ArrayType(argument.dtype, [1]), export=True)
+    for field in place.statements:
+        if not field.is_extern:
+            continue
+        if not isinstance(field.dtype, spir.ArrayType):  # Skip scalar arguments
+            continue
+        name = name_to_csl(field.field_name)
+        if isinstance(field.dtype, spir.ArrayType):
+            # Ignore array size in arguments, as they are spatially mapped
+            ptrtype = dtype_as_csl(field.dtype, export=True)
+        else:
+            ptrtype = dtype_as_csl(spir.ArrayType(field.dtype, [1]), export=True)
 
-            header.write(f'var {name}: [{size}]'
-                         f'{dtype_as_csl(argument.dtype.element_type.element_type.element_type)};\n')
-            header.write(f'var __{name}_ptr: {ptrtype} = &{name};\n')
-            footer.write(f'    @export_symbol(__{name}_ptr, "{name}");\n')
-    else:
+        #header.write(f'var {name}: [{size}]'
+        #                f'{dtype_as_csl(field.dtype.element_type.element_type.element_type)};\n')
+        header.write(f'var __{name}_ptr: {ptrtype} = &{name};\n')
+        footer.write(f'    @export_symbol(__{name}_ptr, "{name}");\n')
+
+    if not use_memcpy_mode:
         # TODO(later): Some scaffolding for streaming indices within rectangle code
         pass
 
@@ -688,7 +671,7 @@ def _dsd_from_array(array_candidates: dict[str, tuple[spir.FieldDeclaration, lis
     )
 
 
-def _dsd_from_stream(stream_candidates: dict[str, tuple[spir.RelativeStreamDeclaration | spir.KernelArgument,
+def _dsd_from_stream(stream_candidates: dict[str, tuple[spir.StreamDeclaration | spir.KernelArgument,
                                                         int | spir.Expression]],
                      node: spir.Identifier | spir.ArraySlice):
     ident = node if isinstance(node, spir.Identifier) else node.array
@@ -729,14 +712,15 @@ def _collect_unique_dsds(
     # 3. An argument that is a stream or an array of streams in non memcpy mode, or buffer_size > 1 in memcpy mode.
 
     # Collect metadata from dataflow and place blocks
-    stream_candidates: dict[str, tuple[spir.RelativeStreamDeclaration | spir.KernelArgument,
-                                       int | spir.Expression]] = {}
+    stream_candidates: dict[str, tuple[spir.StreamDeclaration | spir.KernelArgument, int | spir.Expression]] = {}
     array_candidates: dict[str, tuple[spir.FieldDeclaration, list[int | spir.Expression]]] = {}
     stream_args: set[spir.Identifier] = set()
     for df_statement in rect.dataflow.statements:
-        if isinstance(df_statement, spir.RelativeStreamDeclaration):
+        if isinstance(df_statement, spir.StreamDeclaration):
             buffer_size = df_statement.dtype.buffer_size or None
             stream_candidates[df_statement.stream_name.as_ir()] = (df_statement, buffer_size)
+            if isinstance(df_statement.stream, spir.ExternStreamDeclaration):
+                stream_args.add(df_statement.stream_name)
     for place_statement in rect.place.statements:
         if isinstance(place_statement, spir.FieldDeclaration):
             if isinstance(place_statement.dtype, spir.ArrayType):
@@ -751,15 +735,6 @@ def _collect_unique_dsds(
                     pass
 
                 array_candidates[place_statement.field_name.as_ir()] = (place_statement, place_statement.dtype.shape)
-    for arg in kernel.arguments:
-        if isinstance(arg.dtype, spir.StreamType):
-            buffer_size = arg.dtype.buffer_size or 1
-            stream_candidates[arg.identifier.as_ir()] = (arg, buffer_size)
-            stream_args.add(arg.identifier)
-        elif isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType):
-            buffer_size = arg.dtype.base_type.buffer_size or 1
-            stream_candidates[arg.identifier.as_ir()] = (arg, buffer_size)
-            stream_args.add(arg.identifier)
 
     # Find used DSDs in compute block
     # TODO: Infer input/output queue ID based on concurrency
@@ -814,28 +789,31 @@ def _collect_unique_dsds(
                 output_queue_id_ctr += 1
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
-            if isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
+            if isinstance(stmt, spir.SendStatement):
                 # If the send statement sends from a local array, create another DSD
+                # Do the same for the stream
                 # This case does not apply for receive statements, as they would be lowered to foreach statements
-                if stmt.local_array.as_ir() in array_candidates:
-                    _, shape = array_candidates[stmt.local_array.as_ir()]
-                    if len(shape) == 1:
-                        dsd_type = cslstruct.DSDType.mem1d
-                        extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
-                        indices = ['__index']
-                    else:
-                        dsd_type = cslstruct.DSDType.mem4d
-                        extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
-                        indices = [f'__index_{i}' for i in range(len(shape))]
+                for arr in (stmt.local_array, stmt.stream_name):
+                    if arr.as_ir() in array_candidates:
+                        _, shape = array_candidates[arr.as_ir()]
+                        if len(shape) == 1:
+                            dsd_type = cslstruct.DSDType.mem1d
+                            extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
+                            indices = ['__index']
+                        else:
+                            dsd_type = cslstruct.DSDType.mem4d
+                            extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
+                            indices = [f'__index_{i}' for i in range(len(shape))]
 
-                    dsd = cslstruct.MemoryDSD(
-                        dsd_type,
-                        name_to_csl(stmt.local_array),
-                        extents,
-                        indices,
-                        indices,
-                    )
-                    dsds[stmt.local_array.as_ir()].append((f"{name_to_csl(stmt.local_array)}_dsd", dsd))
+                        dsd = cslstruct.MemoryDSD(
+                            dsd_type,
+                            name_to_csl(arr),
+                            extents,
+                            indices,
+                            indices,
+                        )
+                        dsds[arr.as_ir()].append((f"{name_to_csl(arr)}_dsd", dsd))
+
         elif isinstance(stmt, spir.ForeachStatement):
             # If the foreach statement has a stream generator, it is a DSD
             # unless only the receive generator is given (streaming, no range provided).
@@ -845,7 +823,8 @@ def _collect_unique_dsds(
             if not stmt.parameter_range:
                 if stream_name not in stream_args:
                     raise SyntaxError(f'Foreach generator "{stream_name.as_ir()}" without a defined '
-                                      f'range must only be used with a kernel argument.\n  In line {stmt.lineinfo}')
+                                      f'range must only be used with a kernel argument or extern_stream.'
+                                      f'\n  In line {stmt.lineinfo}')
                 # A data task will be created instead (handled in _generate_data_task)
             else:
                 if stream_name.as_ir() in stream_candidates:
@@ -898,9 +877,42 @@ def _collect_unique_dsds(
             output_queue_id_ctr += 1
             dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
-        def _visit_dsd(substmt, in_foreach_or_map):
-            if isinstance(substmt, spir.SendStatement) and in_foreach_or_map:
+        def _visit_nested_receive(substmt: spir.ReceiveStatement):
+            if substmt.stream_name.as_ir() not in stream_candidates:
+                return
+            # Stream DSD (i.e., await receive in a lowered for loop)
+            stream_name = substmt.stream_name
+            dsd_type = cslstruct.DSDType.fabin
+            dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
+            extents = stream_candidates[stream_name.as_ir()][1]
+            if extents is not None:  # Use buffer size
+                extents = extents if isinstance(extents, int) else extents.eval()
+            else:  # Infer from receive count
+                if isinstance(substmt.local_array, spir.TypedIdentifier):
+                    local_array = substmt.local_array.identifier
+                else:
+                    local_array = substmt.local_array
+                if isinstance(local_array, spir.ArraySlice) or isinstance(dtypes[local_array], spir.ScalarType):
+                    # Scalar receive
+                    extents = 1
+                else:
+                    extents = functools.reduce(
+                        lambda a, b: a * b,
+                        [s.eval() if not isinstance(s, int) else s for s in dtypes[local_array].shape], 1)
+            fabric_color = f'{name_to_csl(stream_name)}_color'
+            nonlocal input_queue_id_ctr
+            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
+                                      csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)])
+            input_queue_id_ctr += 1
+            dsds[stream_name.as_ir()].append((dsd_name, dsd))
+
+        def _visit_dsd(substmt, in_scope, in_assignment):
+            if isinstance(substmt, spir.SendStatement) and in_scope:
                 _visit_nested_send(substmt)
+                return
+            if isinstance(substmt, spir.ReceiveStatement):
+                if in_scope:
+                    _visit_nested_receive(substmt)
                 return
             if (isinstance(substmt, spir.Identifier) and substmt.as_ir() in array_candidates and
                     substmt.as_ir() not in dsds):
@@ -913,7 +925,7 @@ def _collect_unique_dsds(
                 return
             if substmt.array.as_ir() not in array_candidates:
                 return
-            if not in_foreach_or_map:
+            if not in_scope:
                 return
 
             dsd = _dsd_from_array(array_candidates, substmt)
@@ -957,36 +969,53 @@ class DSDVisitor(spir.NodeVisitor):
         self.toplevel = toplevel
         self.in_foreach = False
         self.in_map = False
+        self.in_for = False
+        self.in_assignment = False
         super().__init__()
 
     def visit_ForeachStatement(self, node: spir.ForeachStatement):
+        old_scope = self.in_foreach
         self.in_foreach = True
         self.generic_visit(node)
-        self.in_foreach = False
+        self.in_foreach = old_scope
 
     def visit_MapStatement(self, node: spir.MapStatement):
+        old_scope = self.in_map
         self.in_map = True
         self.generic_visit(node)
-        self.in_map = False
+        self.in_map = old_scope
+
+    def visit_ForStatement(self, node: spir.ForStatement):
+        old_scope = self.in_for
+        self.in_for = True
+        self.generic_visit(node)
+        self.in_for = old_scope
 
     def visit_Identifier(self, node: spir.Identifier):
-        self.callback(node, self.in_foreach or self.in_map)
+        self.callback(node, self.in_foreach or self.in_map, self.in_assignment)
         return
 
     def visit_SendStatement(self, node: spir.SendStatement):
-        self.callback(node, self.in_foreach or self.in_map)
+        self.callback(node, self.in_foreach or self.in_map, self.in_assignment)
+        return
+
+    def visit_ReceiveStatement(self, node: spir.ReceiveStatement):
+        self.callback(node, self.in_foreach or self.in_map, self.in_assignment)
         return
 
     def visit_ArraySlice(self, node: spir.ArraySlice):
-        self.callback(node, self.in_foreach or self.in_map)
+        self.callback(node, self.in_foreach or self.in_map, self.in_assignment)
         # Do not visit internal identifier
         return
 
     def visit_AssignmentStatement(self, node: spir.AssignmentStatement):
+        old_assignment = self.in_assignment
+        self.in_assignment = True
         if self.toplevel and isinstance(node.destination, spir.ArraySlice):
             self.generic_visit(node.source)  # Do not visit assignment to array slice
         else:
             self.generic_visit(node)
+        self.in_assignment = old_assignment
         return
 
 
@@ -1036,8 +1065,11 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
             if sent:
                 color_name_outbound = f'@get_color({color_map[name_to_csl(stream.stream_name) + "_OUT"]})'
 
-            if len(stream.routing.hops) == 1:  # Inbound and outbound generated together
-                route = _route_dir(*stream.routing.hops[0].offset)
+            if isinstance(stream.stream, spir.ExternStreamDeclaration):
+                continue  # Extern streams do not have on-chip routing
+
+            if len(stream.stream.routing.hops) == 1:  # Inbound and outbound generated together
+                route = _route_dir(*stream.stream.routing.hops[0].offset)
                 if sent:
                     routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
                         color_name_outbound, 'RAMP', route[1])
@@ -1052,7 +1084,7 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
                         routing_instructions.add(routing_inst)
             else:  # Multi-hop
                 if sent:
-                    first_hop = stream.routing.hops[0]
+                    first_hop = stream.stream.routing.hops[0]
                     route = ('RAMP', _route_dir(*first_hop.offset)[1])
                     routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
                         color_name_outbound, route[0], route[1])
@@ -1061,7 +1093,7 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
                         routing_instructions.add(routing_inst)
                     cur_offx = 0
                     cur_offy = 0
-                    for hop in stream.routing.hops[1:]:
+                    for hop in stream.stream.routing.hops[1:]:
                         route = _route_dir(*hop.offset)
                         cur_offx += hop.offset[0]
                         cur_offy += hop.offset[1]
@@ -1073,7 +1105,7 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
                 if received:
                     cur_offx = 0
                     cur_offy = 0
-                    last_hop = stream.routing.hops[-1]
+                    last_hop = stream.stream.routing.hops[-1]
                     route = (_route_dir(*last_hop.offset)[0], 'RAMP')
                     routing_inst = INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
                         cur_offx, cur_offy, color_name_inbound, route[0], route[1])
@@ -1082,7 +1114,7 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
                         routing_instructions.add(routing_inst)
                     cur_offx += last_hop.offset[0]
                     cur_offy += last_hop.offset[1]
-                    for hop in reversed(stream.routing.hops[:-1]):
+                    for hop in reversed(stream.stream.routing.hops[:-1]):
                         route = _route_dir(*hop.offset)
                         routing_inst = INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
                             cur_offx, cur_offy, color_name_inbound, route[0], route[1])
@@ -1177,9 +1209,9 @@ def _generate_data_task(
 
 
 def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringIO, header: StringIO, footer: StringIO,
-                        dsds: list[tuple[str, cslstruct.DataStructureDescriptor]],
-                        dtypes: dict[spir.Identifier, spir.IRType], color_map: dict[str,
-                                                                                    int], tasks: list[tdag.CSLTask]):
+                        dsds: list[tuple[str, cslstruct.DataStructureDescriptor]], dtypes: dict[spir.Identifier,
+                                                                                                spir.IRType],
+                        color_map: dict[str, int], tasks: list[tdag.CSLTask], postamble: str):
     """
     Generates a local task from a CSL task.
     This function converts statements to DSD operations or generates appropriate code.
@@ -1193,6 +1225,7 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
     :param dtypes: A dictionary mapping identifiers to their defined types.
     :param color_map: Dictionary mapping each stream to its respective color id ({name}_color also works).
     :param tasks: A list of all tasks in the kernel.
+    :param postamble: The code to be added at the end of the kernel.
     """
     # Convert task contents:
     # Convert receives/sends from/to arguments to memcpy
@@ -1235,6 +1268,7 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
 
         if next_task == -1 and itedge == tdag.InterTaskEdge.SEQUENCE:
             # Run exit task directly
+            current_code.write(postamble)
             current_code.write(f'    sys_mod.unblock_cmd_stream();\n')
             continue
 
@@ -1255,54 +1289,46 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
                 current_code.write(f'    @unblock({task_id});\n')
 
 
-def _generate_benchmarking_code(header: StringIO, current_code: StringIO, footer: StringIO):
+def _generate_benchmarking_code(header: StringIO):
     """
-    Generates benchmarking code in the header, current code, and footer.
+    Generates benchmarking code in the header and current code.
     
     :param header: A code generator stream for a file's header (where the declarations are).
-    :param current_code: The caret to the code generator at the current position (global).
-    :param footer: A code generator stream for a file's footer (the comptime block where the array would be exported).
+    :return: A tuple of (benchmark_preamble, benchmark_postamble) strings to insert into the current code.
     """
-    # Generate tsc counters, functions, and imports in header
+    # Generate tsc imports in header
     header.write("""// Benchmarking counters
 const timestamp = @import_module("<time>");
-var __benchmark_start = @zeros([3]u16);
-var __benchmark_start_ptr = &__benchmark_start;
-var __benchmark_stop = @zeros([3]u16);
-var __benchmark_stop_ptr = &__benchmark_stop;
+""")
 
-fn f_tic() void {
-    timestamp.enable_tsc();
+    benchmark_preamble = """    timestamp.enable_tsc();
     timestamp.get_timestamp(&__benchmark_start);
-    sys_mod.unblock_cmd_stream();
-}
+"""
+    benchmark_postamble = """    timestamp.get_timestamp(&__benchmark_stop);
+    timestamp.disable_tsc();
+"""
 
-fn f_toc() void {
-      timestamp.get_timestamp(&__benchmark_stop);
-      timestamp.disable_tsc();
-      sys_mod.unblock_cmd_stream();
-}""")
-
-    # Generate exports for function names and counters in footer
-    footer.write('\n    // Benchmarking exports\n')
-    footer.write('    @export_symbol(f_tic);\n')
-    footer.write('    @export_symbol(f_toc);\n')
-    footer.write('    @export_symbol(__benchmark_start_ptr, "__benchmark_start");\n')
-    footer.write('    @export_symbol(__benchmark_stop_ptr, "__benchmark_stop");\n')
+    return benchmark_preamble, benchmark_postamble
 
 
-def _generate_benchmarking_code_in_layout(layout_code: StringIO):
+def _add_benchmarking_fields(rectangles: list[Rectangle[PEBlock]]):
     """
-    Generates benchmarking code in the layout file's footer.
-
-    :param layout_code: A code generator stream for the layout code block.
+    Adds benchmarking variables to the code as extern fields.
+    :param rectangles: The rectangles to modify.
     """
-    # Generate exports for function names and counters in layout block
-    layout_code.write('\n    // Benchmarking exports\n')
-    layout_code.write('    @export_name("f_tic", fn()void);\n')
-    layout_code.write('    @export_name("f_toc", fn()void);\n')
-    layout_code.write('    @export_name("__benchmark_start", *[3]u16,  true);\n')
-    layout_code.write('    @export_name("__benchmark_stop", *[3]u16,  true);\n')
+    for rect in rectangles:
+        rect.metadata.place.statements.append(
+            spir.FieldDeclaration(
+                field_name=spir.Identifier('__benchmark_start', 0),
+                dtype=spir.ArrayType(spir.ScalarType.u16, [3]),
+                is_extern=True,
+            ))
+        rect.metadata.place.statements.append(
+            spir.FieldDeclaration(
+                field_name=spir.Identifier('__benchmark_stop', 0),
+                dtype=spir.ArrayType(spir.ScalarType.u16, [3]),
+                is_extern=True,
+            ))
 
 
 def _collect_identifier_types(rect: PEBlock,

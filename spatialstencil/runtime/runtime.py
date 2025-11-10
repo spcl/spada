@@ -275,11 +275,8 @@ class Program:
             print("done.", flush=True)
 
             if self.benchmark:
-                if self.runtime.get_id("f_tic") is None or self.runtime.get_id("f_toc") is None:
+                if self.runtime.get_id("__benchmark_start") is None or self.runtime.get_id("__benchmark_stop") is None:
                     raise ValueError("Benchmarking requested but not enabled in the program.")
-
-            if not self.metadata.memcpy_mode and self.benchmark:
-                self.runtime.launch("f_tic", nonblock=False)
 
             # Copy data to device
             for name, data in kwargs.items():
@@ -304,11 +301,7 @@ class Program:
                     if self.benchmark and not self.simulator and i == 0:
                         time.sleep(5.0)
                     print("Launching kernel...", flush=True, end='')
-                    if self.benchmark:
-                        self.runtime.launch("f_tic", nonblock=False)
                     self.runtime.launch(self.metadata.kernel_name, *scalar_args, nonblock=False)
-                    if self.benchmark:
-                        self.runtime.launch("f_toc", nonblock=False)
                     print("kernel launched.", flush=True)
 
                     if self.benchmark:

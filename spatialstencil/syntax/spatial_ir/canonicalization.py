@@ -137,13 +137,20 @@ def consolidate_rectangles_to_equivalence_classes(kernel: spir.Kernel) -> list[R
         rect = block.get_grid_rect()
         rect_to_stride[rect] = block.get_grid_stride()
         if isinstance(block, spir.PlaceBlock):
-            assert result[rect].place is None
-            result[rect].place = block
+            if result[rect].place is not None:
+                result[rect].place.statements.extend(block.statements)
+                block.statements.clear()
+            else:
+                result[rect].place = block
         elif isinstance(block, spir.DataflowBlock):
-            assert result[rect].dataflow is None
-            result[rect].dataflow = block
+            if result[rect].dataflow is not None:
+                result[rect].dataflow.statements.extend(block.statements)
+                block.statements.clear()
+            else:
+                result[rect].dataflow = block
         elif isinstance(block, spir.ComputeBlock):
-            assert result[rect].compute is None
+            if result[rect].compute is not None:
+                raise ValueError('Multiple compute blocks found for the same rectangle after inlining phases.')
             result[rect].compute = block
 
     # Fill in remainder of PEBlock with empty scopes (e.g., blocks without dataflow)
@@ -327,76 +334,25 @@ def lower_array_assignment(rectangles: list[Rectangle[PEBlock]]) -> None:
         rect.metadata.compute = _ArrayAssignmentLowerer(rect.metadata.place).visit(rect.metadata.compute)
 
 
-class _MemCpyStreamOperatorRemover(spir.NodeTransformer):
-
-    def __init__(self, stream_args: set[spir.Identifier]):
-        super().__init__()
-        self.stream_args = stream_args
-
-    def visit_ReceiveStatement(self, node: spir.ReceiveStatement):
-        if isinstance(node.stream_name, spir.Identifier) and node.stream_name in self.stream_args:
-            return None
-        if isinstance(node.stream_name, spir.ArraySlice) and node.stream_name.array in self.stream_args:
-            return None
-        return self.generic_visit(node)
-
-    def visit_SendStatement(self, node: spir.SendStatement):
-        if isinstance(node.stream_name, spir.Identifier) and node.stream_name in self.stream_args:
-            return None
-        if isinstance(node.stream_name, spir.ArraySlice) and node.stream_name.array in self.stream_args:
-            return None
-        return self.generic_visit(node)
-
-    def visit_ForeachStatement(self, node: spir.ForeachStatement):
-        if isinstance(node.receive_stream.stream_name,
-                      spir.Identifier) and node.receive_stream.stream_name in self.stream_args:
-            return None
-        if isinstance(node.receive_stream.stream_name,
-                      spir.ArraySlice) and node.receive_stream.stream_name.array in self.stream_args:
-            return None
-        return self.generic_visit(node)
-
-
-def remove_memcpy_stream_operators(kernel: spir.Kernel, rectangles: list[Rectangle[PEBlock]]) -> None:
-    """
-    Removes receives/sends/foreach loops that involve kernel arguments from the given rectangles in memcpy mode.
-    This pass is performed because memcpy mode will already copy the memory in and out outside the kernel code.
-
-    :param kernel: The kernel to modify.
-    :param rectangles: A list of PE block rectangles to modify.
-    """
-    stream_args: set[spir.Identifier] = set()
-    for arg in kernel.arguments:
-        if isinstance(arg.dtype, spir.StreamType):
-            stream_args.add(arg.identifier)
-        elif isinstance(arg.dtype, spir.ArrayType) and isinstance(arg.dtype.base_type, spir.StreamType):
-            stream_args.add(arg.identifier)
-
-    # TODO(later): Verify that each stream argument is used once, and then replace every occurrence of the stream
-    #              argument with its internal name.
-    for rect in rectangles:
-        rect.metadata.compute = _MemCpyStreamOperatorRemover(stream_args).visit(rect.metadata.compute)
-
-
 class _ForeachDataTaskToLoopConverter(spir.NodeTransformer):
 
-    def __init__(self, dtypes: dict[spir.Identifier, spir.IRType], kernel_arguments: list[spir.KernelArgument]):
+    def __init__(self, dtypes: dict[spir.Identifier, spir.IRType]):
         super().__init__()
         self.dtypes = dtypes
-        self.kernel_arguments = set(k.identifier for k in kernel_arguments)
 
     def visit_ForeachStatement(self, node: spir.ForeachStatement):
         from spatialstencil.syntax.csl import dsd_ops
-        if dsd_ops._get_id(node.receive_stream.stream_name) not in self.kernel_arguments:
-            return self.generic_visit(node)
         if dsd_ops.get_dsd_op(self.dtypes, node) is not None:
+            return self.generic_visit(node)
+
+        if isinstance(self.dtypes[node.receive_stream.stream_name], spir.StreamType):
             return self.generic_visit(node)
 
         body_statements = [self.visit(stmt) for stmt in node.body]
         loop_variables = [copy.deepcopy(var) for var in node.variables]
         loop_ranges = [copy.deepcopy(rng) for rng in node.parameter_range]
         stream_target = copy.deepcopy(node.receive_stream.stream_name)
-        if loop_ranges:
+        if isinstance(self.dtypes[stream_target], spir.ArrayType) and loop_ranges:
             index_exprs = []
             for var in loop_variables:
                 idx_identifier = copy.deepcopy(var.identifier)
@@ -434,14 +390,81 @@ class _ForeachDataTaskToLoopConverter(spir.NodeTransformer):
         return loop_statement
 
 
-def convert_foreach_data_tasks_to_loops(rect: Rectangle[PEBlock], dtypes: dict[spir.Identifier, spir.IRType],
-                                        kernel_arguments: list[spir.KernelArgument]) -> None:
+def convert_foreach_data_tasks_to_loops(rect: Rectangle[PEBlock], dtypes: dict[spir.Identifier, spir.IRType]) -> None:
     """
     Converts foreach blocks on input arguments to (async) loop blocks in memcpy mode.
     This pass is performed because memcpy mode will already copy the memory in and out outside the kernel code.
 
     :param rect: A single PE block rectangle to modify.
     :param dtypes: A mapping of identifier to its type in the given rectangle.
-    :param kernel_arguments: The list of kernel arguments, used to determine which identifiers are arguments.
     """
-    rect.metadata.compute = _ForeachDataTaskToLoopConverter(dtypes, kernel_arguments).visit(rect.metadata.compute)
+    rect.metadata.compute = _ForeachDataTaskToLoopConverter(dtypes).visit(rect.metadata.compute)
+
+
+def lower_arguments_to_extern(rectangles: list[Rectangle[PEBlock]], kernel: spir.Kernel) -> None:
+    """
+    Lowers stream arguments to extern field declarations in a place block or 
+    extern stream declarations in a dataflow block. Scalar arguments are unaffected.
+
+    :param rectangles: A list of PE block rectangles to modify.
+    :param kernel: The kernel whose arguments are being lowered.
+    :note: Modifies the kernel in-place.
+    """
+    # Create dataflow or place block depending on argument types
+    stream_decls: list[spir.StreamDeclaration] = []
+    field_decls: list[spir.FieldDeclaration] = []
+
+    # Create declarations
+    for arg in kernel.arguments:
+        dtype = arg.dtype
+        if isinstance(dtype, spir.ArrayType):
+            dtype = dtype.base_type
+
+        if isinstance(dtype, spir.StreamType):
+            if dtype.buffer_size is not None:
+                field_decls.append(
+                    spir.FieldDeclaration(
+                        dtype=spir.ArrayType(dtype.element_type, [dtype.buffer_size]),
+                        field_name=arg.identifier,
+                        is_extern=True))
+            else:
+                if arg.readonly or (not arg.readonly and not arg.writeonly):
+                    extern_decl = spir.StreamDeclaration(
+                        stream_name=arg.identifier,
+                        dtype=dtype,
+                        stream=spir.ExternStreamDeclaration('in', routing=spir.RoutingDeclaration()))
+                    stream_decls.append(extern_decl)
+                if arg.writeonly or (not arg.readonly and not arg.writeonly):
+                    extern_decl = spir.StreamDeclaration(
+                        stream_name=arg.identifier,
+                        dtype=dtype,
+                        stream=spir.ExternStreamDeclaration('out', routing=spir.RoutingDeclaration()))
+                    stream_decls.append(extern_decl)
+
+    # Replace all index expressions of our newly created extern streams/fields
+    extern_names = set(decl.stream_name for decl in stream_decls) | set(decl.field_name for decl in field_decls)
+
+    class _ArgumentReplacer(spir.NodeTransformer):
+
+        def visit_ArraySlice(self, node: spir.ArraySlice):
+            if node.array in extern_names:
+                return node.array
+            return self.generic_visit(node)
+
+    replacer = _ArgumentReplacer()
+
+    # Insert dataflow and place blocks for every compute block
+    # (unused fields/streams will be pruned later)
+    for rect in rectangles:
+        for decl in stream_decls:
+            if decl not in rect.metadata.dataflow.statements:
+                rect.metadata.dataflow.statements.append(copy.deepcopy(decl))
+        for decl in field_decls:
+            if decl not in rect.metadata.place.statements:
+                rect.metadata.place.statements.append(copy.deepcopy(decl))
+
+        for stmt in rect.metadata.compute.statements:
+            stmt = replacer.visit(stmt)
+
+    # Remove arguments from kernel
+    kernel.arguments = [arg for arg in kernel.arguments if arg.identifier not in extern_names]

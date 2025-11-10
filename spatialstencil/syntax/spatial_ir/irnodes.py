@@ -486,6 +486,7 @@ class FieldDeclaration(SpatialNode):
     """
     dtype: Union[ScalarType, ArrayType]
     field_name: Identifier
+    is_extern: bool = False
 
     def validate(self) -> None:
         assert isinstance(self.dtype, (ScalarType, ArrayType))
@@ -493,7 +494,8 @@ class FieldDeclaration(SpatialNode):
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
-        return f'{indent_str}{self.dtype.as_ir()} {self.field_name.as_ir()}'
+        prefix = "extern " if self.is_extern else ""
+        return f'{indent_str}{prefix}{self.dtype.as_ir()} {self.field_name.as_ir()}'
 
 
 ###
@@ -577,15 +579,11 @@ class RelativeStreamDeclaration(SpatialNode):
     A stream declaration inside a dataflow block that declares a communication stream
     to and from PEs at relative positions, with an optional routing declaration.
     """
-    dtype: StreamType
-    stream_name: Identifier
     dx: Expression
     dy: Expression
     routing: Optional[RoutingDeclaration] = None
 
     def validate(self) -> None:
-        assert isinstance(self.dtype, StreamType)
-        assert isinstance(self.stream_name, Identifier)
         assert isinstance(self.dx, Expression)
         assert isinstance(self.dy, Expression)
         if self.routing:
@@ -596,8 +594,50 @@ class RelativeStreamDeclaration(SpatialNode):
         routing_str = ""
         if self.routing:
             routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{indent_str}}}"
-        return (f'{indent_str}stream<{self.dtype.element_type.as_ir()}> {self.stream_name.as_ir()} = '
-                f'relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}')
+        return (f'relative_stream({self.dx.as_ir()}, {self.dy.as_ir()}){routing_str}')
+
+
+@dataclass
+class ExternStreamDeclaration(SpatialNode):
+    """
+    A stream declaration inside a dataflow block that declares a communication stream
+    to and from PEs and the host, with an optional channel declaration.
+    """
+    direction: Literal["in", "out"]
+    routing: Optional[RoutingDeclaration] = None
+
+    def validate(self) -> None:
+        assert self.direction in ["in", "out"]
+        if self.routing:
+            assert isinstance(self.routing, RoutingDeclaration)
+            assert self.routing.hops == "auto", "Extern streams can only have 'auto' hops."
+
+    def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
+        routing_str = ""
+        if self.routing:
+            routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{indent_str}}}"
+        return (f'extern_stream({self.direction}){routing_str}')
+
+
+@dataclass
+class StreamDeclaration(SpatialNode):
+    """
+    A stream declaration inside a dataflow block that declares a communication stream
+    to and from PEs at relative positions, with an optional routing declaration.
+    """
+    dtype: StreamType
+    stream_name: Identifier
+    stream: RelativeStreamDeclaration | ExternStreamDeclaration
+
+    def validate(self) -> None:
+        assert isinstance(self.dtype, StreamType)
+        assert isinstance(self.stream_name, Identifier)
+        assert isinstance(self.stream, (RelativeStreamDeclaration, ExternStreamDeclaration))
+
+    def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
+        return f'{indent_str}stream<{self.dtype.element_type.as_ir()}> {self.stream_name.as_ir()} = {self.stream.as_ir()}'
 
 
 ###
@@ -612,11 +652,11 @@ class DataflowBlock(SpatialNode):
     """
     variables: list[TypedIdentifier]
     subgrid: SubgridExpression
-    statements: list[RelativeStreamDeclaration]
+    statements: list[StreamDeclaration]
 
     def validate(self) -> None:
         assert all(isinstance(var, TypedIdentifier) for var in self.variables)
-        assert all(isinstance(stmt, RelativeStreamDeclaration) for stmt in self.statements)
+        assert all(isinstance(stmt, StreamDeclaration) for stmt in self.statements)
         assert len(self.variables) == 2
 
     def get_grid_rect(self) -> tuple[int, int, int, int]:

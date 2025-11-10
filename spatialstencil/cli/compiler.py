@@ -54,7 +54,9 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
 
     # Argument checks
     using_memcpy_mode = None
+    argnames = []
     for arg in kernel.arguments:
+        argnames.append(arg.identifier.name)
         # Change all shapes to be lists of integers
         if isinstance(arg.dtype, spa.ArrayType):
             arg.dtype.shape = [dim.eval() if isinstance(dim, spa.Expression) else int(dim) for dim in arg.dtype.shape]
@@ -117,11 +119,19 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
     stream_extents = analysis.detect_stream_argument_extents(rectangles, kernel)
     for argname, arg in itertools.chain(input_args.items(), output_args.items()):
-        if len(arg["shape"]) > 0: # Ignore scalar arguments
+        if len(arg["shape"]) > 0:  # Ignore scalar arguments
             arg_id = spa.Identifier(argname, 0)
             if arg_id not in stream_extents.extents:
+
+                if arg['shape'] == kernel_dims:
+                    # Special case for arguments that match the kernel grid size exactly
+                    arg["rect_offset_used"] = [0, 0]
+                    arg["column_major"] = False
+                    arg["rect_offset"] = [0, 0]
+                    continue
+
                 raise ValueError(f"Argument '{argname}' does not have a detected extent. "
-                                "Please ensure the argument is properly defined in the kernel.")
+                                 "Please ensure the argument is properly defined in the kernel.")
             arg["rect_offset_used"] = [
                 stream_extents.extents[arg_id][0].x_range[0], stream_extents.extents[arg_id][0].y_range[0]
             ]
@@ -136,7 +146,7 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         "kernel_name": kernel.name,
         "inputs": input_args,
         "outputs": output_args,
-        "argument_order": [a.identifier.name for a in kernel.arguments],
+        "argument_order": argnames,
         "memcpy_mode": using_memcpy_mode,
         "fabric_dims": [xend - xbegin, yend - ybegin],
         "kernel_dims": kernel_dims,

@@ -109,6 +109,50 @@ def test_spatial_roundtrip_two_phase_split():
     _rountrip_test(file)
 
 
+def test_extern_field():
+    """
+    Tests parsing the ``extern`` field qualifier in place blocks.
+    """
+    code = """
+    kernel @test<N>(f32 coeff) {
+        place u16 i, u16 j in [0:N, 0:N] {
+            extern f32[1] a;
+            f32 local_a;
+            extern f32[1] out;
+        }
+    }"""
+    kernel = parser.parse_string(code)
+    place_block = next(stmt for stmt in kernel.body if isinstance(stmt, spast.PlaceBlock))
+    a_decl, local_a_decl, out_decl = place_block.statements
+    assert not local_a_decl.is_extern
+    assert a_decl.is_extern
+    assert out_decl.is_extern
+
+
+def test_extern_stream():
+    """
+    Tests parsing the ``extern_stream`` stream in dataflow blocks.
+    """
+    code = """
+    kernel @test<N>(f32 coeff) {
+        dataflow u16 i, u16 j in [0:N, 0:N] {
+            stream<f32> in_stream = extern_stream(in);
+            stream<f32> out_stream = extern_stream(out) {
+                hops = auto,
+                channel = 3
+            };
+        }
+    }"""
+    kernel = parser.parse_string(code)
+    df_block = next(stmt for stmt in kernel.body if isinstance(stmt, spast.DataflowBlock))
+    in_decl, out_decl = df_block.statements
+    assert isinstance(in_decl.stream, spast.ExternStreamDeclaration)
+    assert isinstance(out_decl.stream, spast.ExternStreamDeclaration)
+    assert in_decl.stream.direction == 'in'
+    assert out_decl.stream.direction == 'out'
+    assert out_decl.stream.routing.channel == 3
+
+
 if __name__ == '__main__':
     test_spatial_roundtrip_laplacian()
     test_spatial_visitor()
@@ -117,3 +161,5 @@ if __name__ == '__main__':
     test_spatial_roundtrip_two_phase_split()
     test_spatial_roundtrip_forward()
     test_spatial_roundtrip_backward()
+    test_extern_field()
+    test_extern_stream()

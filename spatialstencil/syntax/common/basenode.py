@@ -95,6 +95,8 @@ class BaseNode:
             elif isinstance(field_type, type) and issubclass(field_type, BaseNode):
                 # Traverse if it’s a BaseNode subclass
                 field_type.validate_schema(visited)
+            elif origin is typing.Literal:
+                continue
             elif origin and issubclass(origin, (tuple, list)):  # Sequence
                 # Check contents of sequences
                 _check_sequence(field_type, field_name)
