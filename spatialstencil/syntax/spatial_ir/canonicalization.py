@@ -457,10 +457,12 @@ def lower_arguments_to_extern(rectangles: list[Rectangle[PEBlock]], kernel: spir
     # Insert dataflow and place blocks for every compute block
     # (unused fields/streams will be pruned later)
     for rect in rectangles:
-        if stream_decls:
-            rect.metadata.dataflow.statements.extend(copy.deepcopy(stream_decls))
-        if field_decls:
-            rect.metadata.place.statements.extend(copy.deepcopy(field_decls))
+        for decl in stream_decls:
+            if decl not in rect.metadata.dataflow.statements:
+                rect.metadata.dataflow.statements.append(copy.deepcopy(decl))
+        for decl in field_decls:
+            if decl not in rect.metadata.place.statements:
+                rect.metadata.place.statements.append(copy.deepcopy(decl))
 
         for stmt in rect.metadata.compute.statements:
             stmt = replacer.visit(stmt)
