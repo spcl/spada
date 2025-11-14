@@ -1,5 +1,5 @@
 import pytest
-from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, parser, passes
+from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, parser, passes, copy_elimination
 
 
 def test_canonicalize_nochange():
@@ -177,9 +177,12 @@ def test_prune_unused_fields():
     }
 }'''
     kernel = parser.parse_string(code)
-    kernel = passes.prune_unused_fields(kernel)
-    assert len(kernel.body[0].statements) == 5
-    assert all(decl.field_name.name.startswith('do_not_erase') for decl in kernel.body[0].statements)
+    passes.concretize_parameters(kernel, N=8)
+    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    assert len(rects) == 1
+    kernel = copy_elimination.prune_unused_fields(rects)
+    assert len(rects[0].metadata.place.statements) == 5
+    assert all(decl.field_name.name.startswith('do_not_erase') for decl in rects[0].metadata.place.statements)
 
 
 if __name__ == '__main__':

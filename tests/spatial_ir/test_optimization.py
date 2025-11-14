@@ -1,5 +1,5 @@
 from spatialstencil.syntax.spatial_ir import irnodes as spa
-from spatialstencil.syntax.spatial_ir import parser, passes
+from spatialstencil.syntax.spatial_ir import parser, passes, canonicalization, copy_elimination
 from typing import TypeVar
 import pytest
 
@@ -8,13 +8,6 @@ T = TypeVar('T')
 
 def parse_kernel(code: str) -> spa.Kernel:
     return parser.parse_string(code, "test.sptl")
-
-
-def _get_block(kernel: spa.Kernel, block_type: type[T]) -> T:
-    for stmt in kernel.body:
-        if isinstance(stmt, block_type):
-            return stmt
-    raise AssertionError(f"No block of type {block_type.__name__} found")
 
 
 def _first_assignment(statements: list[spa.Statement]) -> spa.AssignmentStatement:
@@ -39,17 +32,19 @@ def test_remove_copy_prior_to_send() -> None:
     """
     kernel = parse_kernel(code)
 
-    passes.eliminate_extraneous_copies(kernel)
-    passes.prune_unused_fields(kernel)
+    passes.concretize_parameters(kernel, N=8)
+    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.prune_unused_fields(rects)
 
-    compute = _get_block(kernel, spa.ComputeBlock)
+    compute = rects[0].metadata.compute
     assert len(compute.statements) == 1
     send_stmt = compute.statements[0]
     assert isinstance(send_stmt, spa.SendStatement)
     assert isinstance(send_stmt.local_array, spa.Identifier)
     assert send_stmt.local_array.name == "val"
 
-    place = _get_block(kernel, spa.PlaceBlock)
+    place = rects[0].metadata.place
     assert {decl.field_name.name for decl in place.statements} == {"val"}
 
 
@@ -70,17 +65,19 @@ def test_chain_of_copies_is_removed() -> None:
     """
     kernel = parse_kernel(code)
 
-    passes.eliminate_extraneous_copies(kernel)
-    passes.prune_unused_fields(kernel)
+    passes.concretize_parameters(kernel, N=8)
+    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.prune_unused_fields(rects)
 
-    compute = _get_block(kernel, spa.ComputeBlock)
+    compute = rects[0].metadata.compute
     assert len(compute.statements) == 1
     send_stmt = compute.statements[0]
     assert isinstance(send_stmt, spa.SendStatement)
     assert isinstance(send_stmt.local_array, spa.Identifier)
     assert send_stmt.local_array.name == "val"
 
-    place = _get_block(kernel, spa.PlaceBlock)
+    place = rects[0].metadata.place
     assert {decl.field_name.name for decl in place.statements} == {"val"}
 
 
@@ -101,9 +98,11 @@ def test_copy_preserved_when_source_mutates() -> None:
     """
     kernel = parse_kernel(code)
 
-    passes.eliminate_extraneous_copies(kernel)
+    passes.concretize_parameters(kernel, N=8)
+    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    copy_elimination.eliminate_extraneous_copies(rects)
 
-    compute = _get_block(kernel, spa.ComputeBlock)
+    compute = rects[0].metadata.compute
     assert len(compute.statements) == 2
     first_stmt, send_stmt = compute.statements
     assert isinstance(first_stmt, spa.AssignmentStatement)
@@ -135,16 +134,18 @@ def test_map_copy_removed_and_fields_pruned() -> None:
     """
     kernel = parse_kernel(code)
 
-    passes.eliminate_extraneous_copies(kernel)
-    passes.prune_unused_fields(kernel)
+    passes.concretize_parameters(kernel, N=8)
+    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.prune_unused_fields(rects)
 
-    compute = _get_block(kernel, spa.ComputeBlock)
+    compute = rects[0].metadata.compute
     send_stmt = compute.statements[-1]
     assert isinstance(send_stmt, spa.SendStatement)
     assert isinstance(send_stmt.local_array, spa.Identifier)
     assert send_stmt.local_array.name == "src"
 
-    place = _get_block(kernel, spa.PlaceBlock)
+    place = rects[0].metadata.place
     names = {decl.field_name.name for decl in place.statements}
     assert "tmp" not in names
 
@@ -170,12 +171,15 @@ def test_map_with_index_mismatch_not_removed() -> None:
     """
     kernel = parse_kernel(code)
 
-    passes.eliminate_extraneous_copies(kernel)
+    passes.concretize_parameters(kernel, N=8)
+    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.prune_unused_fields(rects)
 
-    compute = _get_block(kernel, spa.ComputeBlock)
+    compute = rects[0].metadata.compute
     maps = [stmt for stmt in compute.statements if isinstance(stmt, spa.MapStatement)]
     assert len(maps) == 1
-    place = _get_block(kernel, spa.PlaceBlock)
+    place = rects[0].metadata.place
     assert "tmp" in {decl.field_name.name for decl in place.statements}
 
 
@@ -198,16 +202,18 @@ def test_rename_propagates_into_for_loop() -> None:
     """
     kernel = parse_kernel(code)
 
-    passes.eliminate_extraneous_copies(kernel)
-    passes.prune_unused_fields(kernel)
+    passes.concretize_parameters(kernel, N=8)
+    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.prune_unused_fields(rects)
 
-    compute = _get_block(kernel, spa.ComputeBlock)
+    compute = rects[0].metadata.compute
     loop = next(stmt for stmt in compute.statements if isinstance(stmt, spa.ForStatement))
     body_assign = _first_assignment(loop.body)
     assert isinstance(body_assign.source.value, spa.Identifier)
     assert body_assign.source.value.name == "val"
 
-    place = _get_block(kernel, spa.PlaceBlock)
+    place = rects[0].metadata.place
     assert "tmp" not in {decl.field_name.name for decl in place.statements}
 
 
@@ -230,10 +236,12 @@ def test_foreach_copy_not_aliased() -> None:
     """
     kernel = parse_kernel(code)
 
-    passes.eliminate_extraneous_copies(kernel)
-    passes.prune_unused_fields(kernel)
+    passes.concretize_parameters(kernel, N=8)
+    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.prune_unused_fields(rects)
 
-    compute = _get_block(kernel, spa.ComputeBlock)
+    compute = rects[0].metadata.compute
     first_stmt = compute.statements[0]
     assert isinstance(first_stmt, spa.AssignmentStatement)
     assert isinstance(first_stmt.destination, spa.Identifier)
@@ -244,7 +252,7 @@ def test_foreach_copy_not_aliased() -> None:
     assert isinstance(body_assign.source.value, spa.Identifier)
     assert body_assign.source.value.name == "tmp"
 
-    place = _get_block(kernel, spa.PlaceBlock)
+    place = rects[0].metadata.place
     assert "tmp" in {decl.field_name.name for decl in place.statements}
 
 
@@ -268,9 +276,11 @@ def test_async_block_copy_not_aliased() -> None:
     """
     kernel = parse_kernel(code)
 
-    passes.eliminate_extraneous_copies(kernel)
+    passes.concretize_parameters(kernel, N=8)
+    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    copy_elimination.eliminate_extraneous_copies(rects)
 
-    compute = _get_block(kernel, spa.ComputeBlock)
+    compute = rects[0].metadata.compute
     first_stmt = compute.statements[0]
     assert isinstance(first_stmt, spa.AssignmentStatement)
     assert isinstance(first_stmt.destination, spa.Identifier)
@@ -300,9 +310,11 @@ def test_foreach_body_keeps_internal_copy() -> None:
     """
     kernel = parse_kernel(code)
 
-    passes.eliminate_extraneous_copies(kernel)
+    passes.concretize_parameters(kernel, N=8)
+    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    copy_elimination.eliminate_extraneous_copies(rects)
 
-    compute = _get_block(kernel, spa.ComputeBlock)
+    compute = rects[0].metadata.compute
     foreach_stmt = next(stmt for stmt in compute.statements if isinstance(stmt, spa.ForeachStatement))
     assert len([stmt for stmt in foreach_stmt.body if isinstance(stmt, spa.AssignmentStatement)]) == 2
 
@@ -336,12 +348,14 @@ def test_copy_constant_propagation(is_array: bool) -> None:
     }}"""
     kernel = parse_kernel(code)
 
-    passes.eliminate_extraneous_copies(kernel)
-    passes.prune_unused_fields(kernel)
+    passes.concretize_parameters(kernel, N=8)
+    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.prune_unused_fields(rects)
 
-    compute = _get_block(kernel, spa.ComputeBlock)
+    compute = rects[0].metadata.compute
     assert len(compute.statements) == 2
-    place = _get_block(kernel, spa.PlaceBlock)
+    place = rects[0].metadata.place
     assert "tmp" not in {decl.field_name.name for decl in place.statements}
 
 
@@ -364,10 +378,12 @@ def test_swap() -> None:
     }"""
     kernel = parse_kernel(code)
 
-    passes.eliminate_extraneous_copies(kernel)
-    passes.prune_unused_fields(kernel)
+    passes.concretize_parameters(kernel, N=8)
+    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.prune_unused_fields(rects)
 
-    compute = _get_block(kernel, spa.ComputeBlock)
+    compute = rects[0].metadata.compute
     assert len(compute.statements) == 4
     assign_stmts = [stmt for stmt in compute.statements if isinstance(stmt, spa.AssignmentStatement)]
     assert len(assign_stmts) == 3
@@ -396,10 +412,12 @@ def test_write_after_read_copy(internal_value: str) -> None:
     }}"""
     kernel = parse_kernel(code)
 
-    passes.eliminate_extraneous_copies(kernel)
-    passes.prune_unused_fields(kernel)
+    passes.concretize_parameters(kernel, N=8)
+    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.prune_unused_fields(rects)
 
-    compute = _get_block(kernel, spa.ComputeBlock)
+    compute = rects[0].metadata.compute
     loop = next(stmt for stmt in compute.statements if isinstance(stmt, spa.ForStatement))
     if internal_value == "out":
         assert len(loop.body) == 1
@@ -408,7 +426,7 @@ def test_write_after_read_copy(internal_value: str) -> None:
         assert isinstance(body_assign.source.value, spa.Identifier)
         assert body_assign.source.value.name == "tmp"
 
-    place = _get_block(kernel, spa.PlaceBlock)
+    place = rects[0].metadata.place
     if internal_value == "out":
         assert {decl.field_name.name for decl in place.statements} == {"tmp"}
 
@@ -436,16 +454,18 @@ def test_elide_in_loop(internal_value: str) -> None:
     }}"""
     kernel = parse_kernel(code)
 
-    passes.eliminate_extraneous_copies(kernel)
-    passes.prune_unused_fields(kernel)
+    passes.concretize_parameters(kernel, N=8)
+    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.prune_unused_fields(rects)
 
-    compute = _get_block(kernel, spa.ComputeBlock)
+    compute = rects[0].metadata.compute
     loop = next(stmt for stmt in compute.statements if isinstance(stmt, spa.ForStatement))
     body_assign = _first_assignment(loop.body)
     assert isinstance(body_assign.source.value, spa.Identifier)
     assert body_assign.source.value.name == "tmp"
 
-    place = _get_block(kernel, spa.PlaceBlock)
+    place = rects[0].metadata.place
     if internal_value == "out":
         assert "val" not in {decl.field_name.name for decl in place.statements}
     assert "out2" not in {decl.field_name.name for decl in place.statements}

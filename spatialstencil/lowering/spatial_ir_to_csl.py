@@ -7,6 +7,7 @@ import copy
 import functools
 from io import StringIO
 from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, analysis, passes
+from spatialstencil.syntax.spatial_ir import copy_elimination
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
 from spatialstencil.syntax.csl import constants as csl, preprocessing, tasks as tdag, statements as cslstmt, dsd_ops
 from spatialstencil.syntax.csl import structures as cslstruct
@@ -58,14 +59,6 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     # Check if we are streaming or using memcpy mode
     use_memcpy_mode = analysis.kernel_uses_memcpy_mode(kernel)
 
-    # Perform optimization passes
-    if copy_elision:
-        passes.eliminate_extraneous_copies(kernel)
-
-    # Prune unused fields from place blocks
-    if prune_memory:
-        kernel = passes.prune_unused_fields(kernel)
-
     # Create mapping between SpIR blocks and PE rectangles. Creates empty blocks as necessary
     rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
 
@@ -82,6 +75,14 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
 
     # Lower arguments to extern fields/streams
     canonicalization.lower_arguments_to_extern(rectangles, kernel)
+
+    # Perform optimization passes
+    if copy_elision:
+        copy_elimination.eliminate_extraneous_copies(rectangles)
+
+    # Prune unused fields from place blocks
+    if prune_memory:
+        copy_elimination.prune_unused_fields(rectangles)
 
     # Add benchmarking fields
     if not disable_benchmarking:
