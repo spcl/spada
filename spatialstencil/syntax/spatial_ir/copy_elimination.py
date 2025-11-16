@@ -102,6 +102,10 @@ def eliminate_extraneous_copies(rectangles: list[Rectangle[PEBlock]]):
     The kernel is updated in place and returned for convenience.
     """
     for rect in rectangles:
+        field_decls = {decl.field_name: decl for decl in rect.metadata.place.statements}
+        canonicalizer = _StreamCopyCanonicalizer(field_decls)
+        rect.metadata.compute = canonicalizer.visit(rect.metadata.compute)
+
         collector = _CopyCandidateCollector()
         collector.visit(rect.metadata.compute)
         if not collector.has_candidates:
@@ -112,6 +116,151 @@ def eliminate_extraneous_copies(rectangles: list[Rectangle[PEBlock]]):
         if eliminator.elided > 0:
             print(f"P{rect.x_range[0]},{rect.y_range[0]}: Eliminated {eliminator.elided} copies.")
 
+
+class _StreamCopyCanonicalizer(spa.NodeTransformer):
+    """Canonicalize stream copy patterns into ``map`` statements."""
+
+    def __init__(self, field_decls: dict[spa.Identifier, spa.FieldDeclaration]):
+        super().__init__()
+        self._field_decls = field_decls
+        self.fields = set(field_decls.keys())
+
+    def visit_ForeachStatement(self, node: spa.ForeachStatement):
+        node = self.generic_visit(node)
+        stream_name = node.receive_stream.stream_name
+        if not isinstance(stream_name, spa.Identifier):
+            return node
+        if stream_name not in self.fields:
+            return node
+        if len(node.body) != 1:
+            return node
+        inner_stmt = node.body[0]
+        if not isinstance(inner_stmt, spa.AssignmentStatement):
+            return node
+        src_identifier = self._extract_identifier(inner_stmt.source)
+        if src_identifier != node.stream_variable.identifier:
+            return node
+
+        indices = self._indices_from_destination(inner_stmt.destination)
+        new_source = self._value_as_expression(stream_name, indices)
+        lowered_assignment = copy.deepcopy(inner_stmt)
+        lowered_assignment.source = new_source
+        if getattr(inner_stmt, "lineinfo", None) is not None:
+            lowered_assignment.lineinfo = inner_stmt.lineinfo
+
+        map_stmt = spa.MapStatement(
+            [copy.deepcopy(var) for var in node.variables],
+            [copy.deepcopy(rng) for rng in node.parameter_range],
+            [lowered_assignment],
+            copy.deepcopy(node.completion_name) if node.completion_name is not None else None,
+        )
+        if getattr(node, "lineinfo", None) is not None:
+            map_stmt.lineinfo = node.lineinfo
+        return map_stmt
+
+    def visit_SendStatement(self, node: spa.SendStatement):
+        node = self.generic_visit(node)
+        stream_name = node.stream_name
+        if not isinstance(stream_name, spa.Identifier):
+            return node
+        if stream_name not in self.fields:
+            return node
+
+        field_decl = self._field_decls.get(stream_name)
+        if field_decl is None:
+            return node
+        dtype = field_decl.dtype
+        if not isinstance(dtype, spa.ArrayType):
+            return node
+        if len(dtype.shape) == 0:
+            return node
+
+        index_vars: list[spa.TypedIdentifier] = []
+        ranges: list[spa.RangeExpression] = []
+        index_identifiers: list[spa.Identifier] = []
+        for dim_index, dim in enumerate(dtype.shape):
+            idx_identifier = spa.Identifier(f"__copy_{stream_name.name}_{dim_index}", 0)
+            if getattr(node, "lineinfo", None) is not None:
+                idx_identifier.lineinfo = node.lineinfo
+            typed_var = spa.TypedIdentifier(spa.ScalarType.u16, idx_identifier)
+            if getattr(node, "lineinfo", None) is not None:
+                typed_var.lineinfo = node.lineinfo
+
+            index_vars.append(typed_var)
+            ranges.append(self._range_over_dimension(dim))
+            index_identifiers.append(idx_identifier)
+
+        dest_indices = [spa.Expression(identifier) for identifier in index_identifiers]
+        dest_slice = spa.ArraySlice(copy.deepcopy(stream_name), dest_indices)
+        if getattr(stream_name, "lineinfo", None) is not None:
+            dest_slice.lineinfo = stream_name.lineinfo
+        source_indices = [spa.Expression(identifier) for identifier in index_identifiers]
+        source_expr = self._value_as_expression(node.local_array, source_indices)
+
+        assignment = spa.AssignmentStatement(dest_slice, source_expr)
+        if getattr(node, "lineinfo", None) is not None:
+            assignment.lineinfo = node.lineinfo
+
+        map_stmt = spa.MapStatement(
+            index_vars,
+            ranges,
+            [assignment],
+            copy.deepcopy(node.completion_name) if node.completion_name is not None else None,
+        )
+        if getattr(node, "lineinfo", None) is not None:
+            map_stmt.lineinfo = node.lineinfo
+        return map_stmt
+
+    @staticmethod
+    def _extract_identifier(expr: spa.Expression | spa.Identifier) -> spa.Identifier | None:
+        if isinstance(expr, spa.Identifier):
+            return expr
+        if isinstance(expr, spa.Expression) and isinstance(expr.value, spa.Identifier):
+            return expr.value
+        return None
+
+    @staticmethod
+    def _indices_from_destination(destination: spa.ArraySlice | spa.Identifier) -> list[spa.Expression]:
+        if isinstance(destination, spa.ArraySlice):
+            return [copy.deepcopy(idx) for idx in destination.indices]
+        return []
+
+    @staticmethod
+    def _clone_expressions(indices: list[spa.Expression]) -> list[spa.Expression]:
+        return [copy.deepcopy(idx) for idx in indices]
+
+    def _value_as_expression(
+        self,
+        value: spa.Expression | spa.Identifier | spa.ArraySlice | spa.ConstantLiteral | spa.Parameter,
+        indices: list[spa.Expression],
+    ) -> spa.Expression:
+        if isinstance(value, spa.Expression):
+            return copy.deepcopy(value)
+        if isinstance(value, spa.ArraySlice):
+            return spa.Expression(copy.deepcopy(value))
+        if isinstance(value, (spa.ConstantLiteral, spa.Parameter)):
+            return spa.Expression(copy.deepcopy(value))
+        if isinstance(value, spa.Identifier):
+            if indices:
+                slice_node = spa.ArraySlice(copy.deepcopy(value), self._clone_expressions(indices))
+                if getattr(value, "lineinfo", None) is not None:
+                    slice_node.lineinfo = value.lineinfo
+                return spa.Expression(slice_node)
+            return spa.Expression(copy.deepcopy(value))
+        return spa.Expression(copy.deepcopy(value))
+
+    def _range_over_dimension(self, dim: int | spa.Expression) -> spa.RangeExpression:
+        start = self._zero_index_expr()
+        if isinstance(dim, spa.Expression):
+            stop = copy.deepcopy(dim)
+        else:
+            stop_literal = spa.ConstantLiteral(dim, spa.ScalarType.u16)
+            stop = spa.Expression(stop_literal)
+        return spa.RangeExpression(start=start, stop=stop)
+
+    @staticmethod
+    def _zero_index_expr() -> spa.Expression:
+        return spa.Expression(spa.ConstantLiteral(0, spa.ScalarType.u16))
 
 
 class _CopyCandidateCollector(spa.NodeVisitor):
