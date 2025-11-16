@@ -57,7 +57,7 @@ def test_receive_statement_array():
     kernel = passes.concretize_parameters(kernel, N=8)
     kernel = passes.constexpr_propagation(kernel)
 
-    csl_files = lower_spatial_ir_to_csl(kernel)
+    csl_files = lower_spatial_ir_to_csl(kernel, copy_elision=False)
 
     # Check that CSL files were generated
     assert len(csl_files) > 0
@@ -683,7 +683,7 @@ def test_for_statement_basic():
     kernel = passes.concretize_parameters(kernel, N=8)
     kernel = passes.constexpr_propagation(kernel)
 
-    csl_files = lower_spatial_ir_to_csl(kernel)
+    csl_files = lower_spatial_ir_to_csl(kernel, copy_elision=False)
 
     # Check that CSL files were generated
     assert len(csl_files) > 0
@@ -1007,7 +1007,7 @@ def test_foreach_lifting_to_dsd_op(with_binop):
     kernel = passes.concretize_parameters(kernel, N=4)
     kernel = passes.constexpr_propagation(kernel)
 
-    csl_files = lower_spatial_ir_to_csl(kernel)
+    csl_files = lower_spatial_ir_to_csl(kernel, copy_elision=False)
 
     # Check that CSL files were generated
     assert len(csl_files) > 0

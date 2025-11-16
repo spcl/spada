@@ -471,5 +471,42 @@ def test_elide_in_loop(internal_value: str) -> None:
     assert "out2" not in {decl.field_name.name for decl in place.statements}
 
 
+def test_copy_with_extern():
+    kernel = """
+    kernel @copy<N>(stream<f32, N>[N, N] readonly a,
+               stream<f32, N>[N, N] writeonly out) {
+    place u16 i, u16 j in [0:N, 0:N] {
+        f32[N] local;
+    }
+    compute u16 i, u16 j in [0:N, 0:N] {
+        await receive(local, a[i, j]);
+        await send(local, out[i, j]);
+    }
+}"""
+    kernel = parse_kernel(kernel)
+
+    passes.concretize_parameters(kernel, N=8)
+    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    canonicalization.lower_bulk_communication(rects)
+    canonicalization.lower_array_assignment(rects)
+    canonicalization.lower_arguments_to_extern(rects, kernel)
+
+    copy_elimination.eliminate_extraneous_copies(rects)
+    print(rects[0].metadata.compute.as_ir())
+    copy_elimination.prune_unused_fields(rects)
+
+    assert len(rects[0].metadata.place.statements) == 2
+    assert {'a', 'out'} == {decl.field_name.name for decl in rects[0].metadata.place.statements}
+
+    assert len(rects[0].metadata.compute.statements) == 1
+    recv_stmt = rects[0].metadata.compute.statements[0]
+    assert isinstance(recv_stmt, spa.MapStatement)
+    assert isinstance(recv_stmt.body[0], spa.AssignmentStatement)
+    assert isinstance(recv_stmt.body[0].source.value, spa.ArraySlice)
+    assert recv_stmt.body[0].source.value.array.name == 'a'
+    assert isinstance(recv_stmt.body[0].destination, spa.ArraySlice)
+    assert recv_stmt.body[0].destination.array.name == 'out'
+
+
 if __name__ == '__main__':
     pytest.main([__file__])

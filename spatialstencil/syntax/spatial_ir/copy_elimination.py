@@ -111,7 +111,7 @@ def eliminate_extraneous_copies(rectangles: list[Rectangle[PEBlock]]):
         if not collector.has_candidates:
             continue
 
-        eliminator = _ExtraneousCopyEliminator()
+        eliminator = _ExtraneousCopyEliminator(field_decls)
         rect.metadata.compute = eliminator.visit(rect.metadata.compute)
         if eliminator.elided > 0:
             print(f"P{rect.x_range[0]},{rect.y_range[0]}: Eliminated {eliminator.elided} copies.")
@@ -250,17 +250,13 @@ class _StreamCopyCanonicalizer(spa.NodeTransformer):
         return spa.Expression(copy.deepcopy(value))
 
     def _range_over_dimension(self, dim: int | spa.Expression) -> spa.RangeExpression:
-        start = self._zero_index_expr()
+        start = spa.Expression(spa.ConstantLiteral(0, spa.ScalarType.u16))
         if isinstance(dim, spa.Expression):
             stop = copy.deepcopy(dim)
         else:
             stop_literal = spa.ConstantLiteral(dim, spa.ScalarType.u16)
             stop = spa.Expression(stop_literal)
         return spa.RangeExpression(start=start, stop=stop)
-
-    @staticmethod
-    def _zero_index_expr() -> spa.Expression:
-        return spa.Expression(spa.ConstantLiteral(0, spa.ScalarType.u16))
 
 
 class _CopyCandidateCollector(spa.NodeVisitor):
@@ -290,9 +286,13 @@ class _ExtraneousCopyEliminator(spa.NodeTransformer):
     Rewrite compute statements to eliminate redundant copies.
     """
 
+    def __init__(self, field_decls: list[spa.FieldDeclaration]):
+        super().__init__()
+        self.field_decls = field_decls
+
     def visit_ComputeBlock(self, node: spa.ComputeBlock):
         liveness = _LivenessAnalyzer().run(node.statements)
-        optimizer = _CopySequenceOptimizer(_COMPUTE_SCOPE, liveness)
+        optimizer = _CopySequenceOptimizer(_COMPUTE_SCOPE, liveness, self.field_decls)
         node.statements = optimizer.transform(node.statements)
         self.elided = len(optimizer.rename_map)
         return node
@@ -489,6 +489,7 @@ class _CopySequenceOptimizer:
 
     policy: _CopyScopePolicy
     liveness: dict[int, _LivenessRecord]
+    field_decls: dict[spa.Identifier, spa.FieldDeclaration]
     rename_map: dict[spa.Identifier, spa.Identifier] = field(default_factory=dict)
 
     def transform(self, statements: list[spa.Statement]) -> list[spa.Statement]:
@@ -514,6 +515,9 @@ class _CopySequenceOptimizer:
             candidate = self._candidate_for(statement)
             live_info = self.liveness.get(id(statement))
             live_out = set(live_info.live_out) if live_info else set()
+            if candidate is not None and self.field_decls[candidate.destination].is_extern:
+                # Cannot remove extern fields
+                candidate = None
 
             if candidate is not None:
                 source_identifier = self._resolve_identifier(candidate.source)
@@ -568,7 +572,7 @@ class _CopySequenceOptimizer:
         statement: spa.ForStatement | spa.ForeachStatement | spa.AsyncBlock | spa.MapStatement = statement
 
         inherited_map = self.rename_map.copy() if child_policy.allows_alias_elimination else {}
-        nested_optimizer = _CopySequenceOptimizer(child_policy, self.liveness, inherited_map)
+        nested_optimizer = _CopySequenceOptimizer(child_policy, self.liveness, self.field_decls, inherited_map)
         statement.body = nested_optimizer.transform(statement.body)
         return statement, child_policy.allows_alias_elimination
 
