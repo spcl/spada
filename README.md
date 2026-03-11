@@ -124,14 +124,6 @@ Contributions are welcome. Please follow these steps:
 
 For significant changes (new language constructs, compiler passes, or architecture support), please open an issue first to discuss the design.
 
----
-
-## License
-
-This project is distributed under the terms of the MIT License. See [LICENSE](LICENSE) for details.
-
----
-
 ## Release
 
 SPADA is released under BSD-3-Clause License, see [LICENSE](LICENSE) for details.
