@@ -108,15 +108,19 @@ class ConstExprPropagation(spa.NodeTransformer):
             elif node.op == '==':
                 result = left.value.value == right.value.value
             elif node.op == '!=':
-                result = left.value.value == right.value.value
+                result = left.value.value != right.value.value
             elif node.op == '<':
-                result = left.value.value == right.value.value
+                result = left.value.value < right.value.value
             elif node.op == '<=':
-                result = left.value.value == right.value.value
+                result = left.value.value <= right.value.value
             elif node.op == '>':
-                result = left.value.value == right.value.value
+                result = left.value.value > right.value.value
             elif node.op == '>=':
-                result = left.value.value == right.value.value
+                result = left.value.value >= right.value.value
+            elif node.op == '>>':
+                result = left.value.value >> right.value.value
+            elif node.op == '<<':
+                result = left.value.value << right.value.value
             else:
                 raise TypeError(f'Unrecognized binary operator "{node.op}"')
             return spa.ConstantLiteral(result, restype)

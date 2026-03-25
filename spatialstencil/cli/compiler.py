@@ -112,6 +112,7 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         yend += 1 + 1
 
     # Generate metadata.json file
+    kernel = canonicalization.inline_metaprogramming(kernel)
     kernel = canonicalization.canonicalize_phases(kernel)
     kernel = canonicalization.reduce_streams(kernel)
     kernel = canonicalization.inline_phases(kernel)

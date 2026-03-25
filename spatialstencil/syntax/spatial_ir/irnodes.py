@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Union, Tuple, Optional, Literal
 from spatialstencil.syntax.common import visitor
 from spatialstencil.syntax.common.basenode import BaseNode
@@ -204,7 +206,7 @@ class BinaryOperator(SpatialNode):
     right: 'Expression'
 
     def validate(self) -> None:
-        assert self.op in ('+', '-', '*', '/', '%', '==', '!=', '<', '<=', '>', '>=')
+        assert self.op in ('+', '-', '*', '/', '%', '==', '!=', '<', '<=', '>', '>=', '<<', '>>')
         assert isinstance(self.left, Expression)
         assert isinstance(self.right, Expression)
 
@@ -1020,6 +1022,57 @@ class ComputeBlock(SpatialNode):
 
 
 @dataclass
+class MetaForBlock(SpatialNode):
+    """
+    Loop block that can be specified at the kernel level to support metaprogramming.
+    The loop will be unrolled at compile time, can only depend on compile-time constants and 
+    parameters, and can be used to generate multiple phase/place/dataflow/compute blocks.
+    """
+    variables: list[TypedIdentifier]
+    range_expression: list[RangeExpression]
+    body: list[PlaceBlock | DataflowBlock | ComputeBlock | Phase | MetaForBlock]
+
+    def validate(self) -> None:
+        assert isinstance(self.variables, list)
+        assert isinstance(self.range_expression, list)
+        assert isinstance(self.body, list)
+        assert all(isinstance(var, TypedIdentifier) for var in self.variables)
+        assert all(isinstance(rng, RangeExpression) for rng in self.range_expression)
+        assert all(
+            isinstance(stmt, (PlaceBlock, DataflowBlock, ComputeBlock, Phase, MetaForBlock)) for stmt in self.body)
+
+    def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
+        var_str = ", ".join(var.as_ir() for var in self.variables)
+        rng_str = ", ".join(rng.as_ir() for rng in self.range_expression)
+        body_str = "\n".join(stmt.as_ir(indent + 1) for stmt in self.body)
+        return f'{indent_str}for {var_str} in [{rng_str}] {{\n{body_str}\n{indent_str}}}'
+
+    def get_grid_rect(self) -> tuple[int, int, int, int]:
+        """
+        Returns the total PE grid rectangle for this meta-for block by combining the grid rectangles of all blocks in the body.
+
+        :return: A rectangle as a tuple of (x range begin, x range end, y range begin, y range end).
+        """
+        grid_rect: list[int | None] = [None] * 4
+        for block in self.body:
+            grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
+        return (grid_rect[0], grid_rect[1], grid_rect[2], grid_rect[3])  # type: ignore
+
+    def get_grid_stride(self) -> tuple[int, int]:
+        """
+        Returns the PE grid stride for this meta-for block by taking the minimum grid stride of all blocks in the body.
+
+        :return: A tuple of (x stride, y stride).
+        """
+        grid_stride = (1, 1)
+        for block in self.body:
+            block_stride = block.get_grid_stride()
+            grid_stride = (min(block_stride[0], grid_stride[0]), min(block_stride[1], grid_stride[1]))
+        return (grid_stride[0], grid_stride[1])
+
+
+@dataclass
 class Phase(SpatialNode):
     """
     Encapsulates a phase of data placement, communication, and computation.
@@ -1027,14 +1080,17 @@ class Phase(SpatialNode):
     place: list[PlaceBlock]
     dataflow: list[DataflowBlock]
     compute: list[ComputeBlock]
+    metaprogramming_blocks: list[MetaForBlock] = field(default_factory=list)
 
     def validate(self) -> None:
+        assert isinstance(self.metaprogramming_blocks, list)
         assert isinstance(self.place, list)
         assert isinstance(self.dataflow, list)
         assert isinstance(self.compute, list)
         assert all(isinstance(pl, PlaceBlock) for pl in self.place)
         assert all(isinstance(df, DataflowBlock) for df in self.dataflow)
         assert all(isinstance(cmp, ComputeBlock) for cmp in self.compute)
+        assert all(isinstance(mp, MetaForBlock) for mp in self.metaprogramming_blocks)
 
     def get_grid_rect(self) -> tuple[int, int, int, int]:
         """
@@ -1042,15 +1098,17 @@ class Phase(SpatialNode):
         
         :return: A rectangle as a tuple of (x range begin, x range end, y range begin, y range end).
         """
-        grid_rect = [None] * 4
+        grid_rect: list[int | None] = [None] * 4
         for block in self.place:
             grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
         for block in self.dataflow:
             grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
         for block in self.compute:
             grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
+        for block in self.metaprogramming_blocks:
+            grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
 
-        return tuple(grid_rect)
+        return (grid_rect[0], grid_rect[1], grid_rect[2], grid_rect[3])  # type: ignore
 
     def get_grid_stride(self) -> tuple[int, int]:
         """
@@ -1068,8 +1126,10 @@ class Phase(SpatialNode):
         for block in self.compute:
             block_stride = block.get_grid_stride()
             grid_stride = (min(block_stride[0], grid_stride[0]), min(block_stride[1], grid_stride[1]))
-
-        return tuple(grid_stride)
+        for block in self.metaprogramming_blocks:
+            block_stride = block.get_grid_stride()
+            grid_stride = (min(block_stride[0], grid_stride[0]), min(block_stride[1], grid_stride[1]))
+        return (grid_stride[0], grid_stride[1])
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
@@ -1077,6 +1137,7 @@ class Phase(SpatialNode):
         dataflow_str = "\n".join(df.as_ir(indent + 1) for df in self.dataflow)
         compute_str = "\n".join(cmp.as_ir(indent + 1) for cmp in self.compute)
         place_str = "\n".join(pl.as_ir(indent + 1) for pl in self.place)
+        meta_str = "\n".join(mp.as_ir(indent + 1) for mp in self.metaprogramming_blocks)
 
         body_str = ""
         if place_str:
@@ -1085,6 +1146,8 @@ class Phase(SpatialNode):
             body_str += f'{dataflow_str}\n'
         if compute_str:
             body_str += f'{compute_str}\n'
+        if meta_str:
+            body_str += f'{meta_str}\n'
 
         return f'{indent_str}{phase_str}{body_str}{indent_str}}}'
 
@@ -1134,7 +1197,7 @@ class Kernel(SpatialNode):
     name: str | None
     parameters: list[Parameter]
     arguments: list[KernelArgument]
-    body: list[PlaceBlock | DataflowBlock | ComputeBlock | Phase]
+    body: list[PlaceBlock | DataflowBlock | ComputeBlock | Phase | MetaForBlock]
 
     def validate(self) -> None:
         if self.name:
@@ -1144,7 +1207,8 @@ class Kernel(SpatialNode):
         assert isinstance(self.body, list)
         assert all(isinstance(p, Parameter) for p in self.parameters)
         assert all(isinstance(arg, KernelArgument) for arg in self.arguments)
-        assert all(isinstance(stmt, (Phase, ComputeBlock, DataflowBlock, PlaceBlock)) for stmt in self.body)
+        assert all(
+            isinstance(stmt, (Phase, ComputeBlock, DataflowBlock, PlaceBlock, MetaForBlock)) for stmt in self.body)
         assert self.validate_schema()
 
     def get_grid_rect(self) -> tuple[int, int, int, int]:
@@ -1153,11 +1217,11 @@ class Kernel(SpatialNode):
         
         :return: A rectangle as a tuple of (x range begin, x range end, y range begin, y range end).
         """
-        grid_rect = [None, None, None, None]
+        grid_rect: list[int | None] = [None, None, None, None]
         for block in self.body:
             grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
 
-        return tuple(grid_rect)
+        return tuple(grid_rect)  # type: ignore
 
     def get_grid_stride(self) -> tuple[int, int]:
         """
@@ -1170,7 +1234,7 @@ class Kernel(SpatialNode):
             block_stride = block.get_grid_stride()
             grid_stride = (min(block_stride[0], grid_stride[0]), min(block_stride[1], grid_stride[1]))
 
-        return tuple(grid_stride)
+        return (grid_stride[0], grid_stride[1])
 
     def as_ir(self, indent: int = 0) -> str:
         param_str = ", ".join(p.as_ir() for p in self.parameters)
@@ -1180,6 +1244,9 @@ class Kernel(SpatialNode):
             else f'kernel<{param_str}>({arg_str}) {{\n{body_str}\n}}'
 
     def subgrids(self) -> list[Subgrid]:
+        if any(isinstance(stmt, MetaForBlock) for stmt in self.body):
+            raise NotImplementedError('Subgrid extraction requires unrolling of metaprogramming blocks.')
+
         rectangles = []
         phase_id = 1
         for elem in self.body:
@@ -1208,7 +1275,7 @@ class Kernel(SpatialNode):
 
 
 # Helper functions
-def _combine_grids(grid: tuple[int, int, int, int], current_grid: list[int]):
+def _combine_grids(grid: tuple[int, int, int, int], current_grid: list[int | None]):
     gxb, gxe, gyb, gye = grid
     if current_grid[0] is None:
         current_grid[0] = gxb

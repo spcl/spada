@@ -47,6 +47,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     #     * There are no phases in the code, there may be local phases for each rectangle (pass)
 
     # Check if virtual rectangles are equal, consolidate, add phase-end remark at end of computation
+    kernel = canonicalization.inline_metaprogramming(kernel)
     kernel = canonicalization.canonicalize_phases(kernel)
     kernel = canonicalization.reduce_streams(kernel)
     kernel = canonicalization.inline_phases(kernel)

@@ -4,8 +4,85 @@ Canonicalization passes for Spatial IR
 from collections import defaultdict
 import copy
 from dataclasses import dataclass
+from itertools import product
 from spatialstencil.syntax.spatial_ir import irnodes as spir, analysis, passes
 from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle
+
+
+def inline_metaprogramming(kernel: spir.Kernel) -> spir.Kernel:
+    """
+    Unroll compile-time metaprogramming blocks into ordinary kernel/phase blocks.
+    """
+    return _MetaForInliner().visit(copy.deepcopy(kernel))
+
+
+class _MetaForInliner(spir.NodeTransformer):
+
+    def visit_Kernel(self, node: spir.Kernel):
+        node.body = self._inline_block_sequence(node.body)
+        return node
+
+    def visit_Phase(self, node: spir.Phase):
+        node.place = self.generic_visit_sequence(node.place)
+        node.dataflow = self.generic_visit_sequence(node.dataflow)
+        node.compute = self.generic_visit_sequence(node.compute)
+
+        generated = self._inline_block_sequence(node.metaprogramming_blocks)
+        node.metaprogramming_blocks = []
+        for block in generated:
+            if isinstance(block, spir.PlaceBlock):
+                node.place.append(block)
+            elif isinstance(block, spir.DataflowBlock):
+                node.dataflow.append(block)
+            elif isinstance(block, spir.ComputeBlock):
+                node.compute.append(block)
+            else:
+                raise TypeError(f'Unexpected block type "{type(block).__name__}" produced inside phase metafor')
+        return node
+
+    def _inline_block_sequence(self, blocks):
+        inlined = []
+        for block in blocks:
+            if isinstance(block, spir.MetaForBlock):
+                inlined.extend(self._expand_metafor(block))
+            else:
+                inlined.append(self.visit(block))
+        return inlined
+
+    def _expand_metafor(self, node: spir.MetaForBlock):
+        loop_values = [self._evaluate_range(rng) for rng in node.range_expression]
+        results = []
+        for values in product(*loop_values):
+            replacements = {
+                variable.identifier: spir.ConstantLiteral(value, variable.dtype)
+                for variable, value in zip(node.variables, values)
+            }
+            replacer = passes.FindAndReplace(replacements)
+            for stmt in node.body:
+                # Every loop iteration needs its own copy of the block
+                expanded = replacer.visit(copy.deepcopy(stmt))
+                expanded = passes.constexpr_propagation(expanded)
+                if isinstance(expanded, spir.MetaForBlock):
+                    results.extend(self._expand_metafor(expanded))
+                else:
+                    results.append(self.visit(expanded))
+        return results
+
+    def _evaluate_range(self, rng: spir.RangeExpression):
+        start = rng.start.eval()
+        stop = rng.stop.eval() if rng.stop is not None else None
+        step = rng.step.eval() if rng.step is not None else 1
+
+        if not isinstance(start, int):
+            raise TypeError(f'Metaprogramming range start must be a compile-time integral value, got {start}')
+        if stop is not None and not isinstance(stop, int):
+            raise TypeError(f'Metaprogramming range stop must be a compile-time integral value, got {stop}')
+        if not isinstance(step, int):
+            raise TypeError(f'Metaprogramming range step must be a compile-time integral value, got {step}')
+
+        if stop is None:
+            return [start]
+        return list(range(start, stop, step))
 
 
 def canonicalize_phases(kernel: spir.Kernel) -> spir.Kernel:
