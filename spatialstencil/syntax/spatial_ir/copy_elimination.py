@@ -376,8 +376,7 @@ def _extract_map_consumer(stmt: spir.Statement) -> _MapConsumer | None:
     return _MapConsumer(source.field, destination.field)
 
 
-def _extract_foreach_bulk_producer(stmt: spir.Statement,
-                                   non_extern_fields: set[spir.Identifier],
+def _extract_foreach_bulk_producer(stmt: spir.Statement, non_extern_fields: set[spir.Identifier],
                                    all_place_fields: set[spir.Identifier]) -> _ForeachBulkProducer | None:
     if not isinstance(stmt, spir.ForeachStatement):
         return None
