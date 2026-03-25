@@ -197,6 +197,80 @@ def test_remove_bulk_foreach_receive_send_copy():
     assert send_stmt.stream_name.name == "out"
 
 
+def test_do_not_remove_bulk_receive_relay_copy_to_dataflow_stream():
+    kernel = parser.parse_string(
+        """
+        kernel @copy<>() {
+            place u16 i, u16 j in [0:16, 0:16] {
+                f32[2] local
+                extern f32[2] a
+            }
+            dataflow u16 i, u16 j in [0:16, 0:16] {
+                stream<f32> relay = relative_stream(1, 0) {
+                    hops = [(1, 0)],
+                    channel = 0
+                }
+            }
+            compute u16 i, u16 j in [0:16, 0:16] {
+                await foreach u16 __k0, f32 __x in [0:2], receive(a) {
+                    local[__k0] = __x
+                }
+                completion done = send(local, relay)
+                await done
+            }
+        }
+        """,
+        "test.sptl",
+    )
+
+    rect = _optimize_kernel(kernel)
+
+    assert _place_field_names(rect) == ["local", "a"]
+    assert len(rect.metadata.compute.statements) == 3
+
+    foreach_stmt = rect.metadata.compute.statements[0]
+    send_stmt = rect.metadata.compute.statements[1]
+
+    assert isinstance(foreach_stmt, spir.ForeachStatement)
+    assert isinstance(send_stmt, spir.SendStatement)
+    assert isinstance(send_stmt.local_array, spir.Identifier)
+    assert send_stmt.local_array.name == "local"
+    assert isinstance(send_stmt.stream_name, spir.Identifier)
+    assert send_stmt.stream_name.name == "relay"
+
+
+def test_remove_bulk_receive_copy_to_extern_field_with_non_stream_name():
+    kernel = parser.parse_string(
+        """
+        kernel @copy<>() {
+            place u16 i, u16 j in [0:16, 0:16] {
+                f32[2] local
+                extern f32[2] source
+                extern f32[2] downstream
+            }
+            compute u16 i, u16 j in [0:16, 0:16] {
+                await foreach u16 __k0, f32 __x in [0:2], receive(source) {
+                    local[__k0] = __x
+                }
+                await send(local, downstream)
+            }
+        }
+        """,
+        "test.sptl",
+    )
+
+    rect = _optimize_kernel(kernel)
+
+    assert _place_field_names(rect) == ["source", "downstream"]
+    assert len(rect.metadata.compute.statements) == 1
+    send_stmt = rect.metadata.compute.statements[0]
+    assert isinstance(send_stmt, spir.SendStatement)
+    assert isinstance(send_stmt.local_array, spir.Identifier)
+    assert send_stmt.local_array.name == "source"
+    assert isinstance(send_stmt.stream_name, spir.Identifier)
+    assert send_stmt.stream_name.name == "downstream"
+
+
 def test_do_not_elide_extern_field_in_copy_chain():
     kernel = parser.parse_string(
         """

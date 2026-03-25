@@ -214,6 +214,11 @@ def _underlying_field(node) -> spir.Identifier | None:
     return None
 
 
+def _references_place_field(node, place_fields: set[spir.Identifier]) -> bool:
+    field = _underlying_field(node)
+    return field is not None and field in place_fields
+
+
 def _simple_value_from_expression(expr: spir.Expression) -> _SimpleValue | None:
     if isinstance(expr.value, (spir.Identifier, spir.ArraySlice)):
         return _SimpleValue(copy.deepcopy(expr.value), _underlying_field(expr.value))
@@ -309,6 +314,8 @@ def _extract_direct_consumer(stmt: spir.Statement) -> _DirectConsumer | None:
         return _DirectConsumer(source.field, destination)
 
     if isinstance(stmt, spir.SendStatement):
+        if not isinstance(stmt.local_array, (spir.Identifier, spir.ArraySlice)):
+            return None
         source = _simple_value_from_node(stmt.local_array)
         if source.field is None:
             return None
@@ -370,7 +377,8 @@ def _extract_map_consumer(stmt: spir.Statement) -> _MapConsumer | None:
 
 
 def _extract_foreach_bulk_producer(stmt: spir.Statement,
-                                   non_extern_fields: set[spir.Identifier]) -> _ForeachBulkProducer | None:
+                                   non_extern_fields: set[spir.Identifier],
+                                   all_place_fields: set[spir.Identifier]) -> _ForeachBulkProducer | None:
     if not isinstance(stmt, spir.ForeachStatement):
         return None
     if stmt.completion_name is not None or len(stmt.body) != 1:
@@ -397,6 +405,8 @@ def _extract_foreach_bulk_producer(stmt: spir.Statement,
             return None
 
     if not isinstance(stmt.receive_stream.stream_name, (spir.Identifier, spir.ArraySlice)):
+        return None
+    if not _references_place_field(stmt.receive_stream.stream_name, all_place_fields):
         return None
 
     return _ForeachBulkProducer(
@@ -676,7 +686,11 @@ def _optimize_region(statements: list[spir.Statement], non_extern_fields: set[sp
             if changed:
                 break
 
-            foreach_bulk_producer = _extract_foreach_bulk_producer(producer_stmt, non_extern_fields)
+            foreach_bulk_producer = _extract_foreach_bulk_producer(
+                producer_stmt,
+                non_extern_fields,
+                all_place_fields,
+            )
             if foreach_bulk_producer is None:
                 continue
 
@@ -691,6 +705,8 @@ def _optimize_region(statements: list[spir.Statement], non_extern_fields: set[sp
                     continue
                 if not isinstance(consumer_stmt, spir.SendStatement):
                     continue
+                if not _references_place_field(consumer_stmt.stream_name, all_place_fields):
+                    break
                 if _source_written_between(optimized, producer_index + 1, consumer_index,
                                            foreach_bulk_producer.source.field, all_place_fields):
                     break
@@ -744,7 +760,7 @@ class PruneUnusedFields:
             ]
 
 
-def remove_redundant_copies(rectangles) -> None:
+def _remove_redundant_copies(rectangles) -> None:
     RemoveRedundantCopies().apply(rectangles)
 
 
@@ -770,10 +786,10 @@ def prune_unused_fields(rectangles) -> None:
     PruneUnusedFields().apply(rectangles)
 
 
-def eliminate_redundant_copies(rectangles) -> None:
-    remove_redundant_copies(rectangles)
-    remove_single_element_index_copies(rectangles)
-
-
 def remove_single_element_index_copies(rectangles) -> None:
     RemoveSingleElementIndexCopies().apply(rectangles)
+
+
+def eliminate_redundant_copies(rectangles) -> None:
+    _remove_redundant_copies(rectangles)
+    remove_single_element_index_copies(rectangles)
