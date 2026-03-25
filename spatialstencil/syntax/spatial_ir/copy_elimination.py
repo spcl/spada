@@ -1,919 +1,779 @@
-from dataclasses import dataclass, field, replace
 import copy
-import enum
-from spatialstencil.syntax.spatial_ir import irnodes as spa
-from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
-from spatialstencil.syntax.spatial_ir.passes import FindAndReplace
+from collections import defaultdict
+from dataclasses import dataclass
+
+from spatialstencil.syntax.spatial_ir import irnodes as spir
 
 
 @dataclass(frozen=True)
-class CopyCandidate:
-    """Describes a copy that can potentially be removed."""
-
-    destination: spa.Identifier
-    source: spa.Identifier | spa.ConstantLiteral
+class _FieldCounts:
+    reads: int = 0
+    writes: int = 0
 
 
-def _normalized_indices(indices: list[spa.Expression | int]) -> tuple[str, ...] | None:
-    normalized: list[str] = []
-    for index in indices:
-        if isinstance(index, spa.Expression):
-            normalized.append(index.as_ir())
-        elif isinstance(index, int):
-            normalized.append(str(index))
-        else:
-            return None
-    return tuple(normalized)
+@dataclass(frozen=True)
+class _SimpleValue:
+    node: spir.Identifier | spir.ArraySlice
+    field: spir.Identifier | None
 
 
-def _extract_access(
-    node: spa.Identifier | spa.ArraySlice | spa.Expression,
-    allow_constants: bool,
-) -> tuple[spa.Identifier, tuple[str, ...]] | None:
-    if isinstance(node, spa.Expression):
-        if allow_constants:
-            try:  # Try to evaluate constant expressions
-                val = node.eval()
-                if val is not node.value:
-                    return node.value, None
-            except (ValueError, TypeError):
-                pass
-        return _extract_access(node.value, False)
-    if isinstance(node, spa.Identifier):
-        return node, ()
-    if isinstance(node, spa.ArraySlice) and isinstance(node.array, spa.Identifier):
-        normalized = _normalized_indices(node.indices)
-        if normalized is None:
-            return None
-        return node.array, normalized
-    return None
+@dataclass(frozen=True)
+class _MapValueTemplate:
+    field: spir.Identifier
+    index_positions: tuple[int, ...] = ()
 
+    def build(self, variables: list[spir.TypedIdentifier]) -> spir.Identifier | spir.ArraySlice:
+        if not self.index_positions:
+            return copy.deepcopy(self.field)
 
-def _copy_candidate_from_assignment(assignment: spa.AssignmentStatement) -> CopyCandidate | None:
-    dest_access = _extract_access(assignment.destination, False)
-    if dest_access is None:
-        return None
-    src_access = _extract_access(assignment.source, True)
-    if src_access is None:
-        return None
-    if src_access[1] is not None and dest_access[1] != src_access[1]:
-        return None
-    if src_access[1] is None and dest_access[1]:  # Set scalar into array index
-        return None
-    return CopyCandidate(dest_access[0], src_access[0])
-
-
-def is_copy(statement: spa.AssignmentStatement | spa.MapStatement) -> CopyCandidate | None:
-    """
-    Return copy details when a statement represents a simple data movement.
-
-    The predicate recognizes assignments or map statements that merely forward
-    data from one identifier to another without additional computation.
-
-    :param statement: The statement to analyze.
-    :return: A ``CopyCandidate`` if the statement is a copy, else None.
-    """
-
-    if isinstance(statement, spa.AssignmentStatement):
-        return _copy_candidate_from_assignment(statement)
-
-    if isinstance(statement, spa.MapStatement):
-        if len(statement.body) != 1:
-            return None
-        inner_stmt = statement.body[0]
-        if not isinstance(inner_stmt, spa.AssignmentStatement):
-            return None
-        return _copy_candidate_from_assignment(inner_stmt)
-
-    return None
-
-
-def eliminate_extraneous_copies(rectangles: list[Rectangle[PEBlock]]):
-    """
-    Remove redundant copy statements.
-
-    The pass proceeds in two steps:
-
-    1. A light-weight scan detects whether copy candidates exist at all. If no
-       copy-like statements are present, the kernel is returned unchanged.
-    2. A structured transformer walks the remaining statements and either drops
-       dead copies or rewrites later uses to alias the original source.
-
-    The kernel is updated in place and returned for convenience.
-    """
-    for rect in rectangles:
-        field_decls = {decl.field_name: decl for decl in rect.metadata.place.statements}
-        canonicalizer = _StreamCopyCanonicalizer(field_decls)
-        rect.metadata.compute = canonicalizer.visit(rect.metadata.compute)
-
-        collector = _CopyCandidateCollector()
-        collector.visit(rect.metadata.compute)
-        if not collector.has_candidates:
-            continue
-
-        eliminator = _ExtraneousCopyEliminator(field_decls)
-        rect.metadata.compute = eliminator.visit(rect.metadata.compute)
-        if eliminator.elided > 0:
-            print(f"P{rect.x_range[0]},{rect.y_range[0]}: Eliminated {eliminator.elided} copies.")
-
-
-class _StreamCopyCanonicalizer(spa.NodeTransformer):
-    """Canonicalize stream copy patterns into ``map`` statements."""
-
-    def __init__(self, field_decls: dict[spa.Identifier, spa.FieldDeclaration]):
-        super().__init__()
-        self._field_decls = field_decls
-        self.fields = set(field_decls.keys())
-
-    def visit_ForeachStatement(self, node: spa.ForeachStatement):
-        node = self.generic_visit(node)
-        stream_name = node.receive_stream.stream_name
-        if not isinstance(stream_name, spa.Identifier):
-            return node
-        if stream_name not in self.fields:
-            return node
-        if len(node.body) != 1:
-            return node
-        inner_stmt = node.body[0]
-        if not isinstance(inner_stmt, spa.AssignmentStatement):
-            return node
-        src_identifier = self._extract_identifier(inner_stmt.source)
-        if src_identifier != node.stream_variable.identifier:
-            return node
-
-        indices = self._indices_from_destination(inner_stmt.destination)
-        new_source = self._value_as_expression(stream_name, indices)
-        lowered_assignment = copy.deepcopy(inner_stmt)
-        lowered_assignment.source = new_source
-        if getattr(inner_stmt, "lineinfo", None) is not None:
-            lowered_assignment.lineinfo = inner_stmt.lineinfo
-
-        map_stmt = spa.MapStatement(
-            [copy.deepcopy(var) for var in node.variables],
-            [copy.deepcopy(rng) for rng in node.parameter_range],
-            [lowered_assignment],
-            copy.deepcopy(node.completion_name) if node.completion_name is not None else None,
+        return spir.ArraySlice(
+            copy.deepcopy(self.field),
+            [spir.Expression(copy.deepcopy(variables[position].identifier)) for position in self.index_positions],
         )
-        if getattr(node, "lineinfo", None) is not None:
-            map_stmt.lineinfo = node.lineinfo
-        return map_stmt
-
-    def visit_SendStatement(self, node: spa.SendStatement):
-        node = self.generic_visit(node)
-        stream_name = node.stream_name
-        if not isinstance(stream_name, spa.Identifier):
-            return node
-        if stream_name not in self.fields:
-            return node
-
-        field_decl = self._field_decls.get(stream_name)
-        if field_decl is None:
-            return node
-        dtype = field_decl.dtype
-        if not isinstance(dtype, spa.ArrayType):
-            return node
-        if len(dtype.shape) == 0:
-            return node
-
-        index_vars: list[spa.TypedIdentifier] = []
-        ranges: list[spa.RangeExpression] = []
-        index_identifiers: list[spa.Identifier] = []
-        for dim_index, dim in enumerate(dtype.shape):
-            idx_identifier = spa.Identifier(f"__copy_{stream_name.name}_{dim_index}", 0)
-            if getattr(node, "lineinfo", None) is not None:
-                idx_identifier.lineinfo = node.lineinfo
-            typed_var = spa.TypedIdentifier(spa.ScalarType.u16, idx_identifier)
-            if getattr(node, "lineinfo", None) is not None:
-                typed_var.lineinfo = node.lineinfo
-
-            index_vars.append(typed_var)
-            ranges.append(self._range_over_dimension(dim))
-            index_identifiers.append(idx_identifier)
-
-        dest_indices = [spa.Expression(identifier) for identifier in index_identifiers]
-        dest_slice = spa.ArraySlice(copy.deepcopy(stream_name), dest_indices)
-        if getattr(stream_name, "lineinfo", None) is not None:
-            dest_slice.lineinfo = stream_name.lineinfo
-        source_indices = [spa.Expression(identifier) for identifier in index_identifiers]
-        source_expr = self._value_as_expression(node.local_array, source_indices)
-
-        assignment = spa.AssignmentStatement(dest_slice, source_expr)
-        if getattr(node, "lineinfo", None) is not None:
-            assignment.lineinfo = node.lineinfo
-
-        map_stmt = spa.MapStatement(
-            index_vars,
-            ranges,
-            [assignment],
-            copy.deepcopy(node.completion_name) if node.completion_name is not None else None,
-        )
-        if getattr(node, "lineinfo", None) is not None:
-            map_stmt.lineinfo = node.lineinfo
-        return map_stmt
-
-    @staticmethod
-    def _extract_identifier(expr: spa.Expression | spa.Identifier) -> spa.Identifier | None:
-        if isinstance(expr, spa.Identifier):
-            return expr
-        if isinstance(expr, spa.Expression) and isinstance(expr.value, spa.Identifier):
-            return expr.value
-        return None
-
-    @staticmethod
-    def _indices_from_destination(destination: spa.ArraySlice | spa.Identifier) -> list[spa.Expression]:
-        if isinstance(destination, spa.ArraySlice):
-            return [copy.deepcopy(idx) for idx in destination.indices]
-        return []
-
-    @staticmethod
-    def _clone_expressions(indices: list[spa.Expression]) -> list[spa.Expression]:
-        return [copy.deepcopy(idx) for idx in indices]
-
-    def _value_as_expression(
-        self,
-        value: spa.Expression | spa.Identifier | spa.ArraySlice | spa.ConstantLiteral | spa.Parameter,
-        indices: list[spa.Expression],
-    ) -> spa.Expression:
-        if isinstance(value, spa.Expression):
-            return copy.deepcopy(value)
-        if isinstance(value, spa.ArraySlice):
-            return spa.Expression(copy.deepcopy(value))
-        if isinstance(value, (spa.ConstantLiteral, spa.Parameter)):
-            return spa.Expression(copy.deepcopy(value))
-        if isinstance(value, spa.Identifier):
-            if indices:
-                slice_node = spa.ArraySlice(copy.deepcopy(value), self._clone_expressions(indices))
-                if getattr(value, "lineinfo", None) is not None:
-                    slice_node.lineinfo = value.lineinfo
-                return spa.Expression(slice_node)
-            return spa.Expression(copy.deepcopy(value))
-        return spa.Expression(copy.deepcopy(value))
-
-    def _range_over_dimension(self, dim: int | spa.Expression) -> spa.RangeExpression:
-        start = spa.Expression(spa.ConstantLiteral(0, spa.ScalarType.u16))
-        if isinstance(dim, spa.Expression):
-            stop = copy.deepcopy(dim)
-        else:
-            stop_literal = spa.ConstantLiteral(dim, spa.ScalarType.u16)
-            stop = spa.Expression(stop_literal)
-        return spa.RangeExpression(start=start, stop=stop)
-
-
-class _CopyCandidateCollector(spa.NodeVisitor):
-    """
-    Collect whether the IR contains any removable copy statements.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.has_candidates = False
-
-    def visit_AssignmentStatement(self, node: spa.AssignmentStatement):
-        if not self.has_candidates and is_copy(node):
-            self.has_candidates = True
-            return node
-        return self.generic_visit(node)
-
-    def visit_MapStatement(self, node: spa.MapStatement):
-        if not self.has_candidates and is_copy(node):
-            self.has_candidates = True
-            return node
-        return self.generic_visit(node)
-
-
-class _ExtraneousCopyEliminator(spa.NodeTransformer):
-    """
-    Rewrite compute statements to eliminate redundant copies.
-    """
-
-    def __init__(self, field_decls: list[spa.FieldDeclaration]):
-        super().__init__()
-        self.field_decls = field_decls
-
-    def visit_ComputeBlock(self, node: spa.ComputeBlock):
-        liveness = _LivenessAnalyzer().run(node.statements)
-        optimizer = _CopySequenceOptimizer(_COMPUTE_SCOPE, liveness, self.field_decls)
-        node.statements = optimizer.transform(node.statements)
-        self.elided = len(optimizer.rename_map)
-        return node
 
 
 @dataclass(frozen=True)
-class _LivenessRecord:
-    """
-    Stores live-in and live-out identifier sets for a statement.
-    """
-
-    live_in: frozenset[spa.Identifier]
-    live_out: frozenset[spa.Identifier]
-
-
-def _direct_reads_writes(statement: spa.Statement) -> tuple[set[spa.Identifier], set[spa.Identifier]]:
-    """
-    Return reads/writes for a statement header, excluding nested bodies.
-
-    :param statement: The statement to analyze.
-    :return: A tuple of (reads, writes) sets.
-    """
-
-    if hasattr(statement, "body") and isinstance(getattr(statement, "body"), list):
-        header_stub = replace(statement, body=[])
-        reads, writes = _collect_reads_writes(header_stub)
-    else:
-        reads, writes = _collect_reads_writes(statement)
-    return set(reads), set(writes)
-
-
-class _LivenessAnalyzer:
-    """Backward dataflow analysis computing per-statement liveness sets."""
-
-    def __init__(self):
-        self.records: dict[int, _LivenessRecord] = {}
-
-    def run(
-        self,
-        statements: list[spa.Statement],
-        live_out: set[spa.Identifier] | None = None,
-    ) -> dict[int, _LivenessRecord]:
-        live_seed = set() if live_out is None else set(live_out)
-        self._analyze_sequence(statements, live_seed)
-        return self.records
-
-    def _analyze_sequence(
-        self,
-        statements: list[spa.Statement],
-        live_out: set[spa.Identifier],
-    ) -> set[spa.Identifier]:
-        live = set(live_out)
-        for statement in reversed(statements):
-            live_out_stmt = set(live)
-            live_in_stmt = self._analyze_statement(statement, live_out_stmt)
-            self.records[id(statement)] = _LivenessRecord(
-                frozenset(live_in_stmt),
-                frozenset(live_out_stmt),
-            )
-            live = live_in_stmt
-        return live
-
-    def _analyze_statement(
-        self,
-        statement: spa.Statement,
-        live_out: set[spa.Identifier],
-    ) -> set[spa.Identifier]:
-        handler = getattr(self, f"_analyze_{type(statement).__name__}", None)
-        if handler is None:
-            return self._default(statement, live_out)
-        return handler(statement, live_out)
-
-    @staticmethod
-    def _default(statement: spa.Statement, live_out: set[spa.Identifier]) -> set[spa.Identifier]:
-        reads, writes = _direct_reads_writes(statement)
-        return (live_out - writes) | reads
-
-    def _analyze_ForStatement(self, statement: spa.ForStatement, live_out: set[spa.Identifier]) -> set[spa.Identifier]:
-        return self._analyze_loop(statement, live_out)
-
-    def _analyze_ForeachStatement(
-        self,
-        statement: spa.ForeachStatement,
-        live_out: set[spa.Identifier],
-    ) -> set[spa.Identifier]:
-        return self._analyze_loop(statement, live_out)
-
-    def _analyze_MapStatement(self, statement: spa.MapStatement, live_out: set[spa.Identifier]) -> set[spa.Identifier]:
-        header_reads, header_writes = _direct_reads_writes(statement)
-        body_in = self._analyze_sequence(statement.body, set(live_out))
-        return header_reads | ((body_in | live_out) - header_writes)
-
-    def _analyze_AsyncBlock(self, statement: spa.AsyncBlock, live_out: set[spa.Identifier]) -> set[spa.Identifier]:
-        header_reads, header_writes = _direct_reads_writes(statement)
-        body_in = self._analyze_sequence(statement.body, set(live_out))
-        return header_reads | ((body_in | live_out) - header_writes)
-
-    def _analyze_loop(
-        self,
-        statement: spa.Statement,
-        live_out: set[spa.Identifier],
-    ) -> set[spa.Identifier]:
-        header_reads, header_writes = _direct_reads_writes(statement)
-        loop_out = set(live_out)
-        while True:
-            body_in = self._analyze_sequence(statement.body, set(loop_out))
-            updated = set(live_out) | body_in
-            if updated == loop_out:
-                break
-            loop_out = updated
-        # Ensure final body annotations correspond to the converged loop_out value.
-        body_in = self._analyze_sequence(statement.body, set(loop_out))
-        return header_reads | ((body_in | live_out) - header_writes)
+class _DirectProducer:
+    destination: spir.Identifier
+    source: _SimpleValue
 
 
 @dataclass(frozen=True)
-class _CopyScopePolicy:
-    """
-    Control copy elimination behavior for a statement scope.
-    """
-
-    allows_dead_removal: bool
-    allows_alias_elimination: bool
+class _DirectConsumer:
+    source_field: spir.Identifier
+    destination: spir.Identifier | None
 
 
-_COMPUTE_SCOPE = _CopyScopePolicy(
-    # Executes exactly once; safe to drop and alias copies.
-    allows_dead_removal=True,
-    allows_alias_elimination=True,
-)
-
-_LOOP_SCOPE = _CopyScopePolicy(
-    # Iterates repeatedly; keep explicit copies but allow intra-iteration aliasing.
-    allows_dead_removal=False,
-    allows_alias_elimination=True,
-)
-
-_FOREACH_SCOPE = _CopyScopePolicy(
-    # Streaming iterations may run concurrently (due to completions); neither removal nor aliasing is safe.
-    allows_dead_removal=False,
-    allows_alias_elimination=False,
-)
-
-_ASYNC_SCOPE = _CopyScopePolicy(
-    # Async blocks run in parallel with parent; avoid removing or aliasing copies.
-    allows_dead_removal=False,
-    allows_alias_elimination=False,
-)
-
-_MAP_SCOPE = _CopyScopePolicy(
-    # Map bodies repeat per element; keep copies but aliasing is fine per index.
-    allows_dead_removal=False,
-    allows_alias_elimination=True,
-)
+@dataclass(frozen=True)
+class _MapProducer:
+    destination: spir.Identifier
+    source: _MapValueTemplate
 
 
-def _policy_for_child_scope(statement: spa.Statement) -> _CopyScopePolicy | None:
-    """
-    Return the copy-optimization policy for ``statement``'s nested scope.
-    """
-
-    if isinstance(statement, spa.ForStatement):
-        return _LOOP_SCOPE
-    if isinstance(statement, spa.ForeachStatement):
-        return _FOREACH_SCOPE
-    if isinstance(statement, spa.AsyncBlock):
-        return _ASYNC_SCOPE
-    if isinstance(statement, spa.MapStatement):
-        return _MAP_SCOPE
-    return None
+@dataclass(frozen=True)
+class _MapConsumer:
+    source_field: spir.Identifier
+    destination: spir.Identifier
 
 
-@dataclass
-class _CopySequenceOptimizer:
-    """
-    Apply copy-elimination heuristics to a linear statement sequence.
-
-    The optimizer keeps a ``rename_map``, which records destinations that should
-    alias earlier sources. For each statement in the current sequence we:
-
-    - recognize copy-like statements (via :func:`is_copy`),
-    - use :class:`_CopyEffectAnalyzer` to decide whether the copy is dead,
-        can be replaced by an alias, or must be preserved, and
-    - rewrite nested blocks using fresh optimizers so loop-carried or
-        asynchronous semantics remain intact.
-
-    The ``policy`` captures the control-flow semantics for the sequence. It
-    decides whether dead copies may be dropped and whether new aliases may be
-    introduced. Nested optimizers inherit the rename map but operate under a
-    policy chosen to match their statement type. ``liveness`` stores the
-    backward dataflow results computed for the enclosing compute block and is
-    consulted to determine whether a copy is provably dead.
-    """
-
-    policy: _CopyScopePolicy
-    liveness: dict[int, _LivenessRecord]
-    field_decls: dict[spa.Identifier, spa.FieldDeclaration]
-    rename_map: dict[spa.Identifier, spa.Identifier] = field(default_factory=dict)
-
-    def transform(self, statements: list[spa.Statement]) -> list[spa.Statement]:
-        """
-        Return a copy-optimized version of ``statements``.
-
-        Traverses ``statements`` once, updating ``rename_map`` in place so that
-        later calls can observe the current aliasing environment. Each emitted
-        statement is deep-copied only when required for analysis; the original
-        instances are preserved to keep the IR tree stable for downstream
-        passes.
-
-        :param statements: The statements to optimize.
-        :return: The optimized statements.
-        """
-
-        optimized: list[spa.Statement] = []
-        index = 0
-        total = len(statements)
-
-        while index < total:
-            statement = statements[index]
-            candidate = self._candidate_for(statement)
-            live_info = self.liveness.get(id(statement))
-            live_out = set(live_info.live_out) if live_info else set()
-            if candidate is not None and self.field_decls[candidate.destination].is_extern:
-                # Cannot remove extern fields
-                candidate = None
-
-            if candidate is not None:
-                source_identifier = self._resolve_identifier(candidate.source)
-                if candidate.destination not in live_out:
-                    if self.policy.allows_dead_removal:
-                        index += 1
-                        continue
-                analyzer = _CopyEffectAnalyzer(
-                    candidate.destination,
-                    source_identifier,
-                    self.rename_map,
-                    live_out,
-                    self.liveness,
-                    self.policy,
-                )
-                decision = analyzer.evaluate(statements[index + 1:])
-
-                if decision == _CopyDecision.REMOVE_UNUSED:
-                    if self.policy.allows_dead_removal:
-                        index += 1
-                        continue
-
-                if decision == _CopyDecision.RENAME_USES and self.policy.allows_alias_elimination:
-                    self.rename_map[candidate.destination] = source_identifier
-                    index += 1
-                    continue
-
-            transformed, allow_alias_propagation = self._rewrite_statement(statement)
-            if allow_alias_propagation and self.rename_map:
-                transformed = FindAndReplace(self.rename_map).visit(transformed)
-
-            optimized.append(transformed)
-            self._clear_killed_mappings(transformed)
-            index += 1
-
-        return optimized
-
-    def _candidate_for(self, statement: spa.Statement) -> CopyCandidate | None:
-        """Return copy metadata for ``statement`` under the current aliases."""
-        analysis_stmt = copy.deepcopy(statement)
-        if self.rename_map:
-            analysis_stmt = FindAndReplace(self.rename_map).visit(analysis_stmt)
-        return is_copy(analysis_stmt)
-
-    def _rewrite_statement(self, statement: spa.Statement) -> tuple[spa.Statement, bool]:
-        """Optimize nested blocks and report whether aliases may propagate."""
-        child_policy = _policy_for_child_scope(statement)
-        if child_policy is None:
-            return statement, True
-
-        # Narrow types based on return type of `_policy_for_child_scope`
-        statement: spa.ForStatement | spa.ForeachStatement | spa.AsyncBlock | spa.MapStatement = statement
-
-        inherited_map = self.rename_map.copy() if child_policy.allows_alias_elimination else {}
-        nested_optimizer = _CopySequenceOptimizer(child_policy, self.liveness, self.field_decls, inherited_map)
-        statement.body = nested_optimizer.transform(statement.body)
-        return statement, child_policy.allows_alias_elimination
-
-    def _resolve_identifier(self, identifier: spa.Identifier) -> spa.Identifier:
-        """Resolve ``identifier`` through the current rename chain."""
-        key = identifier
-        seen: set[spa.Identifier] = set()
-        current = identifier
-
-        try:
-            hash(key)
-        except TypeError:
-            return current
-
-        while key in self.rename_map:
-            if key in seen:
-                break
-            seen.add(key)
-            current = self.rename_map[key]
-            key = current
-
-        return current
-
-    def _clear_killed_mappings(self, statement: spa.Statement) -> None:
-        _, writes = _collect_reads_writes(statement)
-        for key in writes:
-            self.rename_map.pop(key, None)
+@dataclass(frozen=True)
+class _ForeachBulkProducer:
+    destination_field: spir.Identifier
+    source: _SimpleValue
 
 
-class _CopyDecision(enum.Enum):
-    REMOVE_UNUSED = enum.auto()
-    RENAME_USES = enum.auto()
-    KEEP = enum.auto()
+@dataclass(frozen=True)
+class _IndexedProducer:
+    destination_field: spir.Identifier
+    destination_index_signature: tuple[str, ...]
+    source: spir.Expression
+    source_simple_value: _SimpleValue | None
+    source_fields: frozenset[spir.Identifier]
 
 
-@dataclass
-class _CopyEffectAnalyzer:
-    """
-    Determine the impact of removing or aliasing a copy statement.
-
-    The analyzer simulates the remainder of a statement list under a snapshot of
-    the current rename map. Each subsequent statement is copied and rewritten
-    using that snapshot so the reads/writes reflect the aliases that would be in
-    effect if the candidate copy were removed. The final decision balances three
-    outcomes:
-
-    ``REMOVE_UNUSED``
-        The destination is never read again.
-    ``RENAME_USES``
-        The destination is read, but the source is not clobbered before those
-        reads, so later uses can alias the source safely. The analyzer only
-        returns this outcome when the first read appears in a scope where alias
-        propagation is permitted.
-    ``KEEP``
-        Removing the copy would change program behavior (e.g., source is
-        written before the destination is read again).
-    """
-
-    destination: spa.Identifier
-    source: spa.Identifier
-    rename_map: dict[spa.Identifier, spa.Identifier]
-    live_out: set[spa.Identifier]
-    liveness: dict[int, _LivenessRecord]
-    policy: _CopyScopePolicy
-
-    def evaluate(self, remaining: list[spa.Statement]) -> _CopyDecision:
-        """Classify the effect of erasing the candidate before ``remaining``."""
-        temp_map = self.rename_map.copy()
-        destination_used = self.destination in self.live_out
-        destination_read_in_remaining = False
-        source_written = False
-
-        for statement in remaining:
-            simulated = copy.deepcopy(statement)
-            if temp_map:
-                simulated = FindAndReplace(temp_map).visit(simulated)
-
-            reads, writes = _collect_reads_writes(simulated)
-
-            info = self.liveness.get(id(statement))
-            if info and self.destination not in info.live_in and self.destination not in info.live_out:
-                # Liveness analysis proves no further uses inside this statement.
-                touches_source = self.source in writes if isinstance(self.source, spa.Identifier) else False
-                if self.destination not in writes and self.destination not in reads and not touches_source:
-                    continue
-
-            if self.destination in writes:
-                if self.destination in reads:
-                    return _CopyDecision.KEEP
-                if destination_used:
-                    return _CopyDecision.RENAME_USES if not source_written else _CopyDecision.KEEP
-                return _CopyDecision.REMOVE_UNUSED
-
-            source_is_hashable = True
-            try:
-                hash(self.source)
-            except TypeError:
-                source_is_hashable = False
-
-            if source_is_hashable and self.source in writes:
-                writes_source = True
-                if isinstance(simulated, spa.AssignmentStatement) and isinstance(simulated.destination, spa.Identifier):
-                    if simulated.destination == self.source and self.destination in reads:
-                        writes_source = False
-                if writes_source:
-                    source_written = True
-
-            if self.destination in reads:
-                destination_read_in_remaining = True
-                child_policy = _policy_for_child_scope(statement)
-                if child_policy is not None and not child_policy.allows_alias_elimination:
-                    return _CopyDecision.KEEP
-                if source_written:
-                    return _CopyDecision.KEEP
-                destination_used = True
-
-        if not destination_used:
-            return _CopyDecision.REMOVE_UNUSED
-        if (self.destination in self.live_out and not destination_read_in_remaining and
-                not self.policy.allows_dead_removal):
-            return _CopyDecision.KEEP
-        return _CopyDecision.RENAME_USES if not source_written else _CopyDecision.KEEP
+@dataclass(frozen=True)
+class _IndexedConsumer:
+    source_field: spir.Identifier
+    source_index_signature: tuple[str, ...]
+    occurrence_count: int
+    rewritable: bool
 
 
-class _ReadWriteCollector(spa.NodeVisitor):
+class _RecursiveFieldAccessCollector(spir.NodeVisitor):
 
-    def __init__(self):
+    def __init__(self, local_fields: set[spir.Identifier]):
         super().__init__()
-        self.reads: set[tuple[str, int]] = set()
-        self.writes: set[tuple[str, int]] = set()
-        self._context_stack: list[str] = ["read"]
+        self.local_fields = local_fields
+        self.reads: set[spir.Identifier] = set()
+        self.writes: set[spir.Identifier] = set()
 
-    def visit_AssignmentStatement(self, node: spa.AssignmentStatement):
-        self._context_stack.append("write")
-        self.visit(node.destination)
-        self._context_stack.pop()
-        self._context_stack.append("read")
+    def _mark_read_node(self, node):
+        field = _underlying_field(node)
+        if field in self.local_fields:
+            self.reads.add(field)
+
+    def _mark_write_node(self, node):
+        field = _underlying_field(node)
+        if field in self.local_fields:
+            self.writes.add(field)
+
+    def visit_Identifier(self, node: spir.Identifier):
+        self._mark_read_node(node)
+
+    def visit_ArraySlice(self, node: spir.ArraySlice):
+        self._mark_read_node(node)
+        for index in node.indices:
+            self.visit(index)
+
+    def visit_AssignmentStatement(self, node: spir.AssignmentStatement):
         self.visit(node.source)
-        self._context_stack.pop()
+        self._mark_write_node(node.destination)
+        if isinstance(node.destination, spir.ArraySlice):
+            for index in node.destination.indices:
+                self.visit(index)
 
-    def visit_ArraySlice(self, node: spa.ArraySlice):
-        current = self._context_stack[-1]
-        self._context_stack.append(current)
-        self.visit(node.array)
-        self._context_stack.pop()
-        for idx in node.indices:
-            self._context_stack.append("read")
-            self.visit(idx)
-            self._context_stack.pop()
-
-    def visit_Identifier(self, node: spa.Identifier):
-        key = node
-        if self._context_stack[-1] == "write":
-            self.writes.add(key)
-        else:
-            self.reads.add(key)
-
-    def visit_SendStatement(self, node: spa.SendStatement):
-        self._context_stack.append("read")
-        self.visit(node.local_array)
+    def visit_SendStatement(self, node: spir.SendStatement):
+        self._mark_read_node(node.local_array)
+        if isinstance(node.local_array, spir.ArraySlice):
+            for index in node.local_array.indices:
+                self.visit(index)
         self.visit(node.stream_name)
-        self._context_stack.pop()
-        if node.completion_name:
-            self._context_stack.append("write")
-            self.visit(node.completion_name)
-            self._context_stack.pop()
-
-    def visit_ReceiveStatement(self, node: spa.ReceiveStatement):
-        self._context_stack.append("write")
-        self.visit(node.local_array)
-        self._context_stack.pop()
-        self._context_stack.append("read")
-        self.visit(node.stream_name)
-        self._context_stack.pop()
-        if node.completion_name:
-            self._context_stack.append("write")
-            self.visit(node.completion_name)
-            self._context_stack.pop()
-
-    def visit_ReceiveGenerator(self, node: spa.ReceiveGenerator):
-        self._context_stack.append("read")
-        self.visit(node.stream_name)
-        self._context_stack.pop()
-
-    def visit_ForeachStatement(self, node: spa.ForeachStatement):
-        self._context_stack.append("write")
-        for var in node.variables:
-            self.visit(var)
-        self.visit(node.stream_variable)
-        self._context_stack.pop()
-        self._context_stack.append("read")
-        for rng in node.parameter_range:
-            self.visit(rng)
-        self.visit(node.receive_stream)
-        self._context_stack.pop()
-        for stmt in node.body:
-            self.visit(stmt)
-        if node.completion_name:
-            self._context_stack.append("write")
-            self.visit(node.completion_name)
-            self._context_stack.pop()
-
-    def visit_MapStatement(self, node: spa.MapStatement):
-        self._context_stack.append("write")
-        for var in node.variables:
-            self.visit(var)
-        self._context_stack.pop()
-        self._context_stack.append("read")
-        for rng in node.range_expression:
-            self.visit(rng)
-        self._context_stack.pop()
-        for stmt in node.body:
-            self.visit(stmt)
-        if node.completion_name:
-            self._context_stack.append("write")
-            self.visit(node.completion_name)
-            self._context_stack.pop()
-
-    def visit_ForStatement(self, node: spa.ForStatement):
-        self._context_stack.append("write")
-        for var in node.variables:
-            self.visit(var)
-        self._context_stack.pop()
-        self._context_stack.append("read")
-        for rng in node.range_expression:
-            self.visit(rng)
-        self._context_stack.pop()
-        for stmt in node.body:
-            self.visit(stmt)
-
-    def visit_AsyncBlock(self, node: spa.AsyncBlock):
         if node.completion_name is not None:
-            self._context_stack.append("write")
             self.visit(node.completion_name)
-            self._context_stack.pop()
-        for stmt in node.body:
-            self.visit(stmt)
 
-    def visit_AwaitCompletionStatement(self, node: spa.AwaitCompletionStatement):
-        self._context_stack.append("read")
-        self.visit(node.completion_name)
-        self._context_stack.pop()
+    def visit_ReceiveStatement(self, node: spir.ReceiveStatement):
+        self._mark_write_node(node.local_array)
+        if isinstance(node.local_array, spir.ArraySlice):
+            for index in node.local_array.indices:
+                self.visit(index)
+        self.visit(node.stream_name)
+        if node.completion_name is not None:
+            self.visit(node.completion_name)
 
-    def visit_Completion(self, node: spa.Completion):
-        self._context_stack.append("write")
-        self.visit(node.name)
-        self._context_stack.pop()
-
-    def visit_TypedIdentifier(self, node: spa.TypedIdentifier):
-        self._context_stack.append("write")
-        self.visit(node.identifier)
-        self._context_stack.pop()
-
-    def visit_FieldDeclaration(self, node: spa.FieldDeclaration):
-        self._context_stack.append("write")
-        self.visit(node.field_name)
-        self._context_stack.pop()
-
-    def visit_KernelArgument(self, node: spa.KernelArgument):
-        self._context_stack.append("write")
-        self.visit(node.identifier)
-        self._context_stack.pop()
-
-    def visit_RangeExpression(self, node: spa.RangeExpression):
-        for expr in (node.start, node.stop, node.step):
-            if expr is not None:
-                self._context_stack.append("read")
-                self.visit(expr)
-                self._context_stack.pop()
-
-    def visit_Expression(self, node: spa.Expression):
-        self.visit(node.value)
-
-    def generic_visit(self, node):
-        if isinstance(node, spa.SpatialNode):
-            for _, value in node.iter_fields():
-                if isinstance(value, list):
-                    for item in value:
-                        if isinstance(item, spa.SpatialNode):
-                            self.visit(item)
-                elif isinstance(value, spa.SpatialNode):
-                    self.visit(value)
+    def visit_FieldDeclaration(self, node: spir.FieldDeclaration):
+        return None
 
 
-def _collect_reads_writes(node: spa.Statement) -> tuple[set[tuple[str, int]], set[tuple[str, int]]]:
-    collector = _ReadWriteCollector()
+class _FieldUseCollector(spir.NodeVisitor):
+
+    def __init__(self, declared_fields: set[spir.Identifier]):
+        super().__init__()
+        self.declared_fields = declared_fields
+        self.used_fields: set[spir.Identifier] = set()
+
+    def visit_Identifier(self, node: spir.Identifier):
+        if node in self.declared_fields:
+            self.used_fields.add(node)
+
+    def visit_ArraySlice(self, node: spir.ArraySlice):
+        if node.array in self.declared_fields:
+            self.used_fields.add(node.array)
+        for index in node.indices:
+            self.visit(index)
+
+    def visit_FieldDeclaration(self, node: spir.FieldDeclaration):
+        return None
+
+
+class _ExactIndexedAccessCounter(spir.NodeVisitor):
+
+    def __init__(self, field: spir.Identifier, index_signature: tuple[str, ...]):
+        super().__init__()
+        self.field = field
+        self.index_signature = index_signature
+        self.count = 0
+
+    def visit_ArraySlice(self, node: spir.ArraySlice):
+        if node.array == self.field and _index_signature(node) == self.index_signature:
+            self.count += 1
+        for index in node.indices:
+            self.visit(index)
+
+
+class _FieldReadClassifier(spir.NodeVisitor):
+
+    def __init__(self, field: spir.Identifier, index_signature: tuple[str, ...]):
+        super().__init__()
+        self.field = field
+        self.index_signature = index_signature
+        self.total_reads = 0
+        self.exact_reads = 0
+
+    def visit_Identifier(self, node: spir.Identifier):
+        if node == self.field:
+            self.total_reads += 1
+
+    def visit_ArraySlice(self, node: spir.ArraySlice):
+        if node.array == self.field:
+            self.total_reads += 1
+            if _index_signature(node) == self.index_signature:
+                self.exact_reads += 1
+        for index in node.indices:
+            self.visit(index)
+
+
+class _ExactIndexedAccessReplacer(spir.NodeTransformer):
+
+    def __init__(self, field: spir.Identifier, index_signature: tuple[str, ...], replacement: spir.Expression):
+        super().__init__()
+        self.field = field
+        self.index_signature = index_signature
+        self.replacement_value = copy.deepcopy(replacement.value)
+
+    def visit_ArraySlice(self, node: spir.ArraySlice):
+        if node.array == self.field and _index_signature(node) == self.index_signature:
+            return copy.deepcopy(self.replacement_value)
+        return self.generic_visit(node)
+
+
+def _underlying_field(node) -> spir.Identifier | None:
+    if isinstance(node, spir.Identifier):
+        return node
+    if isinstance(node, spir.ArraySlice):
+        return node.array
+    return None
+
+
+def _simple_value_from_expression(expr: spir.Expression) -> _SimpleValue | None:
+    if isinstance(expr.value, (spir.Identifier, spir.ArraySlice)):
+        return _SimpleValue(copy.deepcopy(expr.value), _underlying_field(expr.value))
+    return None
+
+
+def _simple_value_from_node(node: spir.Identifier | spir.ArraySlice) -> _SimpleValue:
+    return _SimpleValue(copy.deepcopy(node), _underlying_field(node))
+
+
+def _read_fields_in_node(node: spir.SpatialNode, tracked_fields: set[spir.Identifier]) -> frozenset[spir.Identifier]:
+    collector = _RecursiveFieldAccessCollector(tracked_fields)
     collector.visit(node)
-    return collector.reads, collector.writes
+    return frozenset(collector.reads)
 
 
-# Prune unused fields
+def _index_signature(node: spir.ArraySlice) -> tuple[str, ...]:
+    return tuple(index.as_ir() for index in node.indices)
 
 
-class _PlaceFieldPruner(spa.NodeTransformer):
+def _expression_is_loop_identifier(expr: spir.Expression, expected: spir.Identifier) -> bool:
+    return isinstance(expr.value, spir.Identifier) and expr.value == expected
 
-    def __init__(self, used_keys: set[spa.Identifier]):
-        super().__init__()
-        self.used_keys = used_keys
-        self.pruned = 0
 
-    def visit_FieldDeclaration(self, node: spa.FieldDeclaration):
-        if node.field_name not in self.used_keys:
-            self.pruned += 1
+def _map_template_from_node(node: spir.Identifier | spir.ArraySlice,
+                            variables: list[spir.TypedIdentifier]) -> _MapValueTemplate | None:
+    if isinstance(node, spir.Identifier):
+        return _MapValueTemplate(copy.deepcopy(node), ())
+
+    if not isinstance(node, spir.ArraySlice):
+        return None
+
+    if len(node.indices) != len(variables):
+        return None
+
+    index_positions: list[int] = []
+    for position, variable in enumerate(variables):
+        index_expr = node.indices[position]
+        if not isinstance(index_expr, spir.Expression):
             return None
-        return node
+        if not _expression_is_loop_identifier(index_expr, variable.identifier):
+            return None
+        index_positions.append(position)
+
+    return _MapValueTemplate(copy.deepcopy(node.array), tuple(index_positions))
 
 
-class _IdentifierUsageCollector(spa.NodeVisitor):
+def _statement_field_counts(stmt: spir.Statement,
+                            local_fields: set[spir.Identifier]) -> dict[spir.Identifier, _FieldCounts]:
+    collector = _RecursiveFieldAccessCollector(local_fields)
+    collector.visit(stmt)
 
-    def __init__(self):
-        super().__init__()
-        self.used: set[spa.Identifier] = set()
-
-    def collect(self, node: spa.SpatialNode) -> set[spa.Identifier]:
-        self.visit(node)
-        return self.used
-
-    def visit_PlaceBlock(self, node: spa.PlaceBlock):
-        # Do not traverse into place blocks
-        return node
-
-    def visit_DataflowBlock(self, node: spa.DataflowBlock):
-        # Do not traverse into dataflow blocks
-        return node
-
-    def visit_Identifier(self, node: spa.Identifier):
-        self.used.add(node)
-        return node
+    counts: dict[spir.Identifier, _FieldCounts] = {}
+    for field in collector.reads | collector.writes:
+        counts[field] = _FieldCounts(
+            reads=1 if field in collector.reads else 0,
+            writes=1 if field in collector.writes else 0,
+        )
+    return counts
 
 
-def prune_unused_fields(rectangles: list[Rectangle[PEBlock]]):
+def _aggregate_region_counts(statements: list[spir.Statement],
+                             local_fields: set[spir.Identifier]) -> dict[spir.Identifier, _FieldCounts]:
+    totals = defaultdict(lambda: [0, 0])
+    for stmt in statements:
+        stmt_counts = _statement_field_counts(stmt, local_fields)
+        for field, counts in stmt_counts.items():
+            totals[field][0] += counts.reads
+            totals[field][1] += counts.writes
+
+    return {field: _FieldCounts(reads=reads, writes=writes) for field, (reads, writes) in totals.items()}
+
+
+def _extract_direct_producer(stmt: spir.Statement) -> _DirectProducer | None:
+    if not isinstance(stmt, spir.AssignmentStatement):
+        return None
+    if not isinstance(stmt.destination, spir.Identifier):
+        return None
+
+    source = _simple_value_from_expression(stmt.source)
+    if source is None:
+        return None
+
+    return _DirectProducer(stmt.destination, source)
+
+
+def _extract_direct_consumer(stmt: spir.Statement) -> _DirectConsumer | None:
+    if isinstance(stmt, spir.AssignmentStatement):
+        source = _simple_value_from_expression(stmt.source)
+        if source is None or source.field is None:
+            return None
+        destination = stmt.destination if isinstance(stmt.destination, spir.Identifier) else None
+        return _DirectConsumer(source.field, destination)
+
+    if isinstance(stmt, spir.SendStatement):
+        source = _simple_value_from_node(stmt.local_array)
+        if source.field is None:
+            return None
+        return _DirectConsumer(source.field, None)
+
+    return None
+
+
+def _extract_map_producer(stmt: spir.Statement) -> _MapProducer | None:
+    if not isinstance(stmt, spir.MapStatement) or stmt.completion_name is not None or len(stmt.body) != 1:
+        return None
+
+    assignment = stmt.body[0]
+    if not isinstance(assignment, spir.AssignmentStatement):
+        return None
+
+    if not isinstance(assignment.destination, spir.ArraySlice):
+        return None
+
+    destination = _map_template_from_node(assignment.destination, stmt.variables)
+    if destination is None or destination.index_positions != tuple(range(len(stmt.variables))):
+        return None
+
+    source_node = assignment.source.value
+    if not isinstance(source_node, (spir.Identifier, spir.ArraySlice)):
+        return None
+    source = _map_template_from_node(source_node, stmt.variables)
+    if source is None:
+        return None
+
+    return _MapProducer(destination.field, source)
+
+
+def _extract_map_consumer(stmt: spir.Statement) -> _MapConsumer | None:
+    if not isinstance(stmt, spir.MapStatement) or len(stmt.body) != 1:
+        return None
+
+    assignment = stmt.body[0]
+    if not isinstance(assignment, spir.AssignmentStatement):
+        return None
+
+    if not isinstance(assignment.destination, spir.ArraySlice):
+        return None
+
+    destination = _map_template_from_node(assignment.destination, stmt.variables)
+    if destination is None or destination.index_positions != tuple(range(len(stmt.variables))):
+        return None
+
+    source_node = assignment.source.value
+    if not isinstance(source_node, (spir.Identifier, spir.ArraySlice)):
+        return None
+    source = _map_template_from_node(source_node, stmt.variables)
+    if source is None:
+        return None
+    if source.index_positions != tuple(range(len(stmt.variables))):
+        return None
+
+    return _MapConsumer(source.field, destination.field)
+
+
+def _extract_foreach_bulk_producer(stmt: spir.Statement,
+                                   non_extern_fields: set[spir.Identifier]) -> _ForeachBulkProducer | None:
+    if not isinstance(stmt, spir.ForeachStatement):
+        return None
+    if stmt.completion_name is not None or len(stmt.body) != 1:
+        return None
+
+    assignment = stmt.body[0]
+    if not isinstance(assignment, spir.AssignmentStatement):
+        return None
+    if not isinstance(assignment.destination, spir.ArraySlice):
+        return None
+    if assignment.destination.array not in non_extern_fields:
+        return None
+    if not isinstance(assignment.source.value, spir.Identifier):
+        return None
+    if assignment.source.value != stmt.stream_variable.identifier:
+        return None
+    if len(assignment.destination.indices) != len(stmt.variables):
+        return None
+
+    for index_expr, loop_var in zip(assignment.destination.indices, stmt.variables):
+        if not isinstance(index_expr, spir.Expression):
+            return None
+        if not _expression_is_loop_identifier(index_expr, loop_var.identifier):
+            return None
+
+    if not isinstance(stmt.receive_stream.stream_name, (spir.Identifier, spir.ArraySlice)):
+        return None
+
+    return _ForeachBulkProducer(
+        destination_field=assignment.destination.array,
+        source=_simple_value_from_node(stmt.receive_stream.stream_name),
+    )
+
+
+def _extract_whole_array_send_consumer(stmt: spir.Statement) -> _DirectConsumer | None:
+    if not isinstance(stmt, spir.SendStatement):
+        return None
+    if not isinstance(stmt.local_array, spir.Identifier):
+        return None
+    return _DirectConsumer(stmt.local_array, None)
+
+
+def _rewrite_whole_array_send_consumer(stmt: spir.SendStatement, source: _SimpleValue) -> bool:
+    stmt.local_array = copy.deepcopy(source.node)
+    return True
+
+
+def _rewrite_direct_consumer(stmt: spir.Statement, source: _SimpleValue) -> None:
+    if isinstance(stmt, spir.AssignmentStatement):
+        stmt.source = spir.Expression(copy.deepcopy(source.node))
+        return
+
+    if isinstance(stmt, spir.SendStatement):
+        stmt.local_array = copy.deepcopy(source.node)
+        return
+
+    raise TypeError(f'Unsupported direct consumer statement type "{type(stmt).__name__}"')
+
+
+def _rewrite_map_consumer(stmt: spir.MapStatement, source: _MapValueTemplate) -> None:
+    assignment = stmt.body[0]
+    assert isinstance(assignment, spir.AssignmentStatement)
+    assignment.source = spir.Expression(source.build(stmt.variables))
+
+
+def _extract_indexed_producer(stmt: spir.Statement, tracked_fields: set[spir.Identifier]) -> _IndexedProducer | None:
+    if not isinstance(stmt, spir.AssignmentStatement):
+        return None
+    if not isinstance(stmt.destination, spir.ArraySlice):
+        return None
+    if stmt.destination.array not in tracked_fields:
+        return None
+
+    source_simple_value = None
+    if isinstance(stmt.source.value, (spir.Identifier, spir.ArraySlice)):
+        source_simple_value = _simple_value_from_expression(stmt.source)
+
+    return _IndexedProducer(
+        destination_field=stmt.destination.array,
+        destination_index_signature=_index_signature(stmt.destination),
+        source=copy.deepcopy(stmt.source),
+        source_simple_value=source_simple_value,
+        source_fields=_read_fields_in_node(stmt.source, tracked_fields),
+    )
+
+
+def _find_indexed_consumer(stmt: spir.Statement, field: spir.Identifier, index_signature: tuple[str, ...],
+                           producer: _IndexedProducer) -> _IndexedConsumer | None:
+    if isinstance(stmt, spir.AssignmentStatement):
+        classifier = _FieldReadClassifier(field, index_signature)
+        classifier.visit(stmt.source)
+        if classifier.total_reads == 0:
+            return None
+        return _IndexedConsumer(
+            field,
+            index_signature,
+            classifier.exact_reads,
+            classifier.total_reads == classifier.exact_reads,
+        )
+
+    if isinstance(stmt, spir.SendStatement):
+        classifier = _FieldReadClassifier(field, index_signature)
+        classifier.visit(stmt.local_array)
+        if classifier.total_reads == 0:
+            return None
+        rewritable = (
+            producer.source_simple_value is not None and isinstance(stmt.local_array, spir.ArraySlice) and
+            stmt.local_array.array == field and _index_signature(stmt.local_array) == index_signature)
+        return _IndexedConsumer(field, index_signature, classifier.exact_reads, rewritable)
+
+    classifier = _FieldReadClassifier(field, index_signature)
+    classifier.visit(stmt)
+    if classifier.total_reads == 0:
+        return None
+    return _IndexedConsumer(
+        field,
+        index_signature,
+        classifier.exact_reads,
+        False,
+    )
+
+    return None
+
+
+def _rewrite_indexed_consumer(stmt: spir.Statement, producer: _IndexedProducer) -> bool:
+    if isinstance(stmt, spir.AssignmentStatement):
+        replacer = _ExactIndexedAccessReplacer(
+            producer.destination_field,
+            producer.destination_index_signature,
+            producer.source,
+        )
+        new_source = replacer.visit(copy.deepcopy(stmt.source))
+        assert isinstance(new_source, spir.Expression)
+        stmt.source = new_source
+        return True
+
+    if isinstance(stmt, spir.SendStatement) and producer.source_simple_value is not None:
+        stmt.local_array = copy.deepcopy(producer.source_simple_value.node)
+        return True
+
+    return False
+
+
+def _source_fields_written_between(statements: list[spir.Statement], start: int, stop: int,
+                                   source_fields: frozenset[spir.Identifier],
+                                   tracked_fields: set[spir.Identifier]) -> bool:
+    if not source_fields:
+        return False
+
+    for stmt in statements[start:stop]:
+        counts = _statement_field_counts(stmt, tracked_fields)
+        for source_field in source_fields:
+            if counts.get(source_field, _FieldCounts()).writes:
+                return True
+    return False
+
+
+def _optimize_single_element_index_region(statements: list[spir.Statement], non_extern_fields: set[spir.Identifier],
+                                          all_place_fields: set[spir.Identifier]) -> list[spir.Statement]:
+    optimized = list(statements)
+    changed = True
+    while changed:
+        changed = False
+        region_counts = _aggregate_region_counts(optimized, non_extern_fields)
+
+        for producer_index, producer_stmt in enumerate(optimized):
+            producer = _extract_indexed_producer(producer_stmt, all_place_fields)
+            if producer is None:
+                continue
+
+            counts = region_counts.get(producer.destination_field, _FieldCounts())
+            if counts.writes != 1:
+                continue
+
+            total_occurrences = 0
+            last_consumer_index = None
+            blocked = False
+            for candidate_index, candidate_stmt in enumerate(optimized[producer_index + 1:], start=producer_index + 1):
+                consumer = _find_indexed_consumer(
+                    candidate_stmt,
+                    producer.destination_field,
+                    producer.destination_index_signature,
+                    producer,
+                )
+                if consumer is not None:
+                    if not consumer.rewritable:
+                        blocked = True
+                        break
+                    total_occurrences += consumer.occurrence_count
+                    last_consumer_index = candidate_index
+
+            if blocked or total_occurrences == 0 or last_consumer_index is None:
+                continue
+
+            if _source_fields_written_between(optimized, producer_index + 1, last_consumer_index,
+                                              producer.source_fields, all_place_fields):
+                continue
+
+            for consumer_index in range(producer_index + 1, len(optimized)):
+                consumer_stmt = optimized[consumer_index]
+                consumer = _find_indexed_consumer(
+                    consumer_stmt,
+                    producer.destination_field,
+                    producer.destination_index_signature,
+                    producer,
+                )
+                if consumer is None:
+                    continue
+                if not _rewrite_indexed_consumer(consumer_stmt, producer):
+                    blocked = True
+                    break
+
+            if blocked:
+                continue
+
+            del optimized[producer_index]
+            changed = True
+            break
+
+            if changed:
+                break
+
+    return optimized
+
+
+def _optimize_single_element_index_bodies(statements: list[spir.Statement], non_extern_fields: set[spir.Identifier],
+                                          all_place_fields: set[spir.Identifier]) -> list[spir.Statement]:
+    optimized = list(statements)
+    for stmt in optimized:
+        if isinstance(stmt, (spir.ForStatement, spir.ForeachStatement, spir.MapStatement)):
+            stmt.body = _optimize_single_element_index_region(stmt.body, non_extern_fields, all_place_fields)
+            stmt.body = _optimize_single_element_index_bodies(stmt.body, non_extern_fields, all_place_fields)
+        elif isinstance(stmt, spir.AsyncBlock):
+            stmt.body = _optimize_single_element_index_bodies(stmt.body, non_extern_fields, all_place_fields)
+
+    return optimized
+
+
+def _source_written_between(statements: list[spir.Statement], start: int, stop: int,
+                            source_field: spir.Identifier | None, tracked_fields: set[spir.Identifier]) -> bool:
+    if source_field is None or source_field not in tracked_fields:
+        return False
+
+    for stmt in statements[start:stop]:
+        counts = _statement_field_counts(stmt, tracked_fields)
+        if counts.get(source_field, _FieldCounts()).writes:
+            return True
+    return False
+
+
+def _optimize_region(statements: list[spir.Statement], non_extern_fields: set[spir.Identifier],
+                     all_place_fields: set[spir.Identifier]) -> list[spir.Statement]:
+    optimized = list(statements)
+    changed = True
+    while changed:
+        changed = False
+        region_counts = _aggregate_region_counts(optimized, non_extern_fields)
+
+        for producer_index, producer_stmt in enumerate(optimized):
+            direct_producer = _extract_direct_producer(producer_stmt)
+            if direct_producer is not None:
+                counts = region_counts.get(direct_producer.destination, _FieldCounts())
+                if counts.writes == 1 and counts.reads == 1:
+                    for consumer_index in range(producer_index + 1, len(optimized)):
+                        consumer_stmt = optimized[consumer_index]
+                        consumer = _extract_direct_consumer(consumer_stmt)
+                        if consumer is None or consumer.source_field != direct_producer.destination:
+                            continue
+                        if _source_written_between(optimized, producer_index + 1, consumer_index,
+                                                   direct_producer.source.field, all_place_fields):
+                            break
+
+                        _rewrite_direct_consumer(consumer_stmt, direct_producer.source)
+                        del optimized[producer_index]
+                        changed = True
+                        break
+
+            if changed:
+                break
+
+            map_producer = _extract_map_producer(producer_stmt)
+            if map_producer is not None:
+                counts = region_counts.get(map_producer.destination, _FieldCounts())
+                if counts.writes == 1 and counts.reads == 1:
+                    for consumer_index in range(producer_index + 1, len(optimized)):
+                        consumer_stmt = optimized[consumer_index]
+                        if not isinstance(consumer_stmt, spir.MapStatement):
+                            continue
+
+                        consumer = _extract_map_consumer(consumer_stmt)
+                        if consumer is None or consumer.source_field != map_producer.destination:
+                            continue
+
+                        if _source_written_between(optimized, producer_index + 1, consumer_index,
+                                                   map_producer.source.field, all_place_fields):
+                            break
+
+                        _rewrite_map_consumer(consumer_stmt, map_producer.source)
+                        del optimized[producer_index]
+                        changed = True
+                        break
+
+            if changed:
+                break
+
+            foreach_bulk_producer = _extract_foreach_bulk_producer(producer_stmt, non_extern_fields)
+            if foreach_bulk_producer is None:
+                continue
+
+            counts = region_counts.get(foreach_bulk_producer.destination_field, _FieldCounts())
+            if counts.writes != 1 or counts.reads != 1:
+                continue
+
+            for consumer_index in range(producer_index + 1, len(optimized)):
+                consumer_stmt = optimized[consumer_index]
+                consumer = _extract_whole_array_send_consumer(consumer_stmt)
+                if consumer is None or consumer.source_field != foreach_bulk_producer.destination_field:
+                    continue
+                if not isinstance(consumer_stmt, spir.SendStatement):
+                    continue
+                if _source_written_between(optimized, producer_index + 1, consumer_index,
+                                           foreach_bulk_producer.source.field, all_place_fields):
+                    break
+
+                if not _rewrite_whole_array_send_consumer(consumer_stmt, foreach_bulk_producer.source):
+                    break
+                del optimized[producer_index]
+                changed = True
+                break
+
+            if changed:
+                break
+
+    for stmt in optimized:
+        if isinstance(stmt, (spir.ForStatement, spir.ForeachStatement, spir.MapStatement, spir.AsyncBlock)):
+            stmt.body = _optimize_region(stmt.body, non_extern_fields, all_place_fields)
+
+    return optimized
+
+
+class RemoveRedundantCopies:
     """
-    Prune unreferenced place fields.
-    The pass mutates ``kernel`` in place, and drops any ``place`` declarations that are left unused.
-
-    :param kernel: The kernel to prune.
-    :return: The pruned kernel.
+    Removes redundant local field copies within a straight-line statement region.
     """
-    for rect in rectangles:
-        used_keys = _IdentifierUsageCollector().collect(rect.metadata.compute)
-        pruner = _PlaceFieldPruner(used_keys)
-        pruner.visit(rect.metadata.place)
-        if pruner.pruned > 0:
-            print(f"P{rect.x_range[0]},{rect.y_range[0]}: Pruned {pruner.pruned} unused fields from place block.")
+
+    def apply(self, rectangles) -> None:
+        for rect in rectangles:
+            field_declarations = {decl.field_name: decl for decl in rect.metadata.place.statements}
+            all_place_fields = set(field_declarations)
+            non_extern_fields = {identifier for identifier, decl in field_declarations.items() if not decl.is_extern}
+            rect.metadata.compute.statements = _optimize_region(
+                rect.metadata.compute.statements,
+                non_extern_fields,
+                all_place_fields,
+            )
+
+
+class PruneUnusedFields:
+    """
+    Removes non-extern place fields that are no longer referenced by the paired compute block.
+    """
+
+    def apply(self, rectangles) -> None:
+        for rect in rectangles:
+            declared_fields = {decl.field_name for decl in rect.metadata.place.statements}
+            used_fields = _FieldUseCollector(declared_fields)
+            used_fields.visit(rect.metadata.compute)
+            rect.metadata.place.statements = [
+                decl for decl in rect.metadata.place.statements
+                if decl.is_extern or decl.field_name in used_fields.used_fields
+            ]
+
+
+def remove_redundant_copies(rectangles) -> None:
+    RemoveRedundantCopies().apply(rectangles)
+
+
+class RemoveSingleElementIndexCopies:
+    """
+    Removes loop-local single-element indexed forwarding such as
+    ``tmp[i] = a[i]; out[i] = tmp[i]`` inside ``for``/``foreach``/``map`` bodies.
+    """
+
+    def apply(self, rectangles) -> None:
+        for rect in rectangles:
+            field_declarations = {decl.field_name: decl for decl in rect.metadata.place.statements}
+            all_place_fields = set(field_declarations)
+            non_extern_fields = {identifier for identifier, decl in field_declarations.items() if not decl.is_extern}
+            rect.metadata.compute.statements = _optimize_single_element_index_bodies(
+                rect.metadata.compute.statements,
+                non_extern_fields,
+                all_place_fields,
+            )
+
+
+def prune_unused_fields(rectangles) -> None:
+    PruneUnusedFields().apply(rectangles)
+
+
+def eliminate_redundant_copies(rectangles) -> None:
+    remove_redundant_copies(rectangles)
+    remove_single_element_index_copies(rectangles)
+
+
+def remove_single_element_index_copies(rectangles) -> None:
+    RemoveSingleElementIndexCopies().apply(rectangles)

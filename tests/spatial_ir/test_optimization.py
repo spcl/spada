@@ -34,7 +34,7 @@ def test_remove_copy_prior_to_send() -> None:
 
     passes.concretize_parameters(kernel, N=8)
     rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
-    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.eliminate_redundant_copies(rects)
     copy_elimination.prune_unused_fields(rects)
 
     compute = rects[0].metadata.compute
@@ -67,7 +67,7 @@ def test_chain_of_copies_is_removed() -> None:
 
     passes.concretize_parameters(kernel, N=8)
     rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
-    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.eliminate_redundant_copies(rects)
     copy_elimination.prune_unused_fields(rects)
 
     compute = rects[0].metadata.compute
@@ -100,7 +100,7 @@ def test_copy_preserved_when_source_mutates() -> None:
 
     passes.concretize_parameters(kernel, N=8)
     rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
-    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.eliminate_redundant_copies(rects)
 
     compute = rects[0].metadata.compute
     assert len(compute.statements) == 2
@@ -136,7 +136,7 @@ def test_map_copy_removed_and_fields_pruned() -> None:
 
     passes.concretize_parameters(kernel, N=8)
     rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
-    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.eliminate_redundant_copies(rects)
     copy_elimination.prune_unused_fields(rects)
 
     compute = rects[0].metadata.compute
@@ -173,7 +173,7 @@ def test_map_with_index_mismatch_not_removed() -> None:
 
     passes.concretize_parameters(kernel, N=8)
     rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
-    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.eliminate_redundant_copies(rects)
     copy_elimination.prune_unused_fields(rects)
 
     compute = rects[0].metadata.compute
@@ -204,7 +204,7 @@ def test_rename_propagates_into_for_loop() -> None:
 
     passes.concretize_parameters(kernel, N=8)
     rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
-    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.eliminate_redundant_copies(rects)
     copy_elimination.prune_unused_fields(rects)
 
     compute = rects[0].metadata.compute
@@ -238,7 +238,7 @@ def test_foreach_copy_not_aliased() -> None:
 
     passes.concretize_parameters(kernel, N=8)
     rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
-    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.eliminate_redundant_copies(rects)
     copy_elimination.prune_unused_fields(rects)
 
     compute = rects[0].metadata.compute
@@ -278,7 +278,7 @@ def test_async_block_copy_not_aliased() -> None:
 
     passes.concretize_parameters(kernel, N=8)
     rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
-    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.eliminate_redundant_copies(rects)
 
     compute = rects[0].metadata.compute
     first_stmt = compute.statements[0]
@@ -312,7 +312,7 @@ def test_foreach_body_keeps_internal_copy() -> None:
 
     passes.concretize_parameters(kernel, N=8)
     rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
-    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.eliminate_redundant_copies(rects)
 
     compute = rects[0].metadata.compute
     foreach_stmt = next(stmt for stmt in compute.statements if isinstance(stmt, spa.ForeachStatement))
@@ -350,7 +350,7 @@ def test_copy_constant_propagation(is_array: bool) -> None:
 
     passes.concretize_parameters(kernel, N=8)
     rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
-    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.eliminate_redundant_copies(rects)
     copy_elimination.prune_unused_fields(rects)
 
     compute = rects[0].metadata.compute
@@ -380,7 +380,7 @@ def test_swap() -> None:
 
     passes.concretize_parameters(kernel, N=8)
     rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
-    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.eliminate_redundant_copies(rects)
     copy_elimination.prune_unused_fields(rects)
 
     compute = rects[0].metadata.compute
@@ -414,7 +414,7 @@ def test_write_after_read_copy(internal_value: str) -> None:
 
     passes.concretize_parameters(kernel, N=8)
     rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
-    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.eliminate_redundant_copies(rects)
     copy_elimination.prune_unused_fields(rects)
 
     compute = rects[0].metadata.compute
@@ -456,7 +456,7 @@ def test_elide_in_loop(internal_value: str) -> None:
 
     passes.concretize_parameters(kernel, N=8)
     rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
-    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.eliminate_redundant_copies(rects)
     copy_elimination.prune_unused_fields(rects)
 
     compute = rects[0].metadata.compute
@@ -491,7 +491,7 @@ def test_copy_with_extern():
     canonicalization.lower_array_assignment(rects)
     canonicalization.lower_arguments_to_extern(rects, kernel)
 
-    copy_elimination.eliminate_extraneous_copies(rects)
+    copy_elimination.eliminate_redundant_copies(rects)
     print(rects[0].metadata.compute.as_ir())
     copy_elimination.prune_unused_fields(rects)
 

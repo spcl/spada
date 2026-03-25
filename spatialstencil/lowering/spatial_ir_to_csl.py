@@ -78,7 +78,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
 
     # Perform optimization passes
     if copy_elision:
-        copy_elimination.eliminate_extraneous_copies(rectangles)
+        copy_elimination.eliminate_redundant_copies(rectangles)
 
     # Prune unused fields from place blocks
     if prune_memory:
