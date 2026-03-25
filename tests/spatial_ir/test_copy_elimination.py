@@ -89,6 +89,7 @@ def test_remove_redundant_map_copy_after_array_lowering():
     rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
     canonicalization.lower_array_assignment(rects)
     copy_elimination.eliminate_redundant_copies(rects)
+    copy_elimination.prune_unused_fields(rects)
     rect = rects[0]
 
     assert _place_field_names(rect) == ["a", "out"]
