@@ -273,5 +273,4 @@ def test_metafor_invalidrange():
 
 
 if __name__ == '__main__':
-    test_metafor_outside_phase_with_inner_phase()
-    # pytest.main([__file__])
+    pytest.main([__file__])
