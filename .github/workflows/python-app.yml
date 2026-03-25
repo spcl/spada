@@ -45,6 +45,7 @@ jobs:
         echo 'set man-db/auto-update false' | sudo debconf-communicate >/dev/null
         sudo dpkg-reconfigure man-db
 
+        sudo apt-get update
         sudo apt-get install -y build-essential libssl-dev uuid-dev libgpgme11-dev squashfs-tools
         wget -q -O singularity.deb https://github.com/sylabs/singularity/releases/download/v4.2.1/singularity-ce_4.2.1-${UBUNTU_CODENAME}_amd64.deb
         sudo apt install ./singularity.deb
