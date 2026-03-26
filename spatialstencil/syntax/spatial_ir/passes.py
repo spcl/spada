@@ -111,33 +111,20 @@ class ConstExprPropagation(spa.NodeTransformer):
                 result = left.value.value % right.value.value
             elif node.op == "==":
                 result = left.value.value == right.value.value
-<<<<<<< copy-elimination
             elif node.op == "!=":
-                result = left.value.value == right.value.value
-            elif node.op == "<":
-                result = left.value.value == right.value.value
-            elif node.op == "<=":
-                result = left.value.value == right.value.value
-            elif node.op == ">":
-                result = left.value.value == right.value.value
-            elif node.op == ">=":
-                result = left.value.value == right.value.value
-=======
-            elif node.op == '!=':
                 result = left.value.value != right.value.value
-            elif node.op == '<':
+            elif node.op == "<":
                 result = left.value.value < right.value.value
-            elif node.op == '<=':
+            elif node.op == "<=":
                 result = left.value.value <= right.value.value
-            elif node.op == '>':
+            elif node.op == ">":
                 result = left.value.value > right.value.value
-            elif node.op == '>=':
+            elif node.op == ">=":
                 result = left.value.value >= right.value.value
-            elif node.op == '>>':
+            elif node.op == ">>":
                 result = left.value.value >> right.value.value
-            elif node.op == '<<':
+            elif node.op == "<<":
                 result = left.value.value << right.value.value
->>>>>>> main
             else:
                 raise TypeError(f'Unrecognized binary operator "{node.op}"')
             return spa.ConstantLiteral(result, restype)
