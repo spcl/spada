@@ -151,6 +151,8 @@ class TreeToSpatialIR(lark.Transformer):
             completion = None
             func, arguments = args[1:]
 
+        arguments = (a.value for a in arguments)
+
         if func == 'send':
             return irnodes.SendStatement(*arguments, completion_name=completion)
         elif func == 'receive':
@@ -273,13 +275,16 @@ class TreeToSpatialIR(lark.Transformer):
     place_block = irnodes.PlaceBlock.from_lark
     dataflow_block = irnodes.DataflowBlock.from_lark
     compute_block = irnodes.ComputeBlock.from_lark
+    metafor_block = irnodes.MetaForBlock.from_lark
+    metafor_block_inphase = irnodes.MetaForBlock.from_lark
 
     def phase(self, args):
         body = args[0]
         place = [a for a in body if isinstance(a, irnodes.PlaceBlock)]
         dataflow = [a for a in body if isinstance(a, irnodes.DataflowBlock)]
         compute = [a for a in body if isinstance(a, irnodes.ComputeBlock)]
-        return irnodes.Phase(place, dataflow, compute)
+        metaprogramming = [a for a in body if isinstance(a, irnodes.MetaForBlock)]
+        return irnodes.Phase(place, dataflow, compute, metaprogramming)
 
     def parameters(self, args):
         return [irnodes.Parameter(a) for a in args]

@@ -1,0 +1,38 @@
+/**
+ * Binary tree reduction over 2^K inputs.
+ **/
+kernel @tree_reduce<K>(stream<f32, 1>[1 << K] readonly inp, stream<f32, 1> writeonly out) {
+    // Load one input value into every PE
+    place i16 i, i16 j in [0:(1 << K), 0:1] {
+        f32 partial
+        f32 child_val
+    }
+    compute i16 i, i16 j in [0:(1 << K), 0:1] {
+        await receive(partial, inp[i])
+    }
+
+    // Fold the right half of each subtree into the left half
+    for i16 stage in [0:K] {
+        phase {
+            dataflow i16 i, i16 j in [0:(1 << (K - stage + 1)), 0:1] {
+                stream<f32> child = relative_stream(1 << (K - stage + 1), 0)
+            }
+            compute i16 i, i16 j in [0:(1 << (K - stage + 1)), 0:1] {
+                await receive(child_val, child)
+                partial = partial + child_val
+            }
+
+            dataflow i16 i, i16 j in [(1 << (K - stage + 1)):(1 << (K - stage)), 0:1] {
+                stream<f32> parent = relative_stream(-(1 << (K - stage + 1)), 0)
+            }
+            compute i16 i, i16 j in [(1 << (K - stage + 1)):(1 << (K - stage)), 0:1] {
+                await send(partial, parent)
+            }
+        }
+    }
+
+    // Send back the root value after the last reduction stage
+    compute i16 i, i16 j in [0:1, 0:1] {
+        await send(partial, out)
+    }
+}

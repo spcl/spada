@@ -74,7 +74,7 @@ def _try_emit_dsd_op(statement: spir.MapStatement | spir.ForeachStatement, dsds:
     return dsd_op
 
 
-def emit_copy(source: spir.Identifier | spir.ArraySlice,
+def emit_copy(source: spir.Identifier | spir.ArraySlice | spir.ConstantLiteral,
               destination: spir.Identifier | spir.ArraySlice,
               dsds: UniqueDSDDict,
               dtypes: dict[spir.Identifier, spir.IRType],
@@ -102,7 +102,8 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice,
         dst_identifier = destination
 
     # One element copy
-    if src_identifier.as_ir() not in dsds or dst_identifier.as_ir() not in dsds:
+    if dst_identifier.as_ir() not in dsds or (isinstance(src_identifier, spir.Identifier) and
+                                              src_identifier.as_ir() not in dsds):
 
         def _format_indexed_access(value: spir.Identifier | spir.ArraySlice, identifier: spir.Identifier) -> str:
             if isinstance(identifier, spir.TypedIdentifier):
@@ -133,8 +134,8 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice,
         return f"{dst_expr} = {src_expr};"
 
     # Get the DSD operation for the copy operation
-    src_dtype = dtypes[src_identifier]
     dst_dtype = dtypes[dst_identifier]
+    src_dtype = dtypes.get(src_identifier, dst_dtype)
     if isinstance(src_dtype, spir.ArrayType) and isinstance(src_dtype.base_type, spir.StreamType):
         if src_dtype.base_type.buffer_size is None:
             src_dtype = (src_dtype.base_type.element_type, [])
@@ -305,6 +306,8 @@ def emit_async_block(statement: spir.AsyncBlock, dsds: UniqueDSDDict, dtypes: di
 
 
 DISABLE_MAPS = False
+
+
 def _is_map_compatible(statement: spir.MapStatement, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier,
                                                                                        spir.IRType]) -> bool:
     """
@@ -438,7 +441,7 @@ class MapArgumentCollector(spir.NodeVisitor):
         self.output_variables: list[spir.Identifier] = []
         self.index_identifiers = index_identifiers
         self.dsds = dsds
-    
+
     def visit_Identifier(self, node: spir.Identifier):
         if node not in self.used_identifiers and node not in self.index_identifiers:
             self.used_identifiers.append(node)
@@ -456,9 +459,8 @@ class MapArgumentCollector(spir.NodeVisitor):
             dest_identifier = None
         if dest_identifier and dest_identifier.as_ir() in self.dsds:
             self.output_variables.append(dest_identifier)
-        
-        return node
 
+        return node
 
 
 def emit_map(statement: spir.MapStatement, dsds: UniqueDSDDict, dtypes: dict[spir.Identifier, spir.IRType],
@@ -501,7 +503,7 @@ def emit_map(statement: spir.MapStatement, dsds: UniqueDSDDict, dtypes: dict[spi
 
     used_identifiers: list[spir.Identifier] = mac.used_identifiers
     output_variables: list[spir.Identifier] = mac.output_variables
-    
+
     assert len(output_variables) <= 1, "At most one output DSD is allowed in a CSL @map statement."
 
     # Create a mapping from input variables to parameter names for substitution
@@ -644,6 +646,8 @@ def name_to_csl(name: spir.Identifier) -> str:
     """
     if isinstance(name, spir.TypedIdentifier):
         return f'var {name_to_csl(name.identifier)}: {dtype_as_csl(name.dtype)}'
+    if isinstance(name, spir.ConstantLiteral):
+        return str(name.value)
     if name.version == 0:
         return name.name
     else:

@@ -285,6 +285,7 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
 
                     # Keep track of the position order of indices in the array slice (or none if one stream is used)
                     position_order = []
+                    offsets = [0] * len(var_name_to_position)
 
                     # If array slice, ensure that the indices are valid for the rectangle
                     if isinstance(stream_name, spir.ArraySlice):
@@ -294,7 +295,6 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
                         # we need to check that the used indices correspond to valid compute block variables
 
                         # Check that each index in the array slice corresponds to a valid compute block variable
-                        offsets = [0] * len(var_name_to_position)
                         for index_expr in stream_name.indices:
                             index_name = index_expr.value
                             offset = 0
@@ -374,7 +374,7 @@ def detect_stream_argument_extents(rectangles: list[Rectangle], kernel: spir.Ker
                                     f"{(subgrid[2 * i + 1] - subgrid[2 * i])}. Unused index subgrids must have "
                                     f"dimension 1.\n  In {stream_name.lineinfo}")
 
-                    stream_extents.add_extent(stream_name, rect, offsets)
+                    stream_extents.add_extent(stream_name, rect, (offsets[0], offsets[1]))
 
     # Check for offset consistency and create rectangles
     offset_rectangles: dict[spir.Identifier, Rectangle] = {}
@@ -533,8 +533,7 @@ class FieldsDefinedCheck(spir.NodeVisitor):
         identifier = stmt.local_array
         if isinstance(identifier, spir.Identifier):
             self.check_access(identifier)
-        else:
-            assert isinstance(identifier, spir.ArraySlice)
+        elif isinstance(identifier, spir.ArraySlice):
             self.check_access(identifier.array)
 
     def visit_ArraySlice(self, access: spir.ArraySlice):

@@ -270,7 +270,7 @@ class CopyDSDOp(DSDOp):
     def _as_csl(self, statement: spir.AssignmentStatement | spir.SendStatement,
                 dtypes: dict[spir.Identifier, spir.IRType], dsds: UniqueDSDDict) -> str:
         if isinstance(statement, spir.SendStatement):
-            src = _ident(statement.local_array)
+            src = _ident_or_const(statement.local_array)
             dest = _ident(statement.stream_name)
         else:
             assert isinstance(statement.source.value, (spir.ArraySlice, spir.Identifier, spir.ConstantLiteral))
@@ -279,7 +279,7 @@ class CopyDSDOp(DSDOp):
 
         src_dtype = _get_base_dtype(dtypes, src)
         dtype = _get_base_dtype(dtypes, dest)
-        if src_dtype == dtype:
+        if src_dtype == dtype or src_dtype == spir.ScalarType.UNKNOWN:
             if dtype in (spir.ScalarType.i16, spir.ScalarType.u16):
                 op = '@mov16'
             elif dtype in (spir.ScalarType.i32, spir.ScalarType.u32):
@@ -317,7 +317,7 @@ class CopyDSDOp(DSDOp):
     def used_dsd_objects(self, statement: spir.AssignmentStatement,
                          dsds: UniqueDSDDict) -> list[cslstruct.DataStructureDescriptor]:
         if isinstance(statement, spir.SendStatement):
-            src = _ident(statement.local_array)
+            src = _ident_or_const(statement.local_array)
             dest = _ident(statement.stream_name)
         else:
             assert isinstance(statement.source.value, (spir.ArraySlice, spir.Identifier, spir.ConstantLiteral))
@@ -501,7 +501,7 @@ def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
     elif isinstance(inner_stmt, (spir.Identifier, spir.ConstantLiteral, spir.ArraySlice)):  # @fmov*, @mov*
         src_dtype = _get_base_dtype(dtypes, inner_stmt)
         # Move statements are valid for operands of the same type
-        if src_dtype == dtype:
+        if src_dtype == dtype or src_dtype == spir.ScalarType.UNKNOWN:
             if dtype in (spir.ScalarType.i16, spir.ScalarType.u16):
                 return '@mov16'
             if dtype in (spir.ScalarType.i32, spir.ScalarType.u32):

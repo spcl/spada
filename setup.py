@@ -49,7 +49,7 @@ setup(
         "numpy",
         "pydot",
         "networkx",
-        "lark-parser",
+        "lark",
         "matplotlib",
         "hilbertcurve",
         "igraph",

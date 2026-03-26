@@ -57,7 +57,7 @@ def test_receive_statement_array():
     kernel = passes.concretize_parameters(kernel, N=8)
     kernel = passes.constexpr_propagation(kernel)
 
-    csl_files = lower_spatial_ir_to_csl(kernel)
+    csl_files = lower_spatial_ir_to_csl(kernel, copy_elision=False)
 
     # Check that CSL files were generated
     assert len(csl_files) > 0
@@ -122,7 +122,7 @@ def test_send_statement_scalar():
     kernel = passes.concretize_parameters(kernel, N=8)
     kernel = passes.constexpr_propagation(kernel)
 
-    csl_files = lower_spatial_ir_to_csl(kernel)
+    csl_files = lower_spatial_ir_to_csl(kernel, copy_elision=False)
 
     # Check that CSL files were generated
     assert len(csl_files) > 0
@@ -204,6 +204,35 @@ def test_send_statement_with_different_types():
             break
 
     assert code_found, "Expected i16 operation not found in generated CSL"
+
+
+def test_send_statement_with_constant():
+    """Test send statement with constant values."""
+    spatial_ir_code = '''
+    kernel @test_send_constant<N>(stream<f32, 4>[N] readonly input, stream<f32, 4>[N] writeonly output) {
+        compute u16 i, u16 j in [0:N, 0:1] {
+            await send(1.0, output[i]);
+        }
+    }
+    '''
+
+    kernel = create_inline_spatial_ir(spatial_ir_code)
+    kernel = passes.concretize_parameters(kernel, N=8)
+    kernel = passes.constexpr_propagation(kernel)
+
+    csl_files = lower_spatial_ir_to_csl(kernel)
+
+    # Check that CSL files were generated
+    assert len(csl_files) > 0
+
+    # Look for DSD operations
+    code_found = False
+    for f in csl_files:
+        if '@fmovs' in f.code:
+            code_found = True
+            break
+
+    assert code_found, "Expected @fmovs operation not found in generated CSL"
 
 
 # Test lowering of AssignmentStatement to CSL with various expression types.
@@ -654,7 +683,7 @@ def test_for_statement_basic():
     kernel = passes.concretize_parameters(kernel, N=8)
     kernel = passes.constexpr_propagation(kernel)
 
-    csl_files = lower_spatial_ir_to_csl(kernel)
+    csl_files = lower_spatial_ir_to_csl(kernel, copy_elision=False)
 
     # Check that CSL files were generated
     assert len(csl_files) > 0
@@ -978,7 +1007,7 @@ def test_foreach_lifting_to_dsd_op(with_binop):
     kernel = passes.concretize_parameters(kernel, N=4)
     kernel = passes.constexpr_propagation(kernel)
 
-    csl_files = lower_spatial_ir_to_csl(kernel)
+    csl_files = lower_spatial_ir_to_csl(kernel, copy_elision=False)
 
     # Check that CSL files were generated
     assert len(csl_files) > 0
@@ -1003,6 +1032,7 @@ if __name__ == '__main__':
     test_send_statement_scalar()
     test_send_statement_array()
     test_send_statement_with_different_types()
+    test_send_statement_with_constant()
     test_assignment_binary_expression(dsd=False, op='+')
     test_assignment_binary_expression(dsd=True, op='+')
     test_assignment_binary_expression_dsd_fallback(dsd=False, op='%')

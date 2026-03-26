@@ -1,5 +1,9 @@
 import copy
+import enum
 import warnings
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
+
 from spatialstencil.syntax.spatial_ir import irnodes as spa
 from spatialstencil.syntax.stencil_ir.type_inference import _result_type_of
 
@@ -57,7 +61,7 @@ def concretize_parameters(kernel: spa.Kernel, **parameters: int) -> spa.Kernel:
     param_names = [p.name for p in kernel.parameters]
     for param in parameters.keys():
         if param not in param_names:
-            warnings.warn(f'Parameter {param} is not a parameter of kernel {kernel.name}')
+            warnings.warn(f"Parameter {param} is not a parameter of kernel {kernel.name}")
 
     return Concretizer(parameters).visit(kernel)
 
@@ -77,9 +81,9 @@ class ConstExprPropagation(spa.NodeTransformer):
         value: spa.Expression = self.generic_visit(node.value)
         if isinstance(value.value, spa.ConstantLiteral):
             restype = _result_type_of(value.value.dtype, optype=node.op)
-            if node.op == '+':
+            if node.op == "+":
                 cval = +value.value.value
-            elif node.op == '-':
+            elif node.op == "-":
                 cval = -value.value.value
             else:
                 raise TypeError(f'Unrecognized unary operator "{node.op}"')
@@ -93,30 +97,34 @@ class ConstExprPropagation(spa.NodeTransformer):
         right: spa.Expression = self.generic_visit(node.right)
         if isinstance(left.value, spa.ConstantLiteral) and isinstance(right.value, spa.ConstantLiteral):
             restype = _result_type_of(left.value.dtype, right.value.dtype, optype=node.op)
-            if node.op == '+':
+            if node.op == "+":
                 result = left.value.value + right.value.value
-            elif node.op == '-':
+            elif node.op == "-":
                 result = left.value.value - right.value.value
-            elif node.op == '*':
+            elif node.op == "*":
                 result = left.value.value * right.value.value
-            elif node.op == '/':
+            elif node.op == "/":
                 result = left.value.value / right.value.value
-            elif node.op == '//':
+            elif node.op == "//":
                 result = left.value.value // right.value.value
-            elif node.op == '%':
+            elif node.op == "%":
                 result = left.value.value % right.value.value
-            elif node.op == '==':
+            elif node.op == "==":
                 result = left.value.value == right.value.value
-            elif node.op == '!=':
-                result = left.value.value == right.value.value
-            elif node.op == '<':
-                result = left.value.value == right.value.value
-            elif node.op == '<=':
-                result = left.value.value == right.value.value
-            elif node.op == '>':
-                result = left.value.value == right.value.value
-            elif node.op == '>=':
-                result = left.value.value == right.value.value
+            elif node.op == "!=":
+                result = left.value.value != right.value.value
+            elif node.op == "<":
+                result = left.value.value < right.value.value
+            elif node.op == "<=":
+                result = left.value.value <= right.value.value
+            elif node.op == ">":
+                result = left.value.value > right.value.value
+            elif node.op == ">=":
+                result = left.value.value >= right.value.value
+            elif node.op == ">>":
+                result = left.value.value >> right.value.value
+            elif node.op == "<<":
+                result = left.value.value << right.value.value
             else:
                 raise TypeError(f'Unrecognized binary operator "{node.op}"')
             return spa.ConstantLiteral(result, restype)
@@ -153,7 +161,9 @@ def constexpr_propagation(kernel: spa.Kernel) -> spa.Kernel:
 
 
 def mark_readonly_writeonly_arguments(kernel: spa.Kernel) -> spa.Kernel:
-    """Marks readonly and writeonly arguments based on their usage in the kernel. Modifies the kernel in place and returns it.
+    """
+    Marks readonly and writeonly arguments based on their usage in the kernel.
+    Modifies the kernel in place and returns it.
     """
 
     visitor = ArgumentUseVisitor()
@@ -172,10 +182,10 @@ def mark_readonly_writeonly_arguments(kernel: spa.Kernel) -> spa.Kernel:
 class ArgumentUseVisitor(spa.NodeVisitor):
     """
     Visits a kernel and collects all uses of each argument:
-    
+
     - is it being read?
     - is it being written to?
-    
+
     Then, we can get the readonly and writeonly arguments from this.
     """
 

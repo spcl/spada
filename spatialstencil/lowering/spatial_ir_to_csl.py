@@ -7,6 +7,7 @@ import copy
 import functools
 from io import StringIO
 from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, analysis, passes
+from spatialstencil.syntax.spatial_ir import copy_elimination
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
 from spatialstencil.syntax.csl import constants as csl, preprocessing, tasks as tdag, statements as cslstmt, dsd_ops
 from spatialstencil.syntax.csl import structures as cslstruct
@@ -21,7 +22,9 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
                             disable_benchmarking: bool = False,
                             disable_asynchronous: bool = False,
                             disable_dsd: bool = False,
-                            task_fusion: bool = True) -> list[CodeFile]:
+                            task_fusion: bool = True,
+                            copy_elision: bool = True,
+                            prune_memory: bool = True) -> list[CodeFile]:
     """
     Lowers a routed Spatial IR kernel into Cerebras CSL code.
 
@@ -32,6 +35,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     :param disable_asynchronous: If True, disables asynchronous task code generation.
     :param disable_dsd: If True, disables DSD operation detection and code generation.
     :param task_fusion: If True, enables task fusion to reduce number of tasks.
+    :param copy_elision: If True, enables copy elision optimization pass.
+    :param prune_memory: If True, enables unused field pruning optimization pass.
     :return: List of code-file objects that can be written to files. See ``write_code_to_files``.
     """
     # PRECONDITION: Rectangles of dataflow/compute/place do not intersect (comes from Spatial IR)
@@ -47,6 +52,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     #     * There are no phases in the code, there may be local phases for each rectangle (pass)
 
     # Check if virtual rectangles are equal, consolidate, add phase-end remark at end of computation
+    kernel = canonicalization.inline_metaprogramming(kernel)
     kernel = canonicalization.canonicalize_phases(kernel)
     kernel = canonicalization.reduce_streams(kernel)
     kernel = canonicalization.inline_phases(kernel)
@@ -70,6 +76,14 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
 
     # Lower arguments to extern fields/streams
     canonicalization.lower_arguments_to_extern(rectangles, kernel)
+
+    # Perform optimization passes
+    if copy_elision:
+        copy_elimination.eliminate_redundant_copies(rectangles)
+
+    # Prune unused fields from place blocks
+    if prune_memory:
+        copy_elimination.prune_unused_fields(rectangles)
 
     # Add benchmarking fields
     if not disable_benchmarking:
@@ -743,7 +757,8 @@ def _collect_unique_dsds(
                 if extents is not None:  # Use buffer size
                     extents = extents if isinstance(extents, int) else extents.eval()
                 else:  # Infer from receive count
-                    if isinstance(dtypes[stmt.local_array], spir.ScalarType):
+                    if isinstance(stmt.local_array, spir.ConstantLiteral) or isinstance(
+                            dtypes[stmt.local_array], spir.ScalarType):
                         # Scalar receive
                         extents = 1
                     else:
@@ -762,7 +777,8 @@ def _collect_unique_dsds(
                 if extents is not None:  # Use buffer size
                     extents = extents if isinstance(extents, int) else extents.eval()
                 else:  # Infer from send count
-                    if isinstance(dtypes[stmt.local_array], spir.ScalarType):
+                    if isinstance(stmt.local_array, spir.ConstantLiteral) or isinstance(
+                            dtypes[stmt.local_array], spir.ScalarType):
                         # Scalar send
                         extents = 1
                     else:
@@ -848,8 +864,8 @@ def _collect_unique_dsds(
             if extents is not None:  # Use buffer size
                 extents = extents if isinstance(extents, int) else extents.eval()
             else:  # Infer from send count
-                if isinstance(substmt.local_array, spir.ArraySlice) or isinstance(dtypes[substmt.local_array],
-                                                                                  spir.ScalarType):
+                if isinstance(substmt.local_array, (spir.ArraySlice, spir.ConstantLiteral)) or isinstance(
+                        dtypes[substmt.local_array], spir.ScalarType):
                     # Scalar send
                     extents = 1
                 else:

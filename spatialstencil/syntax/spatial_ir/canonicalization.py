@@ -4,8 +4,85 @@ Canonicalization passes for Spatial IR
 from collections import defaultdict
 import copy
 from dataclasses import dataclass
+from itertools import product
 from spatialstencil.syntax.spatial_ir import irnodes as spir, analysis, passes
 from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle
+
+
+def inline_metaprogramming(kernel: spir.Kernel) -> spir.Kernel:
+    """
+    Unroll compile-time metaprogramming blocks into ordinary kernel/phase blocks.
+    """
+    return _MetaForInliner().visit(copy.deepcopy(kernel))
+
+
+class _MetaForInliner(spir.NodeTransformer):
+
+    def visit_Kernel(self, node: spir.Kernel):
+        node.body = self._inline_block_sequence(node.body)
+        return node
+
+    def visit_Phase(self, node: spir.Phase):
+        node.place = self.generic_visit_sequence(node.place)
+        node.dataflow = self.generic_visit_sequence(node.dataflow)
+        node.compute = self.generic_visit_sequence(node.compute)
+
+        generated = self._inline_block_sequence(node.metaprogramming_blocks)
+        node.metaprogramming_blocks = []
+        for block in generated:
+            if isinstance(block, spir.PlaceBlock):
+                node.place.append(block)
+            elif isinstance(block, spir.DataflowBlock):
+                node.dataflow.append(block)
+            elif isinstance(block, spir.ComputeBlock):
+                node.compute.append(block)
+            else:
+                raise TypeError(f'Unexpected block type "{type(block).__name__}" produced inside phase metafor')
+        return node
+
+    def _inline_block_sequence(self, blocks):
+        inlined = []
+        for block in blocks:
+            if isinstance(block, spir.MetaForBlock):
+                inlined.extend(self._expand_metafor(block))
+            else:
+                inlined.append(self.visit(block))
+        return inlined
+
+    def _expand_metafor(self, node: spir.MetaForBlock):
+        loop_values = [self._evaluate_range(rng) for rng in node.range_expression]
+        results = []
+        for values in product(*loop_values):
+            replacements = {
+                variable.identifier: spir.ConstantLiteral(value, variable.dtype)
+                for variable, value in zip(node.variables, values)
+            }
+            replacer = passes.FindAndReplace(replacements)
+            for stmt in node.body:
+                # Every loop iteration needs its own copy of the block
+                expanded = replacer.visit(copy.deepcopy(stmt))
+                expanded = passes.constexpr_propagation(expanded)
+                if isinstance(expanded, spir.MetaForBlock):
+                    results.extend(self._expand_metafor(expanded))
+                else:
+                    results.append(self.visit(expanded))
+        return results
+
+    def _evaluate_range(self, rng: spir.RangeExpression):
+        start = rng.start.eval()
+        stop = rng.stop.eval() if rng.stop is not None else None
+        step = rng.step.eval() if rng.step is not None else 1
+
+        if not isinstance(start, int):
+            raise TypeError(f'Metaprogramming range start must be a compile-time integral value, got {start}')
+        if stop is not None and not isinstance(stop, int):
+            raise TypeError(f'Metaprogramming range stop must be a compile-time integral value, got {stop}')
+        if not isinstance(step, int):
+            raise TypeError(f'Metaprogramming range step must be a compile-time integral value, got {step}')
+
+        if stop is None:
+            return [start]
+        return list(range(start, stop, step))
 
 
 def canonicalize_phases(kernel: spir.Kernel) -> spir.Kernel:
@@ -49,6 +126,91 @@ def canonicalize_phases(kernel: spir.Kernel) -> spir.Kernel:
     return spir.Kernel(kernel.name, kernel.parameters, kernel.arguments, new_body)
 
 
+def _register_identifier(used_versions: dict[str, set[int]], identifier: spir.Identifier) -> None:
+    used_versions[identifier.name].add(identifier.version)
+
+
+def _register_block_variables(used_versions: dict[str, set[int]], variables: list[spir.TypedIdentifier]) -> None:
+    for variable in variables:
+        _register_identifier(used_versions, variable.identifier)
+
+
+def _make_fresh_identifier(used_versions: dict[str, set[int]], identifier: spir.Identifier) -> spir.Identifier:
+    version = 0
+    while version in used_versions[identifier.name]:
+        version += 1
+
+    fresh_identifier = spir.Identifier(identifier.name, version)
+    fresh_identifier.lineinfo = getattr(identifier, 'lineinfo', None)
+    return fresh_identifier
+
+
+def _apply_identifier_replacements(
+        nodes: list[spir.SpatialNode], replacements: dict[spir.Identifier, spir.Identifier]) -> list[spir.SpatialNode]:
+    if not replacements:
+        return [copy.deepcopy(node) for node in nodes]
+
+    replacer = passes.FindAndReplace(replacements)
+    return [replacer.visit(copy.deepcopy(node)) for node in nodes]
+
+
+def _rewrite_place_declarations(
+        statements: list[spir.FieldDeclaration],
+        used_versions: dict[str, set[int]],
+        shared_identifiers: set[spir.Identifier],
+        existing_statements: list[spir.FieldDeclaration],
+        mark_appended_shared: bool = False,
+) -> tuple[dict[spir.Identifier, spir.Identifier], list[spir.FieldDeclaration], set[spir.Identifier]]:
+    replacements: dict[spir.Identifier, spir.Identifier] = {}
+    appended_statements: list[spir.FieldDeclaration] = []
+    appended_shared: set[spir.Identifier] = set()
+    shared_lookup = {
+        statement.field_name: statement.field_name
+        for statement in existing_statements
+        if statement.field_name in shared_identifiers
+    }
+
+    for statement in statements:
+        field_name = statement.field_name
+        if field_name in shared_lookup:
+            replacements[field_name] = copy.deepcopy(shared_lookup[field_name])
+            continue
+
+        rewritten_statement = copy.deepcopy(statement)
+        if field_name.version in used_versions[field_name.name]:
+            fresh_identifier = _make_fresh_identifier(used_versions, field_name)
+            replacements[field_name] = copy.deepcopy(fresh_identifier)
+            rewritten_statement.field_name = fresh_identifier
+
+        _register_identifier(used_versions, rewritten_statement.field_name)
+        appended_statements.append(rewritten_statement)
+        if mark_appended_shared:
+            appended_shared.add(rewritten_statement.field_name)
+
+    return replacements, appended_statements, appended_shared
+
+
+def _rewrite_stream_declarations(
+        statements: list[spir.StreamDeclaration],
+        used_versions: dict[str, set[int]],
+) -> tuple[dict[spir.Identifier, spir.Identifier], list[spir.StreamDeclaration]]:
+    replacements: dict[spir.Identifier, spir.Identifier] = {}
+    appended_statements: list[spir.StreamDeclaration] = []
+
+    for statement in statements:
+        stream_name = statement.stream_name
+        rewritten_statement = copy.deepcopy(statement)
+        if stream_name.version in used_versions[stream_name.name]:
+            fresh_identifier = _make_fresh_identifier(used_versions, stream_name)
+            replacements[stream_name] = copy.deepcopy(fresh_identifier)
+            rewritten_statement.stream_name = fresh_identifier
+
+        _register_identifier(used_versions, rewritten_statement.stream_name)
+        appended_statements.append(rewritten_statement)
+
+    return replacements, appended_statements
+
+
 def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
     """
     Inlines phases into their constituent computation and dataflow blocks by adding waits and appending all streams,
@@ -57,53 +219,94 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
     rect_place: dict[tuple[int, int, int, int], spir.PlaceBlock] = {}
     rect_dataflow: dict[tuple[int, int, int, int], spir.DataflowBlock] = {}
     rect_compute: dict[tuple[int, int, int, int], spir.ComputeBlock] = {}
+    used_versions: dict[str, set[int]] = defaultdict(set)
+    shared_place_identifiers: dict[tuple[int, int, int, int], set[spir.Identifier]] = defaultdict(set)
+
     # After canonicalize phases, kernel body can only contain phases or place blocks
     for block in kernel.body:
         rect = block.get_grid_rect()
         if isinstance(block, spir.PlaceBlock):
             if rect in rect_place:
-                rect_place[rect].statements.extend(block.statements)
+                _, statements, shared_ids = _rewrite_place_declarations(
+                    block.statements,
+                    used_versions,
+                    shared_place_identifiers[rect],
+                    rect_place[rect].statements,
+                    mark_appended_shared=True,
+                )
+                rect_place[rect].statements.extend(statements)
+                shared_place_identifiers[rect].update(shared_ids)
             else:
                 rect_place[rect] = copy.deepcopy(block)
+                _register_block_variables(used_versions, rect_place[rect].variables)
+                for statement in rect_place[rect].statements:
+                    _register_identifier(used_versions, statement.field_name)
+                    shared_place_identifiers[rect].add(statement.field_name)
         elif isinstance(block, spir.Phase):
+            phase_replacements: dict[tuple[int, int, int, int], dict[spir.Identifier, spir.Identifier]] = defaultdict(dict)
+
             # Extend place blocks
             for place in block.place:
                 rect = place.get_grid_rect()
                 if rect in rect_place:
-                    # Replace variables in place statements with the new variables
-                    rep = passes.FindAndReplace({
+                    phase_replacements[rect].update({
                         oldv.identifier: newv.identifier
                         for oldv, newv in zip(place.variables, rect_place[rect].variables)
                     })
-                    stmts = [rep.visit(s) for s in place.statements]
-                    rect_place[rect].statements.extend(stmts)
+
+                    replacements, statements, _ = _rewrite_place_declarations(
+                        place.statements,
+                        used_versions,
+                        shared_place_identifiers[rect],
+                        rect_place[rect].statements,
+                    )
+                    phase_replacements[rect].update(replacements)
+                    rect_place[rect].statements.extend(statements)
                 else:
                     rect_place[rect] = copy.deepcopy(place)
+                    _register_block_variables(used_versions, rect_place[rect].variables)
+                    for statement in rect_place[rect].statements:
+                        _register_identifier(used_versions, statement.field_name)
+
             # Extend dataflow blocks
             for df in block.dataflow:
                 rect = df.get_grid_rect()
                 if rect in rect_dataflow:
-                    rep = passes.FindAndReplace({
+                    replacements = dict(phase_replacements[rect])
+                    replacements.update({
                         oldv.identifier: newv.identifier
                         for oldv, newv in zip(df.variables, rect_dataflow[rect].variables)
                     })
-                    stmts = [rep.visit(s) for s in df.statements]
-                    rect_dataflow[rect].statements.extend(stmts)
+
+                    stream_replacements, statements = _rewrite_stream_declarations(df.statements, used_versions)
+                    phase_replacements[rect].update(stream_replacements)
+                    rect_dataflow[rect].statements.extend(_apply_identifier_replacements(statements, replacements))
                 else:
                     rect_dataflow[rect] = copy.deepcopy(df)
+                    _register_block_variables(used_versions, rect_dataflow[rect].variables)
+                    statements = _apply_identifier_replacements(
+                        rect_dataflow[rect].statements, phase_replacements[rect])
+                    rect_dataflow[rect].statements = []
+                    stream_replacements, rewritten_statements = _rewrite_stream_declarations(statements, used_versions)
+                    phase_replacements[rect].update(stream_replacements)
+                    rect_dataflow[rect].statements.extend(rewritten_statements)
+
             # Concatenate compute blocks with an endphase statement
             for compute in block.compute:
                 rect = compute.get_grid_rect()
                 if rect in rect_compute:
                     rect_compute[rect].statements.append(spir.AwaitAllStatement())
-                    rep = passes.FindAndReplace({
+                    replacements = dict(phase_replacements[rect])
+                    replacements.update({
                         oldv.identifier: newv.identifier
                         for oldv, newv in zip(compute.variables, rect_compute[rect].variables)
                     })
-                    stmts = [rep.visit(s) for s in compute.statements]
-                    rect_compute[rect].statements.extend(stmts)
+                    rect_compute[rect].statements.extend(_apply_identifier_replacements(compute.statements, replacements))
                 else:
                     rect_compute[rect] = copy.deepcopy(compute)
+                    _register_block_variables(used_versions, rect_compute[rect].variables)
+                    rect_compute[rect].statements = _apply_identifier_replacements(
+                        rect_compute[rect].statements, phase_replacements[rect])
         else:
             raise TypeError(f'Unexpected block type "{type(block).__name__}" in kernel. Was ``canonicalize_phases`` '
                             'called?')
