@@ -181,14 +181,18 @@ place_block : "place" typed_vars "in" subgrid_expression_2d place_body
 dataflow_block : "dataflow" typed_vars "in" subgrid_expression_2d dataflow_body
 compute_block : "compute" typed_vars "in" subgrid_expression_2d compute_body
 phase : "phase" phase_body
+metafor_block_inphase : "for" typed_vars "in" subgrid_expression phase_body
+metafor_block : "for" typed_vars "in" subgrid_expression kernel_body
 
 ////////////////////////////////////////////////////
 // AST structure
-kernel_body : "{" (place_block | dataflow_block | compute_block | phase)* "}"
+kernel_body : "{" (place_block | dataflow_block | compute_block | phase | metafor_block)* "}"
 place_body : "{" field_declaration* "}"
 dataflow_body : "{" stream_declaration* "}"
 compute_body : "{" statements "}"
-phase_body : "{" (place_block | dataflow_block | compute_block)* "}"
+phase_body : "{" (place_block | dataflow_block | compute_block | metafor_block_inphase)* "}"
+
+
 
 ?start: kernel
 

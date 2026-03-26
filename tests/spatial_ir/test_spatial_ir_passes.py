@@ -104,12 +104,182 @@ def test_canonicalize_multiphase():
 }'''
 
 
+def test_inline_phases_freshens_replicated_place_fields():
+    kernel = spir.Kernel(
+        name='test',
+        parameters=[],
+        arguments=[],
+        body=[
+            spir.Phase(
+                place=[
+                    spir.PlaceBlock(_make_block_vars(), _make_subgrid(), [
+                        spir.FieldDeclaration(spir.ScalarType.i16, spir.Identifier('tmp', 0))
+                    ])
+                ],
+                dataflow=[],
+                compute=[
+                    spir.ComputeBlock(_make_block_vars(), _make_subgrid(), [
+                        spir.AssignmentStatement(
+                            spir.Identifier('tmp', 0),
+                            spir.Expression(spir.ConstantLiteral(1, spir.ScalarType.i16)))
+                    ])
+                ],
+            ),
+            spir.Phase(
+                place=[
+                    spir.PlaceBlock(_make_block_vars(), _make_subgrid(), [
+                        spir.FieldDeclaration(spir.ScalarType.i16, spir.Identifier('tmp', 0))
+                    ])
+                ],
+                dataflow=[],
+                compute=[
+                    spir.ComputeBlock(_make_block_vars(), _make_subgrid(), [
+                        spir.AssignmentStatement(
+                            spir.Identifier('tmp', 0),
+                            spir.Expression(spir.ConstantLiteral(2, spir.ScalarType.i16)))
+                    ])
+                ],
+            ),
+        ],
+    )
+
+    inlined = canonicalization.inline_phases(kernel)
+    place = next(block for block in inlined.body if isinstance(block, spir.PlaceBlock))
+    compute = next(block for block in inlined.body if isinstance(block, spir.ComputeBlock))
+
+    assert [statement.field_name.as_ir() for statement in place.statements] == ['tmp', 'tmp#1']
+    assert compute.statements[0].destination.as_ir() == 'tmp'
+    assert isinstance(compute.statements[1], spir.AwaitAllStatement)
+    assert compute.statements[2].destination.as_ir() == 'tmp#1'
+
+
+def test_inline_phases_shares_global_place_fields():
+    global_place = spir.PlaceBlock(_make_block_vars(), _make_subgrid(), [
+        spir.FieldDeclaration(spir.ScalarType.i16, spir.Identifier('tmp', 0))
+    ])
+    kernel = spir.Kernel(
+        name='test',
+        parameters=[],
+        arguments=[],
+        body=[
+            global_place,
+            spir.Phase(
+                place=[
+                    spir.PlaceBlock(_make_block_vars(), _make_subgrid(), [
+                        spir.FieldDeclaration(spir.ScalarType.i16, spir.Identifier('tmp', 0))
+                    ])
+                ],
+                dataflow=[],
+                compute=[
+                    spir.ComputeBlock(_make_block_vars(), _make_subgrid(), [
+                        spir.AssignmentStatement(
+                            spir.Identifier('tmp', 0),
+                            spir.Expression(spir.ConstantLiteral(1, spir.ScalarType.i16)))
+                    ])
+                ],
+            ),
+            spir.Phase(
+                place=[
+                    spir.PlaceBlock(_make_block_vars(), _make_subgrid(), [
+                        spir.FieldDeclaration(spir.ScalarType.i16, spir.Identifier('tmp', 0))
+                    ])
+                ],
+                dataflow=[],
+                compute=[
+                    spir.ComputeBlock(_make_block_vars(), _make_subgrid(), [
+                        spir.AssignmentStatement(
+                            spir.Identifier('tmp', 0),
+                            spir.Expression(spir.ConstantLiteral(2, spir.ScalarType.i16)))
+                    ])
+                ],
+            ),
+        ],
+    )
+
+    inlined = canonicalization.inline_phases(kernel)
+    place = next(block for block in inlined.body if isinstance(block, spir.PlaceBlock))
+    compute = next(block for block in inlined.body if isinstance(block, spir.ComputeBlock))
+
+    assert [statement.field_name.as_ir() for statement in place.statements] == ['tmp']
+    assert compute.statements[0].destination.as_ir() == 'tmp'
+    assert isinstance(compute.statements[1], spir.AwaitAllStatement)
+    assert compute.statements[2].destination.as_ir() == 'tmp'
+
+
+def test_inline_phases_freshens_replicated_streams():
+    global_place = spir.PlaceBlock(_make_block_vars(), _make_subgrid(), [
+        spir.FieldDeclaration(spir.ScalarType.i16, spir.Identifier('tmp', 0))
+    ])
+    kernel = spir.Kernel(
+        name='test',
+        parameters=[],
+        arguments=[],
+        body=[
+            global_place,
+            spir.Phase(
+                place=[],
+                dataflow=[
+                    spir.DataflowBlock(_make_block_vars(), _make_subgrid(), [
+                        spir.StreamDeclaration(
+                            spir.StreamType(spir.ScalarType.i16),
+                            spir.Identifier('s', 0),
+                            spir.RelativeStreamDeclaration(_make_number(1), _make_number(0)),
+                        )
+                    ])
+                ],
+                compute=[
+                    spir.ComputeBlock(_make_block_vars(), _make_subgrid(), [
+                        spir.SendStatement(spir.Identifier('tmp', 0), spir.Identifier('s', 0))
+                    ])
+                ],
+            ),
+            spir.Phase(
+                place=[],
+                dataflow=[
+                    spir.DataflowBlock(_make_block_vars(), _make_subgrid(), [
+                        spir.StreamDeclaration(
+                            spir.StreamType(spir.ScalarType.i16),
+                            spir.Identifier('s', 0),
+                            spir.RelativeStreamDeclaration(_make_number(1), _make_number(0)),
+                        )
+                    ])
+                ],
+                compute=[
+                    spir.ComputeBlock(_make_block_vars(), _make_subgrid(), [
+                        spir.SendStatement(spir.Identifier('tmp', 0), spir.Identifier('s', 0))
+                    ])
+                ],
+            ),
+        ],
+    )
+
+    inlined = canonicalization.inline_phases(kernel)
+    dataflow = next(block for block in inlined.body if isinstance(block, spir.DataflowBlock))
+    compute = next(block for block in inlined.body if isinstance(block, spir.ComputeBlock))
+
+    assert [statement.stream_name.as_ir() for statement in dataflow.statements] == ['s', 's#1']
+    assert compute.statements[0].stream_name.as_ir() == 's'
+    assert isinstance(compute.statements[1], spir.AwaitAllStatement)
+    assert compute.statements[2].stream_name.as_ir() == 's#1'
+
+
 def _make_number(num: int):
     return spir.Expression(spir.ConstantLiteral(num, spir.ScalarType.i16))
 
 
 def _make_range(start: int, end: int):
     return spir.RangeExpression(_make_number(start), _make_number(end))
+
+
+def _make_subgrid():
+    return spir.SubgridExpression(_make_range(0, 4), _make_range(0, 4))
+
+
+def _make_block_vars():
+    return [
+        spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('i', 0)),
+        spir.TypedIdentifier(spir.ScalarType.i16, spir.Identifier('j', 0)),
+    ]
 
 
 @pytest.mark.parametrize("should_lower", [True, False])
