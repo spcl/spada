@@ -701,3 +701,218 @@ def test_do_not_elide_extern_indexed_forwarding_temp():
     loop_stmt = rect.metadata.compute.statements[0]
     assert isinstance(loop_stmt, spir.ForStatement)
     assert len(loop_stmt.body) == 2
+
+
+def test_do_not_remove_nested_scalar_copy_if_temp_used_after_loop():
+    kernel = parser.parse_string(
+        """
+        kernel @test<>() {
+            place u16 i, u16 j in [0:1, 0:1] {
+                f32 a
+                f32 tmp
+                f32 out
+                extern f32 sink
+            }
+            compute u16 i, u16 j in [0:1, 0:1] {
+                for i32 k in [0:4:1] {
+                    tmp = a
+                    out = tmp
+                }
+                await send(tmp, sink)
+            }
+        }
+        """,
+        "test.sptl",
+    )
+
+    rect = _optimize_kernel(kernel)
+
+    assert _place_field_names(rect) == ["a", "tmp", "out", "sink"]
+    loop_stmt = rect.metadata.compute.statements[0]
+    assert isinstance(loop_stmt, spir.ForStatement)
+    assert len(loop_stmt.body) == 2
+    first_stmt = loop_stmt.body[0]
+    second_stmt = loop_stmt.body[1]
+    assert isinstance(first_stmt, spir.AssignmentStatement)
+    assert isinstance(second_stmt, spir.AssignmentStatement)
+    assert isinstance(first_stmt.destination, spir.Identifier)
+    assert first_stmt.destination.name == "tmp"
+    assert isinstance(second_stmt.source.value, spir.Identifier)
+    assert second_stmt.source.value.name == "tmp"
+
+
+def test_do_not_remove_single_element_forwarding_if_temp_used_after_loop():
+    kernel = parser.parse_string(
+        """
+        kernel @test<>() {
+            place u16 i, u16 j in [0:1, 0:1] {
+                f32[4] a
+                f32[4] tmp
+                f32[4] out
+                extern f32[4] sink
+            }
+            compute u16 i, u16 j in [0:1, 0:1] {
+                for i32 k in [0:4:1] {
+                    tmp[k] = a[k]
+                    out[k] = tmp[k]
+                }
+                await send(tmp, sink)
+            }
+        }
+        """,
+        "test.sptl",
+    )
+
+    rect = _optimize_kernel(kernel)
+
+    assert _place_field_names(rect) == ["a", "tmp", "out", "sink"]
+    loop_stmt = rect.metadata.compute.statements[0]
+    assert isinstance(loop_stmt, spir.ForStatement)
+    assert len(loop_stmt.body) == 2
+    first_stmt = loop_stmt.body[0]
+    second_stmt = loop_stmt.body[1]
+    assert isinstance(first_stmt, spir.AssignmentStatement)
+    assert isinstance(second_stmt, spir.AssignmentStatement)
+    assert isinstance(first_stmt.destination, spir.ArraySlice)
+    assert first_stmt.destination.array.name == "tmp"
+    assert isinstance(second_stmt.source.value, spir.ArraySlice)
+    assert second_stmt.source.value.array.name == "tmp"
+
+
+def test_do_not_remove_single_element_forwarding_if_temp_used_in_second_loop():
+    kernel = parser.parse_string(
+        """
+        kernel @test<>() {
+            place u16 i, u16 j in [0:1, 0:1] {
+                f32[4] a
+                f32[4] tmp
+                f32[4] out0
+                f32[4] out1
+            }
+            compute u16 i, u16 j in [0:1, 0:1] {
+                for i32 k in [0:4:1] {
+                    tmp[k] = a[k]
+                    out0[k] = tmp[k]
+                }
+                for i32 k in [0:4:1] {
+                    out1[k] = tmp[k]
+                }
+            }
+        }
+        """,
+        "test.sptl",
+    )
+
+    rect = _optimize_kernel(kernel)
+
+    assert _place_field_names(rect) == ["a", "tmp", "out0", "out1"]
+    first_loop = rect.metadata.compute.statements[0]
+    second_loop = rect.metadata.compute.statements[1]
+    assert isinstance(first_loop, spir.ForStatement)
+    assert isinstance(second_loop, spir.ForStatement)
+    assert len(first_loop.body) == 2
+    assert len(second_loop.body) == 1
+    first_loop_consumer = first_loop.body[1]
+    second_loop_consumer = second_loop.body[0]
+    assert isinstance(first_loop_consumer, spir.AssignmentStatement)
+    assert isinstance(second_loop_consumer, spir.AssignmentStatement)
+    assert isinstance(first_loop_consumer.source.value, spir.ArraySlice)
+    assert first_loop_consumer.source.value.array.name == "tmp"
+    assert isinstance(second_loop_consumer.source.value, spir.ArraySlice)
+    assert second_loop_consumer.source.value.array.name == "tmp"
+
+
+def test_protected_fields_propagate_into_nested_scalar_loop_region():
+    kernel = parser.parse_string(
+        """
+        kernel @test<>() {
+            place u16 i, u16 j in [0:1, 0:1] {
+                f32 a
+                f32 tmp
+                f32 out
+                f32 later
+            }
+            compute u16 i, u16 j in [0:1, 0:1] {
+                for i32 ii in [0:2:1] {
+                    for i32 jj in [0:2:1] {
+                        tmp = a
+                        out = tmp
+                    }
+                }
+                for i32 kk in [0:2:1] {
+                    later = tmp
+                }
+            }
+        }
+        """,
+        "test.sptl",
+    )
+
+    rect = _optimize_kernel(kernel)
+
+    assert _place_field_names(rect) == ["a", "tmp", "out", "later"]
+    outer_loop = rect.metadata.compute.statements[0]
+    later_loop = rect.metadata.compute.statements[1]
+    assert isinstance(outer_loop, spir.ForStatement)
+    assert isinstance(later_loop, spir.ForStatement)
+    assert len(outer_loop.body) == 1
+
+    inner_loop = outer_loop.body[0]
+    assert isinstance(inner_loop, spir.ForStatement)
+    assert len(inner_loop.body) == 2
+    first_stmt = inner_loop.body[0]
+    second_stmt = inner_loop.body[1]
+    assert isinstance(first_stmt, spir.AssignmentStatement)
+    assert isinstance(second_stmt, spir.AssignmentStatement)
+    assert isinstance(first_stmt.destination, spir.Identifier)
+    assert first_stmt.destination.name == "tmp"
+    assert isinstance(second_stmt.source.value, spir.Identifier)
+    assert second_stmt.source.value.name == "tmp"
+
+
+def test_protected_fields_propagate_into_nested_indexed_loop_region():
+    kernel = parser.parse_string(
+        """
+        kernel @test<>() {
+            place u16 i, u16 j in [0:1, 0:1] {
+                f32[4] a
+                f32[4] tmp
+                f32[4] out
+                f32[4] later
+            }
+            compute u16 i, u16 j in [0:1, 0:1] {
+                for i32 ii in [0:2:1] {
+                    for i32 jj in [0:4:1] {
+                        tmp[jj] = a[jj]
+                        out[jj] = tmp[jj]
+                    }
+                }
+                for i32 kk in [0:4:1] {
+                    later[kk] = tmp[kk]
+                }
+            }
+        }
+        """,
+        "test.sptl",
+    )
+
+    rect = _optimize_kernel(kernel)
+
+    assert _place_field_names(rect) == ["a", "tmp", "out", "later"]
+    outer_loop = rect.metadata.compute.statements[0]
+    later_loop = rect.metadata.compute.statements[1]
+    assert isinstance(outer_loop, spir.ForStatement)
+    assert isinstance(later_loop, spir.ForStatement)
+    assert len(outer_loop.body) == 1
+
+    inner_loop = outer_loop.body[0]
+    assert isinstance(inner_loop, spir.ForStatement)
+    assert len(inner_loop.body) == 2
+    first_stmt = inner_loop.body[0]
+    second_stmt = inner_loop.body[1]
+    assert isinstance(first_stmt, spir.AssignmentStatement)
+    assert isinstance(second_stmt, spir.AssignmentStatement)
+    assert isinstance(first_stmt.destination, spir.ArraySlice)
+    assert first_stmt.destination.array.name == "tmp"
+    assert isinstance(second_stmt.source.value, spir.ArraySlice)
+    assert second_stmt.source.value.array.name == "tmp"

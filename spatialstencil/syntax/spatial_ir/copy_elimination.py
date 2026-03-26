@@ -292,6 +292,12 @@ def _aggregate_region_counts(statements: list[spir.Statement],
     return {field: _FieldCounts(reads=reads, writes=writes) for field, (reads, writes) in totals.items()}
 
 
+def _fields_referenced_in_statements(statements: list[spir.Statement],
+                                     tracked_fields: set[spir.Identifier]) -> frozenset[spir.Identifier]:
+    counts = _aggregate_region_counts(statements, tracked_fields)
+    return frozenset(field for field, field_counts in counts.items() if field_counts.reads or field_counts.writes)
+
+
 def _extract_direct_producer(stmt: spir.Statement) -> _DirectProducer | None:
     if not isinstance(stmt, spir.AssignmentStatement):
         return None
@@ -523,22 +529,30 @@ def _rewrite_indexed_consumer(stmt: spir.Statement, producer: _IndexedProducer) 
     return False
 
 
-def _source_fields_written_between(statements: list[spir.Statement], start: int, stop: int,
-                                   source_fields: frozenset[spir.Identifier],
-                                   tracked_fields: set[spir.Identifier]) -> bool:
-    if not source_fields:
+def _fields_written_between(statements: list[spir.Statement], start: int, stop: int,
+                            fields: frozenset[spir.Identifier] | set[spir.Identifier] | None,
+                            tracked_fields: set[spir.Identifier]) -> bool:
+    if not fields:
+        return False
+
+    relevant_fields = {field for field in fields if field in tracked_fields}
+    if not relevant_fields:
         return False
 
     for stmt in statements[start:stop]:
         counts = _statement_field_counts(stmt, tracked_fields)
-        for source_field in source_fields:
-            if counts.get(source_field, _FieldCounts()).writes:
+        for field in relevant_fields:
+            if counts.get(field, _FieldCounts()).writes:
                 return True
     return False
 
 
-def _optimize_single_element_index_region(statements: list[spir.Statement], non_extern_fields: set[spir.Identifier],
-                                          all_place_fields: set[spir.Identifier]) -> list[spir.Statement]:
+def _optimize_single_element_index_region(
+    statements: list[spir.Statement],
+    non_extern_fields: set[spir.Identifier],
+    all_place_fields: set[spir.Identifier],
+    protected_fields: frozenset[spir.Identifier] = frozenset()
+) -> list[spir.Statement]:
     optimized = list(statements)
     changed = True
     while changed:
@@ -548,6 +562,8 @@ def _optimize_single_element_index_region(statements: list[spir.Statement], non_
         for producer_index, producer_stmt in enumerate(optimized):
             producer = _extract_indexed_producer(producer_stmt, all_place_fields)
             if producer is None:
+                continue
+            if producer.destination_field in protected_fields:
                 continue
 
             counts = region_counts.get(producer.destination_field, _FieldCounts())
@@ -574,8 +590,8 @@ def _optimize_single_element_index_region(statements: list[spir.Statement], non_
             if blocked or total_occurrences == 0 or last_consumer_index is None:
                 continue
 
-            if _source_fields_written_between(optimized, producer_index + 1, last_consumer_index,
-                                              producer.source_fields, all_place_fields):
+            if _fields_written_between(optimized, producer_index + 1, last_consumer_index, producer.source_fields,
+                                       all_place_fields):
                 continue
 
             for consumer_index in range(producer_index + 1, len(optimized)):
@@ -605,33 +621,46 @@ def _optimize_single_element_index_region(statements: list[spir.Statement], non_
     return optimized
 
 
-def _optimize_single_element_index_bodies(statements: list[spir.Statement], non_extern_fields: set[spir.Identifier],
-                                          all_place_fields: set[spir.Identifier]) -> list[spir.Statement]:
+def _optimize_single_element_index_bodies(
+    statements: list[spir.Statement],
+    non_extern_fields: set[spir.Identifier],
+    all_place_fields: set[spir.Identifier],
+    protected_fields: frozenset[spir.Identifier] = frozenset()
+) -> list[spir.Statement]:
     optimized = list(statements)
-    for stmt in optimized:
+    for index, stmt in enumerate(optimized):
+        sibling_fields = _fields_referenced_in_statements(optimized[:index] + optimized[index + 1:], all_place_fields)
+        child_protected_fields = protected_fields | sibling_fields
         if isinstance(stmt, (spir.ForStatement, spir.ForeachStatement, spir.MapStatement)):
-            stmt.body = _optimize_single_element_index_region(stmt.body, non_extern_fields, all_place_fields)
-            stmt.body = _optimize_single_element_index_bodies(stmt.body, non_extern_fields, all_place_fields)
+            stmt.body = _optimize_single_element_index_region(
+                stmt.body,
+                non_extern_fields,
+                all_place_fields,
+                child_protected_fields,
+            )
+            stmt.body = _optimize_single_element_index_bodies(
+                stmt.body,
+                non_extern_fields,
+                all_place_fields,
+                child_protected_fields,
+            )
         elif isinstance(stmt, spir.AsyncBlock):
-            stmt.body = _optimize_single_element_index_bodies(stmt.body, non_extern_fields, all_place_fields)
+            stmt.body = _optimize_single_element_index_bodies(
+                stmt.body,
+                non_extern_fields,
+                all_place_fields,
+                child_protected_fields,
+            )
 
     return optimized
 
 
-def _source_written_between(statements: list[spir.Statement], start: int, stop: int,
-                            source_field: spir.Identifier | None, tracked_fields: set[spir.Identifier]) -> bool:
-    if source_field is None or source_field not in tracked_fields:
-        return False
-
-    for stmt in statements[start:stop]:
-        counts = _statement_field_counts(stmt, tracked_fields)
-        if counts.get(source_field, _FieldCounts()).writes:
-            return True
-    return False
-
-
-def _optimize_region(statements: list[spir.Statement], non_extern_fields: set[spir.Identifier],
-                     all_place_fields: set[spir.Identifier]) -> list[spir.Statement]:
+def _optimize_region(
+    statements: list[spir.Statement],
+    non_extern_fields: set[spir.Identifier],
+    all_place_fields: set[spir.Identifier],
+    protected_fields: frozenset[spir.Identifier] = frozenset()
+) -> list[spir.Statement]:
     optimized = list(statements)
     changed = True
     while changed:
@@ -641,6 +670,8 @@ def _optimize_region(statements: list[spir.Statement], non_extern_fields: set[sp
         for producer_index, producer_stmt in enumerate(optimized):
             direct_producer = _extract_direct_producer(producer_stmt)
             if direct_producer is not None:
+                if direct_producer.destination in protected_fields:
+                    continue
                 counts = region_counts.get(direct_producer.destination, _FieldCounts())
                 if counts.writes == 1 and counts.reads == 1:
                     for consumer_index in range(producer_index + 1, len(optimized)):
@@ -648,8 +679,13 @@ def _optimize_region(statements: list[spir.Statement], non_extern_fields: set[sp
                         consumer = _extract_direct_consumer(consumer_stmt)
                         if consumer is None or consumer.source_field != direct_producer.destination:
                             continue
-                        if _source_written_between(optimized, producer_index + 1, consumer_index,
-                                                   direct_producer.source.field, all_place_fields):
+                        if _fields_written_between(
+                                optimized,
+                                producer_index + 1,
+                                consumer_index,
+                            {direct_producer.source.field} if direct_producer.source.field is not None else None,
+                                all_place_fields,
+                        ):
                             break
 
                         _rewrite_direct_consumer(consumer_stmt, direct_producer.source)
@@ -662,6 +698,8 @@ def _optimize_region(statements: list[spir.Statement], non_extern_fields: set[sp
 
             map_producer = _extract_map_producer(producer_stmt)
             if map_producer is not None:
+                if map_producer.destination in protected_fields:
+                    continue
                 counts = region_counts.get(map_producer.destination, _FieldCounts())
                 if counts.writes == 1 and counts.reads == 1:
                     for consumer_index in range(producer_index + 1, len(optimized)):
@@ -673,8 +711,13 @@ def _optimize_region(statements: list[spir.Statement], non_extern_fields: set[sp
                         if consumer is None or consumer.source_field != map_producer.destination:
                             continue
 
-                        if _source_written_between(optimized, producer_index + 1, consumer_index,
-                                                   map_producer.source.field, all_place_fields):
+                        if _fields_written_between(
+                                optimized,
+                                producer_index + 1,
+                                consumer_index,
+                            {map_producer.source.field},
+                                all_place_fields,
+                        ):
                             break
 
                         _rewrite_map_consumer(consumer_stmt, map_producer.source)
@@ -692,6 +735,8 @@ def _optimize_region(statements: list[spir.Statement], non_extern_fields: set[sp
             )
             if foreach_bulk_producer is None:
                 continue
+            if foreach_bulk_producer.destination_field in protected_fields:
+                continue
 
             counts = region_counts.get(foreach_bulk_producer.destination_field, _FieldCounts())
             if counts.writes != 1 or counts.reads != 1:
@@ -706,8 +751,13 @@ def _optimize_region(statements: list[spir.Statement], non_extern_fields: set[sp
                     continue
                 if not _references_place_field(consumer_stmt.stream_name, all_place_fields):
                     break
-                if _source_written_between(optimized, producer_index + 1, consumer_index,
-                                           foreach_bulk_producer.source.field, all_place_fields):
+                if _fields_written_between(
+                        optimized,
+                        producer_index + 1,
+                        consumer_index,
+                    {foreach_bulk_producer.source.field} if foreach_bulk_producer.source.field is not None else None,
+                        all_place_fields,
+                ):
                     break
 
                 if not _rewrite_whole_array_send_consumer(consumer_stmt, foreach_bulk_producer.source):
@@ -719,9 +769,11 @@ def _optimize_region(statements: list[spir.Statement], non_extern_fields: set[sp
             if changed:
                 break
 
-    for stmt in optimized:
+    for index, stmt in enumerate(optimized):
+        sibling_fields = _fields_referenced_in_statements(optimized[:index] + optimized[index + 1:], all_place_fields)
+        child_protected_fields = protected_fields | sibling_fields
         if isinstance(stmt, (spir.ForStatement, spir.ForeachStatement, spir.MapStatement, spir.AsyncBlock)):
-            stmt.body = _optimize_region(stmt.body, non_extern_fields, all_place_fields)
+            stmt.body = _optimize_region(stmt.body, non_extern_fields, all_place_fields, child_protected_fields)
 
     return optimized
 
