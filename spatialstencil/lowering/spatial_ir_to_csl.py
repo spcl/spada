@@ -61,6 +61,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     kernel = canonical_subgrids.canonicalize_subgrids(kernel)
     print("Canonicalized subgrids")
     print(kernel.as_ir())
+    kernel = canonicalization.resolve_auto_hops(kernel)
     kernel = canonicalization.inline_phases(kernel)
 
     # Check if we are streaming or using memcpy mode
