@@ -1,0 +1,70 @@
+/**
+ * Pipelined 1D broadcast from PE 0,0 to all N PEs with K elements per PE.
+ * This is the exact inverse of chain_reduce_1D: streams point east (+1,0)
+ * and the red/blue channel roles are swapped relative to the reduce.
+ **/
+kernel @broadcast_1d<N, K>(stream<f32, K>[1,1] readonly inp, stream<f32, K>[N,1] writeonly out) {
+
+    place i16 i, i16 j in [0:N, 0] {
+        f32[K] a
+    }
+
+    // Phase 1: Root loads input
+    phase {
+        compute i16 i, i16 j in [0, 0] {
+            await receive(a, inp[0, 0])
+        }
+    }
+
+    // Phase 2: Broadcast eastward with red/blue checkerboard pipelining.
+    // Mirrors chain_reduce_1D with direction and send/receive swapped:
+    //   root       -> send blue   (root in reduce: receive blue)
+    //   odd PEs    -> receive blue, send red   (reduce: receive red, send blue)
+    //   even PEs   -> receive red,  send blue  (reduce: receive blue, send red)
+    //   east corner -> receive (red if even, blue if odd)
+    phase {
+        dataflow i16 i, i16 j in [0:N, 0] {
+            stream<f32> red = relative_stream(1, 0) {
+                hops = [(1, 0)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(1, 0) {
+                hops = [(1, 0)],
+                channel = 1
+            }
+        }
+
+        // West corner (root, PE 0 — even): send the whole array on blue
+        compute i16 i, i16 j in [0, 0] {
+            await send(a, blue)
+        }
+
+        // Odd PEs: receive blue element-by-element, store, immediately forward on red
+        compute i16 i, i16 j in [1:N-1:2, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = x
+                await send(x, red)
+            }
+        }
+
+        // Even PEs (middle): receive red element-by-element, store, immediately forward on blue
+        compute i16 i, i16 j in [2:N-1:2, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(red) {
+                a[k] = x
+                await send(x, blue)
+            }
+        }
+
+        // East corner: receive the whole array; channel matches position parity
+        compute i16 i, i16 j in [N-1, 0] {
+            await receive(a, red if (N-1) % 2 == 0 else blue)
+        }
+    }
+
+    // Phase 3: All PEs write the broadcast value to output
+    phase {
+        compute i16 i, i16 j in [0:N, 0] {
+            await send(a, out[i, j])
+        }
+    }
+}
