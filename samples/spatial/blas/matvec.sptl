@@ -92,7 +92,7 @@ kernel @matvec<PX, PY, K>(
     phase {
         compute i16 i, i16 j in [0:PX, 0:PY] {
             for i16 k in [0:K] {
-                z[k] = 0
+                z[k] = 0.0
             }
             for i16 k, i16 l in [0:K, 0:K] {
                 z[k] = z[k] + A_flat[k*K + l] * x[l]
