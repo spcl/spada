@@ -205,26 +205,44 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
     // Rectangle and code setup
     @set_rectangle{rect_size};''')
 
+    # First pass: @set_tile_code for every PE.
+    # All tile codes must be established before any @set_color_config call,
+    # because multi-hop routing config may reference neighbouring PEs that
+    # belong to a different rectangle (e.g. pass-through relays).
     for rect in rectangles:
-        xb, xe, xs, yb, ye, ys = *rect.x_range, *rect.y_range
-        code_filename = f'code_{xb}_{yb}.csl'
-        # Add global offsets as necessary
-        xb += rect_offset[0]
-        xe += rect_offset[0]
-        yb += rect_offset[1]
-        ye += rect_offset[1]
+        xb_pre, xe_pre, xs, yb_pre, ye_pre, ys = *rect.x_range, *rect.y_range
+        code_filename = f'code_{xb_pre}_{yb_pre}.csl'
+        xb = xb_pre + rect_offset[0]
+        xe = xe_pre + rect_offset[0]
+        yb = yb_pre + rect_offset[1]
+        ye = ye_pre + rect_offset[1]
 
-        # Emit rectangle code setup
         layout_code.write(f'''
     for (@range(i16, {xb}, {xe}, {xs})) |pe_x| {{
         for (@range(i16, {yb}, {ye}, {ys})) |pe_y| {{
             @set_tile_code(pe_x, pe_y, "{code_filename}", .{{ .memcpy_params = memcpy.get_params(pe_x) }});
-{routes_per_rectangle[(xb, yb)]}
         }}
     }}\n''')
 
-    # Emit routing instructions
+    # Second pass: routing (@set_color_config).  By emitting these after all
+    # @set_tile_code calls, every PE referenced by a multi-hop offset is
+    # guaranteed to already have tile code assigned.
     layout_code.write('\n    // Routes\n')
+    for rect in rectangles:
+        xb_pre, xe_pre, xs, yb_pre, ye_pre, ys = *rect.x_range, *rect.y_range
+        xb = xb_pre + rect_offset[0]
+        xe = xe_pre + rect_offset[0]
+        yb = yb_pre + rect_offset[1]
+        ye = ye_pre + rect_offset[1]
+        route_code = routes_per_rectangle.get((xb_pre, yb_pre), '')
+        if route_code.strip():
+            layout_code.write(f'''
+    for (@range(i16, {xb}, {xe}, {xs})) |pe_x| {{
+        for (@range(i16, {yb}, {ye}, {ys})) |pe_y| {{
+{route_code}
+        }}
+    }}\n''')
+
     for rinst in routing_instructions:
         layout_code.write(rinst + '\n')
 
