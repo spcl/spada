@@ -106,11 +106,11 @@ kernel @matvec<PX, PY, K>(
     // Root PE(0,j) accumulates and writes y_j to the host.
     phase {
         dataflow i16 i, i16 j in [0:PX, 0:PY] {
-            stream<f32> red = relative_stream(-1, 0) {
+            stream<f32> yellow = relative_stream(-1, 0) {
                 hops = [(-1, 0)],
                 channel = 2
             }
-            stream<f32> blue = relative_stream(-1, 0) {
+            stream<f32> green = relative_stream(-1, 0) {
                 hops = [(-1, 0)],
                 channel = 3
             }
@@ -118,28 +118,28 @@ kernel @matvec<PX, PY, K>(
 
         // East column (i=PX-1): start the reduction.
         compute i16 i, i16 j in [PX-1, 0:PY] {
-            await send(z, red if (PX-1) % 2 == 0 else blue)
+            await send(z, yellow if (PX-1) % 2 == 0 else green)
         }
 
-        // Odd i: receive red, accumulate, forward on blue.
+        // Odd i: receive yellow, accumulate, forward on green.
         compute i16 i, i16 j in [1:PX-1:2, 0:PY] {
-            await foreach i16 k, f32 v in [0:K], receive(red) {
+            await foreach i16 k, f32 v in [0:K], receive(yellow) {
                 z[k] = z[k] + v
-                await send(z[k], blue)
+                await send(z[k], green)
             }
         }
 
-        // Even i (middle): receive blue, accumulate, forward on red.
+        // Even i (middle): receive green, accumulate, forward on yellow.
         compute i16 i, i16 j in [2:PX-1:2, 0:PY] {
-            await foreach i16 k, f32 v in [0:K], receive(blue) {
+            await foreach i16 k, f32 v in [0:K], receive(green) {
                 z[k] = z[k] + v
-                await send(z[k], red)
+                await send(z[k], yellow)
             }
         }
 
-        // Root i=0: receive blue, accumulate, output y_j.
+        // Root i=0: receive green, accumulate, output y_j.
         compute i16 i, i16 j in [0, 0:PY] {
-            await foreach i16 k, f32 v in [0:K], receive(blue) {
+            await foreach i16 k, f32 v in [0:K], receive(green) {
                 z[k] = z[k] + v
             }
             await send(z, out[i, j])
