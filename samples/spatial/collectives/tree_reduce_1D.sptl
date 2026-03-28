@@ -9,9 +9,8 @@
  * Senders are done after their one send; only receivers continue.
  * After L phases PE 0 holds the total reduction.
  *
- * Note: scalar_tree_reduce_1D uses K for the tree depth (log2 of PEs) and
- * contains an off-by-one in its stage-to-stride formula. This kernel uses
- * L for the tree depth and K for the number of elements per PE.
+ * This kernel uses L for the tree depth and K for the number of elements per PE.
+ *
  * (!) Assumes L >= 1 (!)
  **/
 kernel @tree_reduce_1d<L, K>(stream<f32, K>[1<<L, 1] readonly a_in, stream<f32, K>[1,1] writeonly out) {
