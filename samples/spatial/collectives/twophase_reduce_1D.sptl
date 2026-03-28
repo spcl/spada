@@ -12,7 +12,7 @@ kernel @two_phase_reduce_1d<G, S, K>(stream<f32, K>[G*S,1] readonly a_in, stream
 
     // Receive Input
     phase {
-        compute i16 i, i16 j in [0:G*S, 0] {  // Odd PEs
+        compute i16 i, i16 j in [0:G*S, 0] {  // All PEs
             await receive(a, a_in[i, j])
         }
     }
@@ -59,8 +59,8 @@ kernel @two_phase_reduce_1d<G, S, K>(stream<f32, K>[G*S,1] readonly a_in, stream
             }
             // local east corner
             compute i16 i, i16 j in [ (group+1) * S - 1, 0] {
-                // only send
-                await send(a, red)
+                // only send; east corner is always at an odd global index when S is even, so sends blue
+                await send(a, blue)
             }
         }
     }
@@ -82,10 +82,12 @@ kernel @two_phase_reduce_1d<G, S, K>(stream<f32, K>[G*S,1] readonly a_in, stream
 
         // West Corner (Root)
         compute i16 i, i16 j in [0, 0] {
-            // only receive (blue)
+            // only receive (blue); group-level position 0 is even
             await foreach i16 k, f32 x in [0:K], receive(blue) {
                 a[k] = a[k] + x
             }
+            // Output
+            await send(a, out[i, j])
         }
 
         // Middle Part (odd)
@@ -104,9 +106,9 @@ kernel @two_phase_reduce_1d<G, S, K>(stream<f32, K>[G*S,1] readonly a_in, stream
             }
         }
 
-        // East Corner
-        compute i16 i, i16 j in [G*S-1, 0] {
-            // Allows for both even or odd number of groups
+        // East Corner: leftmost PE of the last group, at global position (G-1)*S
+        compute i16 i, i16 j in [(G-1)*S, 0] {
+            // (G-1) is the group-level index of the east corner; even → red, odd → blue
             await send(a, red if (G-1) % 2 == 0 else blue)
         }
 
