@@ -1,0 +1,25 @@
+/**
+ * Full 2D identity copy: out[i,j] = inp[i,j] for all PEs.
+ * Used to observe the exact host↔device memcpy permutation across
+ * the entire grid.
+ */
+kernel @identity_2d_full<NX, NY, K>(
+    stream<f32, K>[NX, NY] readonly  inp,
+    stream<f32, K>[NX, NY] writeonly out
+) {
+    place i16 i, i16 j in [0:NX, 0:NY] {
+        f32[K] buf
+    }
+
+    phase {
+        compute i16 i, i16 j in [0:NX, 0:NY] {
+            await receive(buf, inp[i, j])
+        }
+    }
+
+    phase {
+        compute i16 i, i16 j in [0:NX, 0:NY] {
+            await send(buf, out[i, j])
+        }
+    }
+}
