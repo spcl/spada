@@ -11,6 +11,12 @@
  *
  * This kernel uses L for the tree depth and K for the number of elements per PE.
  *
+ * Communication Pattern (L=3):
+ *
+ * [0,0] <--0-- [1,0]     [2,0] <--0-- [3,0]     [4,0] <--0-- [5,0]        [6,0] <--0-- [7,0]
+ * [0,0] <--0------------ [2,0]                  [4,0] <--0--------------- [6,0] 
+ * [0,0] <--0----------------------------------- [4,0]
+ *
  * (!) Assumes L >= 1 (!)
  **/
 kernel @tree_reduce_1d<L, K>(stream<f32, K>[1<<L, 1] readonly a_in, stream<f32, K>[1,1] writeonly out) {
