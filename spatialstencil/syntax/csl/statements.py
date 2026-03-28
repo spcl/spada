@@ -101,9 +101,13 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice | spir.ConstantLiteral,
     else:
         dst_identifier = destination
 
-    # One element copy
-    if dst_identifier.as_ir() not in dsds or (isinstance(src_identifier, spir.Identifier) and
-                                              src_identifier.as_ir() not in dsds):
+    # Plain assignment: destination is not a DSD at all.
+    # When destination IS a DSD but source is a plain scalar (Identifier not in dsds),
+    # fall through to CopyDSDOp(scalar_input=True) below so the correct @fmovs call
+    # is emitted instead of a direct variable assignment.
+    src_is_plain_scalar = (isinstance(src_identifier, spir.Identifier) and
+                           src_identifier.as_ir() not in dsds)
+    if dst_identifier.as_ir() not in dsds:
 
         def _format_indexed_access(value: spir.Identifier | spir.ArraySlice, identifier: spir.Identifier) -> str:
             if isinstance(identifier, spir.TypedIdentifier):
@@ -133,7 +137,9 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice | spir.ConstantLiteral,
         dst_expr = _format_indexed_access(destination, dst_identifier)
         return f"{dst_expr} = {src_expr};"
 
-    # Get the DSD operation for the copy operation
+    # Get the DSD operation for the copy operation.
+    # scalar_input is set when inside a foreach/map OR when the source is a plain
+    # scalar variable (Identifier not in dsds) being written to a fabric DSD.
     dst_dtype = dtypes[dst_identifier]
     src_dtype = dtypes.get(src_identifier, dst_dtype)
     if isinstance(src_dtype, spir.ArrayType) and isinstance(src_dtype.base_type, spir.StreamType):
@@ -156,8 +162,7 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice | spir.ConstantLiteral,
         raise ValueError(
             f"Source and destination types do not match: {dtypes[src_identifier]} != {dtypes[dst_identifier]}")
 
-    # If both source and destination are DSDs, use the copy operation
-    return dsd_ops.CopyDSDOp(scalar_input=in_foreach_or_map)
+    return dsd_ops.CopyDSDOp(scalar_input=in_foreach_or_map or src_is_plain_scalar)
 
 
 def emit_expression(expr: spir.Expression,

@@ -308,9 +308,12 @@ class CopyDSDOp(DSDOp):
 
         if self.scalar_input:
             from spatialstencil.syntax.csl.statements import emit_expression
-            assert isinstance(statement.local_array, spir.ArraySlice)
-            expr = emit_expression(spir.Expression(statement.local_array), dsds, dtypes)
-            return f'{op}({_dsd(dsds, dest, output=True)}, {expr});'
+            if isinstance(statement, spir.SendStatement):
+                # local_array may be an ArraySlice (e.g. a[k]) or a plain Identifier (e.g. x)
+                src_expr = emit_expression(spir.Expression(statement.local_array), dsds, dtypes)
+            else:
+                src_expr = emit_expression(statement.source, dsds, dtypes)
+            return f'{op}({_dsd(dsds, dest, output=True)}, {src_expr});'
 
         return f'{op}({_dsd(dsds, dest, output=True)}, {_dsd(dsds, src)});'
 
