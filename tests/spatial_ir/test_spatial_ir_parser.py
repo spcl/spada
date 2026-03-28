@@ -6,7 +6,7 @@ def test_spatial_roundtrip_laplacian():
     """
     Tests a roundtrip IR->parse->IR->parse->IR for differences.
     """
-    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'laplacian.sptl')
+    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'stencils', 'laplacian.sptl')
     program = parser.parse_file(file)
     ir_1 = program.as_ir()
     program2 = parser.parse_string(ir_1)
@@ -18,7 +18,7 @@ def test_spatial_visitor():
     """
     Tests the IR node visitor for the spatial IR.
     """
-    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'laplacian.sptl')
+    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'stencils', 'laplacian.sptl')
     program = parser.parse_file(file)
 
     visitor = StreamCollector()
@@ -73,7 +73,7 @@ def test_spatial_roundtrip_forward():
     """
     Tests a roundtrip IR->parse->IR->parse->IR for differences.
     """
-    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'forward_sum.sptl')
+    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'simple', 'forward_sum.sptl')
     _rountrip_test(file)
 
 
@@ -81,7 +81,7 @@ def test_spatial_roundtrip_backward():
     """
     Tests a roundtrip IR->parse->IR->parse->IR for differences.
     """
-    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'backward_sum.sptl')
+    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'simple', 'backward_sum.sptl')
     _rountrip_test(file)
 
 

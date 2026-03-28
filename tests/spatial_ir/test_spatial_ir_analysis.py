@@ -6,7 +6,7 @@ from spatialstencil.syntax.csl import tasks
 
 
 def test_completion_dag_simple():
-    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'add.sptl')
+    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'blas', 'add.sptl')
     kernel = parser.parse_file(file)
     assert isinstance(kernel.body[1], spa.ComputeBlock)
     dag = analysis.to_completion_dag(kernel.body[1])
