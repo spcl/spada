@@ -1,7 +1,8 @@
 #!/bin/sh
-# E2E test: 2D identity copy (out[i,j] == inp[i,j]).
-# Catches mismatched host↔device memcpy order when both grid dimensions > 1.
-# Each PE gets a unique value; any PE-swap shows up as a mismatch.
+# E2E test: load unique data on a 2D grid, read back only column i=0.
+# Catches mismatched host↔device memcpy order: the 2D input [NX, NY] has
+# a different shape from the 1D output [1, NY], so a transposed H2D copy
+# puts wrong data on PE(0, j) and the D2H copy cannot compensate.
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -27,13 +28,14 @@ timeout -s 9 120 cs_python "$RUNTIME_PY" "$FOLDER" a_in.npy --benchmark
 python3 - <<PYEOF
 import numpy as np, sys
 inp = np.load('a_in.npy')
-out = np.load('OUT_out.npy')
-if not np.allclose(out, inp, atol=1e-6):
-    print(f"FAILED: max abs diff = {float(np.max(np.abs(out - inp))):.3e}")
-    print(f"  expected: {inp.flatten()[:8]}")
-    print(f"  got:      {out.flatten()[:8]}")
+out = np.load('OUT_out.npy')   # expected shape (1, NY, K)
+ref = inp[0:1, :, :]           # first column: inp[0, j, :] for all j
+if not np.allclose(out, ref, atol=1e-6):
+    print(f"FAILED: max abs diff = {float(np.max(np.abs(out - ref))):.3e}")
+    print(f"  expected: {ref.flatten()}")
+    print(f"  got:      {out.flatten()}")
     sys.exit(1)
-print("Test passed: 2D identity output matches input.")
+print("Test passed: 2D identity column-0 output matches input.")
 PYEOF
 
 rm -rf "$FOLDER"
