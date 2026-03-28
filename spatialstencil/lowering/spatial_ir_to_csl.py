@@ -1145,8 +1145,11 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
                     if routing_inst not in routing_instructions:
                         inst += routing_inst
                         routing_instructions.add(routing_inst)
-                    cur_offx += last_hop.offset[0]
-                    cur_offy += last_hop.offset[1]
+                    # Walk backward through the hops (from receiver toward sender) to
+                    # configure each intermediate PE.  The offset from the receiver is
+                    # the NEGATION of the forward hop offset, so we subtract.
+                    cur_offx -= last_hop.offset[0]
+                    cur_offy -= last_hop.offset[1]
                     for hop in reversed(stream.stream.routing.hops[:-1]):
                         route = _route_dir(*hop.offset)
                         routing_inst = INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
@@ -1154,8 +1157,8 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
                         if routing_inst not in routing_instructions:
                             inst += routing_inst
                             routing_instructions.add(routing_inst)
-                        cur_offx += hop.offset[0]
-                        cur_offy += hop.offset[1]
+                        cur_offx -= hop.offset[0]
+                        cur_offy -= hop.offset[1]
 
         result[(rect.x_range[0], rect.y_range[0])] = inst
 
