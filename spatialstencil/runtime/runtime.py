@@ -118,7 +118,7 @@ def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.Sdk
         shape[2],
         streaming=not metadata.memcpy_mode,  # Use streaming if not in memcpy mode
         data_type=crt.MemcpyDataType.MEMCPY_32BIT if data.dtype == np.float32 else crt.MemcpyDataType.MEMCPY_16BIT,
-        order=crt.MemcpyOrder.ROW_MAJOR if not metadata.inputs[name].column_major else crt.MemcpyOrder.COL_MAJOR,
+        order=crt.MemcpyOrder.COL_MAJOR if not metadata.inputs[name].column_major else crt.MemcpyOrder.ROW_MAJOR,
         nonblock=not benchmark,  # Non-blocking copy if not benchmarking
     )
 
@@ -148,7 +148,7 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
         shape[2],
         streaming=not metadata.memcpy_mode,  # Use streaming if not in memcpy mode
         data_type=crt.MemcpyDataType.MEMCPY_32BIT if data.dtype == np.float32 else crt.MemcpyDataType.MEMCPY_16BIT,
-        order=crt.MemcpyOrder.ROW_MAJOR if not metadata.outputs[name].column_major else crt.MemcpyOrder.COL_MAJOR,
+        order=crt.MemcpyOrder.COL_MAJOR if not metadata.outputs[name].column_major else crt.MemcpyOrder.ROW_MAJOR,
         nonblock=False,  # Blocking copy to ensure data is ready after copy
     )
 
