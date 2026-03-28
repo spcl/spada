@@ -404,7 +404,20 @@ class _AutoHopResolver(spir.NodeTransformer):
 
     def visit_RelativeStreamDeclaration(self, node: spir.RelativeStreamDeclaration):
         node = self.generic_visit(node)
-        if node.routing is None or node.routing.hops != "auto":
+        if node.routing is None:
+            return node
+
+        if node.routing.hops != "auto":
+            # Explicit hops provided: verify the hop count equals |dx| + |dy|.
+            dx = node.dx.eval()
+            dy = node.dy.eval()
+            expected = abs(dx) + abs(dy)
+            actual = len(node.routing.hops)
+            if actual != expected:
+                raise ValueError(
+                    f"Stream relative_stream({dx}, {dy}) has {actual} explicit hop(s) "
+                    f"but requires exactly {expected} (|{dx}| + |{dy}|)."
+                )
             return node
 
         dx = node.dx.eval()
