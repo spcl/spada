@@ -1,0 +1,26 @@
+/**
+ * Identity copy over a 2D PE grid: out[i,j] = inp[i,j].
+ * Exercises the host↔device memcpy with both grid dimensions > 1.
+ * Any mismatch between numpy C-order and SDK PE traversal order
+ * will cause data[i,j] to land on PE(j,i) and the output to differ.
+ */
+kernel @identity_2d<NX, NY, K>(
+    stream<f32, K>[NX, NY] readonly  inp,
+    stream<f32, K>[NX, NY] writeonly out
+) {
+    place i16 i, i16 j in [0:NX, 0:NY] {
+        f32[K] buf
+    }
+
+    phase {
+        compute i16 i, i16 j in [0:NX, 0:NY] {
+            await receive(buf, inp[i, j])
+        }
+    }
+
+    phase {
+        compute i16 i, i16 j in [0:NX, 0:NY] {
+            await send(buf, out[i, j])
+        }
+    }
+}
