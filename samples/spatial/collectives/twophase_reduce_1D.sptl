@@ -79,13 +79,13 @@ kernel @two_phase_reduce_1d<G, S, K>(stream<f32, K>[G*S,1] readonly a_in, stream
     phase {
         // Phase 2: Reduce over all groups
 
-        // Configure streams in multi-hop red-blue checkerboarding pattern
+        // Configure streams in multi-hop green-yellow checkerboarding pattern
         dataflow i16 i, i16 j in [0:S*G:S, 0] {
-            stream<f32> red = relative_stream(-S, 0) {
+            stream<f32> green = relative_stream(-S, 0) {
                 hops = [(-1, 0)],
                 channel = 2
             }
-            stream<f32> blue = relative_stream(-S, 0) {
+            stream<f32> yellow = relative_stream(-S, 0) {
                 hops = [(-1, 0)],
                 channel = 3
             }
@@ -93,8 +93,8 @@ kernel @two_phase_reduce_1d<G, S, K>(stream<f32, K>[G*S,1] readonly a_in, stream
 
         // West Corner (Root)
         compute i16 i, i16 j in [0, 0] {
-            // only receive (blue); group-level position 0 is even
-            await foreach i16 k, f32 x in [0:K], receive(blue) {
+            // only receive (green); group-level position 0 is even
+            await foreach i16 k, f32 x in [0:K], receive(green) {
                 a[k] = a[k] + x
             }
             // Output
@@ -103,24 +103,24 @@ kernel @two_phase_reduce_1d<G, S, K>(stream<f32, K>[G*S,1] readonly a_in, stream
 
         // Middle Part (odd): upper bound is (G-1)*S to exclude the east corner
         compute i16 i, i16 j in [S:(G-1)*S:2*S, 0] {
-            await foreach i16 k, f32 x in [0:K], receive(red) {
+            await foreach i16 k, f32 x in [0:K], receive(yellow) {
                 a[k] = a[k] + x
-                await send(a[k], blue)
+                await send(a[k], green)
             }
         }
 
         // Middle Part (even): upper bound is (G-1)*S to exclude the east corner
         compute i16 i, i16 j in [2*S:(G-1)*S:2*S, 0] {
-            await foreach i16 k, f32 x in [0:K], receive(blue) {
+            await foreach i16 k, f32 x in [0:K], receive(green) {
                 a[k] = a[k] + x
-                await send(a[k], red)
+                await send(a[k], yellow)
             }
         }
 
         // East Corner: leftmost PE of the last group, at global position (G-1)*S
         compute i16 i, i16 j in [(G-1)*S, 0] {
             // (G-1) is the group-level index of the east corner; even → red, odd → blue
-            await send(a, red if (G-1) % 2 == 0 else blue)
+            await send(a, yellow if (G-1) % 2 == 0 else green)
         }
 
     }
