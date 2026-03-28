@@ -100,7 +100,7 @@ def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.Sdk
 
     :param name: Name of the tensor in the device memory
     :param data: Numpy array to copy
-    :param shape: Shape of the data to be copied
+    :param shape: Shape of the data to be copied (w, h, elem_per_pe)
     :param runtime: The Cerebras SDK runtime object to perform the copy operation
     :param metadata: Program metadata containing input/output information
     """
@@ -108,13 +108,17 @@ def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.Sdk
     if buffer_id is None:
         raise ValueError(f"Buffer ID for '{name}' not found in program.")
 
+    # The SDK expects A[h][w][elem_per_pe] but our arrays are (w, h, elem_per_pe).
+    # Transpose the first two axes to match the SDK layout.
+    src = np.ascontiguousarray(data.reshape(shape[0], shape[1], shape[2]).transpose(1, 0, 2))
+
     runtime.memcpy_h2d(
         buffer_id,
-        data.ravel(),
+        src.ravel(),
         metadata.inputs[name].rect_offset_used[0],  # PE offset in x direction
         metadata.inputs[name].rect_offset_used[1],  # PE offset in y direction
-        shape[0],  # Width is the second dimension
-        shape[1],  # Height is the first dimension
+        shape[0],  # Width (number of PEs in x)
+        shape[1],  # Height (number of PEs in y)
         shape[2],
         streaming=not metadata.memcpy_mode,  # Use streaming if not in memcpy mode
         data_type=crt.MemcpyDataType.MEMCPY_32BIT if data.dtype == np.float32 else crt.MemcpyDataType.MEMCPY_16BIT,
@@ -130,7 +134,7 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
 
     :param name: Name of the tensor in the device memory
     :param data: Numpy array to copy
-    :param shape: Shape of the data to be copied
+    :param shape: Shape of the data to be copied (w, h, elem_per_pe)
     :param runtime: The Cerebras SDK runtime object to perform the copy operation
     :param metadata: Program metadata containing input/output information
     """
@@ -138,19 +142,25 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
     if buffer_id is None:
         raise ValueError(f"Buffer ID for '{name}' not found in program.")
 
+    # The SDK returns A[h][w][elem_per_pe]; allocate a buffer in that layout.
+    sdk_buf = np.empty((shape[1], shape[0], shape[2]), dtype=data.dtype)
+
     runtime.memcpy_d2h(
-        data.ravel(),
+        sdk_buf.ravel(),
         buffer_id,
         metadata.outputs[name].rect_offset_used[0],  # PE offset in x direction
         metadata.outputs[name].rect_offset_used[1],  # PE offset in y direction
-        shape[0],  # Width is the second dimension
-        shape[1],  # Height is the first dimension
+        shape[0],  # Width (number of PEs in x)
+        shape[1],  # Height (number of PEs in y)
         shape[2],
         streaming=not metadata.memcpy_mode,  # Use streaming if not in memcpy mode
         data_type=crt.MemcpyDataType.MEMCPY_32BIT if data.dtype == np.float32 else crt.MemcpyDataType.MEMCPY_16BIT,
         order=crt.MemcpyOrder.ROW_MAJOR if not metadata.outputs[name].column_major else crt.MemcpyOrder.COL_MAJOR,
         nonblock=False,  # Blocking copy to ensure data is ready after copy
     )
+
+    # Transpose back from (h, w, elem) to (w, h, elem) to match our convention.
+    np.copyto(data, sdk_buf.transpose(1, 0, 2))
 
 
 def copy_back_benchmark_data(runtime: crt.SdkRuntime, metadata: ProgramMetadata) -> np.ndarray:
