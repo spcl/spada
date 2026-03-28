@@ -1,0 +1,68 @@
+/**
+ * Pipelined binary tree reduction over 2^L PEs with K elements per PE.
+ * Root is at PE (0,0). Bottom-up: L phases, stride doubles every phase.
+ *
+ * At phase s (s = 0 .. L-1), stride = 2^s:
+ *   senders   at i ∈ [2^s : 2^L : 2^(s+1)]  — odd multiples of stride
+ *   receivers at i ∈ [0   : 2^L : 2^(s+1)]  — even multiples of stride
+ *
+ * Senders are done after their one send; only receivers continue.
+ * After L phases PE 0 holds the total reduction.
+ *
+ * Note: scalar_tree_reduce_1D uses K for the tree depth (log2 of PEs) and
+ * contains an off-by-one in its stage-to-stride formula. This kernel uses
+ * L for the tree depth and K for the number of elements per PE.
+ * (!) Assumes L >= 1 (!)
+ **/
+kernel @tree_reduce_1d<L, K>(stream<f32, K>[1<<L, 1] readonly a_in, stream<f32, K>[1,1] writeonly out) {
+
+    place i16 i, i16 j in [0:1<<L, 0] {
+        f32[K] partial
+    }
+
+    // Phase 1: All PEs load their input
+    phase {
+        compute i16 i, i16 j in [0:1<<L, 0] {
+            await receive(partial, a_in[i, j])
+        }
+    }
+
+    // L bottom-up reduction stages.
+    // Senders send the whole partial array; receivers accumulate element-by-element.
+    for i16 stage in [0:L] {
+        phase {
+            // Receivers point to their child (stride steps east)
+            dataflow i16 i, i16 j in [0 : 1<<L : 1<<(stage+1), 0] {
+                stream<f32> from_child = relative_stream(1<<stage, 0) {
+                    hops = [(1, 0)],
+                    channel = 0
+                }
+            }
+            // Senders point to their parent (stride steps west)
+            dataflow i16 i, i16 j in [1<<stage : 1<<L : 1<<(stage+1), 0] {
+                stream<f32> to_parent = relative_stream(-(1<<stage), 0) {
+                    hops = [(-1, 0)],
+                    channel = 0
+                }
+            }
+
+            // Receivers: accumulate K elements pipelined
+            compute i16 i, i16 j in [0 : 1<<L : 1<<(stage+1), 0] {
+                await foreach i16 k, f32 x in [0:K], receive(from_child) {
+                    partial[k] = partial[k] + x
+                }
+            }
+            // Senders: ship the whole partial array in one call
+            compute i16 i, i16 j in [1<<stage : 1<<L : 1<<(stage+1), 0] {
+                await send(partial, to_parent)
+            }
+        }
+    }
+
+    // Root sends output
+    phase {
+        compute i16 i, i16 j in [0, 0] {
+            await send(partial, out[0, 0])
+        }
+    }
+}
