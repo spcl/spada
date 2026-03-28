@@ -44,7 +44,7 @@ setup(
         "Topic :: Scientific/Engineering",
         "Topic :: Software Development :: Compilers",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     install_requires=[
         "numpy",
         "pydot",
