@@ -2,6 +2,17 @@
  * Pipelined Two-Phase Reduce over G*S PEs with K elements per PE.
  * PEs are in a row (first row) and the root is at 0,0.
  * (!) Assumes S is even (!)
+ *
+ * Communication Pattern (S=4, G=3, P=12):
+ *
+ * Phase 1 — within-group chain reduces:
+ *
+ * [0,0] <--1-- [1,0] <--0-- [2,0] <--1-- [3,0]   [4,0] <--1-- [5,0] <--0-- [6,0] <--1-- [7,0]   [8,0] <--1-- [9,0] <--0-- [10,0] <--1-- [11,0]
+ *
+ * Phase 2 — cross-group chain reduce over {0,4,8} (multi-hop, stride S=4):
+ *
+ * [0,0] <--1------------------------------------ [4,0] <--0------------------------------------ [8,0]
+ *
  **/
 kernel @two_phase_reduce_1d<G, S, K>(stream<f32, K>[G*S,1] readonly a_in, stream<f32, K>[1,1] writeonly out) {
 

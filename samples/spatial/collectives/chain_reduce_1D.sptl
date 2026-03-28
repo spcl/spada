@@ -1,5 +1,11 @@
 /**
  * Pipelined reduction benchmark
+ * N PEs in a row, K elements per PE
+ * 
+ * Communication Pattern (N=4):
+ * [0,0] <--1-- [1,0] <--0-- [2,0] <--1-- [3,0]
+ * 
+ * (!) Assumes N >= 2 (!)
  **/
  kernel @chain_reduce<N, K>(stream<f32, K>[N,1] readonly a_in, stream<f32, K>[1,1] writeonly out) {
     place i16 i, i16 j in [N-1, 0] {  // East corner
