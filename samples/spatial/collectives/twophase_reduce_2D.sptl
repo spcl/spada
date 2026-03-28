@@ -80,11 +80,11 @@ kernel @twophase_reduce_2d<GX, SX, GY, SY, K>(
     phase {
         dataflow i16 i, i16 j in [0:GX*SX:SX, 0:GY*SY] {
             stream<f32> red = relative_stream(-SX, 0) {
-                hops = [(-1, 0)],
+                hops = auto,
                 channel = 0
             }
             stream<f32> blue = relative_stream(-SX, 0) {
-                hops = [(-1, 0)],
+                hops =  auto,
                 channel = 1
             }
         }
