@@ -4,9 +4,8 @@
  *   Phase X: LX stages reduce every row westward into column 0
  *   Phase Y: LY stages reduce column 0 northward into the root (0,0)
  *
- * Both phases follow the same bottom-up tree pattern as tree_reduce_1D:
- * at stage s, stride = 2^s; senders at odd multiples of stride forward
- * their partial to the receiver at the even multiple to their left/north.
+ * Both phases follow the same bottom-up tree pattern as tree_reduce_1D
+ * 
  * (!) Assumes LX, LY >= 1 (!)
  **/
 kernel @tree_reduce_2d<LX, LY, K>(
@@ -27,66 +26,49 @@ kernel @tree_reduce_2d<LX, LY, K>(
 
     // -------------------------------------------------------------------------
     // Phase X: LX stages of tree reduction in X, all 2^LY rows in parallel.
-    // At stage s, stride = 2^s in X:
-    //   senders   at i ∈ [2^s   : 2^LX : 2^(s+1)], all j
-    //   receivers at i ∈ [0     : 2^LX : 2^(s+1)], all j
     // After LX stages, column 0 (i=0) holds each row's partial sum.
     // -------------------------------------------------------------------------
     for i16 stage in [0:LX] {
         phase {
-            dataflow i16 i, i16 j in [0 : 1<<LX : 1<<(stage+1), 0:1<<LY] {
-                stream<f32> from_child = relative_stream(1<<stage, 0) {
-                    hops = [(1, 0)],
-                    channel = 0
-                }
-            }
-            dataflow i16 i, i16 j in [1<<stage : 1<<LX : 1<<(stage+1), 0:1<<LY] {
-                stream<f32> to_parent = relative_stream(-(1<<stage), 0) {
-                    hops = [(-1, 0)],
+            dataflow i16 i, i16 j in [0 : 1<<LX : 1<<(stage), 0:1<<LY] {
+                stream<f32> westward_jump = relative_stream(-(1<<stage), 0) {
+                    hops = auto,
                     channel = 0
                 }
             }
 
             compute i16 i, i16 j in [0 : 1<<LX : 1<<(stage+1), 0:1<<LY] {
-                await foreach i16 k, f32 x in [0:K], receive(from_child) {
+                await foreach i16 k, f32 x in [0:K], receive(westward_jump) {
                     partial[k] = partial[k] + x
                 }
             }
             compute i16 i, i16 j in [1<<stage : 1<<LX : 1<<(stage+1), 0:1<<LY] {
-                await send(partial, to_parent)
+                await send(partial, westward_jump)
             }
         }
     }
 
     // -------------------------------------------------------------------------
     // Phase Y: LY stages of tree reduction in Y, column 0 (i=0) only.
-    // At stage s, stride = 2^s in Y:
-    //   senders   at i=0, j ∈ [2^s   : 2^LY : 2^(s+1)]
-    //   receivers at i=0, j ∈ [0     : 2^LY : 2^(s+1)]
     // After LY stages, root (0,0) holds the global reduction.
     // -------------------------------------------------------------------------
     for i16 stage in [0:LY] {
         phase {
+
             dataflow i16 i, i16 j in [0, 0 : 1<<LY : 1<<(stage+1)] {
-                stream<f32> from_child = relative_stream(0, 1<<stage) {
-                    hops = [(0, 1)],
-                    channel = 0
-                }
-            }
-            dataflow i16 i, i16 j in [0, 1<<stage : 1<<LY : 1<<(stage+1)] {
-                stream<f32> to_parent = relative_stream(0, -(1<<stage)) {
-                    hops = [(0, -1)],
+                stream<f32> westward_jump = relative_stream(0, -(1<<stage)) {
+                    hops = auto,
                     channel = 0
                 }
             }
 
             compute i16 i, i16 j in [0, 0 : 1<<LY : 1<<(stage+1)] {
-                await foreach i16 k, f32 x in [0:K], receive(from_child) {
+                await foreach i16 k, f32 x in [0:K], receive(westward_jump) {
                     partial[k] = partial[k] + x
                 }
             }
             compute i16 i, i16 j in [0, 1<<stage : 1<<LY : 1<<(stage+1)] {
-                await send(partial, to_parent)
+                await send(partial, westward_jump)
             }
         }
     }
