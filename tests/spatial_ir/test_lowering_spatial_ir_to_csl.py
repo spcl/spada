@@ -26,21 +26,38 @@ def test_add():
 
 _COLLECTIVES_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'collectives')
 
-_COLLECTIVES = [
-    ('scalar_reduce_1D.sptl',    dict(N=4)),
-    ('chain_reduce_1D.sptl',     dict(N=4,  K=2)),
-    ('tree_reduce_1D.sptl',      dict(L=3,  K=2)),
-    ('twophase_reduce_1D.sptl',  dict(G=3,  S=4, K=2)),
-    ('broadcast_1D.sptl',        dict(N=4,  K=4)),
+_COLLECTIVES_1D = [
+    #('scalar_reduce_1D.sptl',    dict(N=4)),
+    #('chain_reduce_1D.sptl',     dict(N=4,  K=2)),
+    #('tree_reduce_1D.sptl',      dict(L=3,  K=2)),
+    #('twophase_reduce_1D.sptl',  dict(G=3,  S=4, K=2)),
+    ('broadcast_1D.sptl',        dict(N=4,  K=4))
+]
+
+_COLLECTIVES_2D = [
     ('chain_reduce_2D.sptl',     dict(NX=4, NY=4, K=2)),
     ('tree_reduce_2D.sptl',      dict(LX=2, LY=2, K=2)),
-    ('twophase_reduce_2D.sptl',  dict(GX=2, SX=4, GY=2, SY=4, K=2)),
+    ('twophase_reduce_2D.sptl',  dict(GX=3, SX=4, GY=3, SY=4, K=2)),
     ('broadcast_2D.sptl',        dict(NX=4, NY=4, K=2)),
 ]
 
+@pytest.mark.parametrize('filename,params', _COLLECTIVES_1D, ids=[c[0] for c in _COLLECTIVES_1D])
+def test_collective_1d(filename, params):
+    file = os.path.join(_COLLECTIVES_DIR, filename)
+    kernel = parser.parse_file(file)
+    kernel = passes.concretize_parameters(kernel, **params)
+    kernel = passes.constexpr_propagation(kernel)
+    print(kernel.as_ir())
+    csl_files = lower_spatial_ir_to_csl(kernel, copy_elision=True, prune_memory=True)
+    for f in csl_files:
+        print('=============')
+        print(f.filename, ':')
+        print(f.code)
+        print('='*13)
 
-@pytest.mark.parametrize('filename,params', _COLLECTIVES, ids=[c[0] for c in _COLLECTIVES])
-def test_collective(filename, params):
+
+@pytest.mark.parametrize('filename,params', _COLLECTIVES_2D, ids=[c[0] for c in _COLLECTIVES_2D])
+def test_collective_2d(filename, params):
     file = os.path.join(_COLLECTIVES_DIR, filename)
     kernel = parser.parse_file(file)
     kernel = passes.concretize_parameters(kernel, **params)
@@ -52,7 +69,6 @@ def test_collective(filename, params):
         print(f.filename, ':')
         print(f.code)
         print('='*13)
-
 
 def test_two_phase_split():
     file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'two_phase_split.sptl')

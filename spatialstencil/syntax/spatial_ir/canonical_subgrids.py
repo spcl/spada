@@ -89,7 +89,7 @@ def canonicalize_subgrids(kernel: Kernel) -> Kernel:
         elif isinstance(block, ComputeBlock):
             compute_blocks[phase_id].append(block)
 
-    new_kernel = Kernel(name=kernel.name or "", parameters=[], arguments=kernel.arguments, body=[])
+    new_kernel = Kernel(name=kernel.name or "", parameters=kernel.parameters, arguments=kernel.arguments, body=[])
     # for each phase, generate the phase body
     new_kernel.body.extend(place_blocks[0])
     new_kernel.body.extend(dataflow_blocks[0])
