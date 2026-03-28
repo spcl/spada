@@ -1298,6 +1298,23 @@ class Kernel(SpatialNode):
             else f'kernel<{param_str}>({arg_str}) {{\n{body_str}\n}}'
 
     def subgrids(self) -> list[Subgrid]:
+        """
+        Return every place/dataflow/compute block in this kernel as a flat list of
+        :class:`Rectangle` objects whose metadata is ``(phase_id, block)``.
+
+        **Phase IDs**: top-level blocks (outside any ``phase { }`` wrapper) receive
+        ``phase_id=0``; blocks inside the first ``phase`` receive ``phase_id=1``,
+        the second ``phase_id=2``, and so on.  The phase ID is used by
+        :func:`canonicalize_subgrids` to keep blocks from different phases separate.
+
+        **Empty ranges**: after parameter concretisation an explicit range such as
+        ``[2:PX-1:2]`` may evaluate to a range where ``start > stop`` (e.g.
+        ``[2:1:2]`` when ``PX=2``).  Such blocks cover zero PEs and are silently
+        omitted from the result rather than raising an assertion error.
+
+        :raises NotImplementedError: if the kernel body contains any
+            :class:`MetaForBlock`; those must be unrolled before calling this method.
+        """
         if any(isinstance(stmt, MetaForBlock) for stmt in self.body):
             raise NotImplementedError('Subgrid extraction requires unrolling of metaprogramming blocks.')
 
@@ -1308,21 +1325,26 @@ class Kernel(SpatialNode):
             return t
 
         def _make_rect(block, phase_id):
+            """Return a Rectangle for *block*, or None if the range is empty."""
             x = _to_range3(block.subgrid.x_range.as_tuple())
             y = _to_range3(block.subgrid.y_range.as_tuple())
+            if x[0] > x[1] or y[0] > y[1]:
+                return None
             return Rectangle(x, y, (phase_id, block))
 
         rectangles = []
         phase_id = 1
         for elem in self.body:
             if isinstance(elem, Phase):
-                rectangles.extend([_make_rect(a, phase_id) for a in elem.place])
-                rectangles.extend([_make_rect(a, phase_id) for a in elem.dataflow])
-                rectangles.extend([_make_rect(a, phase_id) for a in elem.compute])
+                rectangles.extend([r for a in elem.place     if (r := _make_rect(a, phase_id)) is not None])
+                rectangles.extend([r for a in elem.dataflow  if (r := _make_rect(a, phase_id)) is not None])
+                rectangles.extend([r for a in elem.compute   if (r := _make_rect(a, phase_id)) is not None])
                 phase_id += 1
             else:
                 assert isinstance(elem, (ComputeBlock, DataflowBlock, PlaceBlock))
-                rectangles.append(_make_rect(elem, 0))
+                r = _make_rect(elem, 0)
+                if r is not None:
+                    rectangles.append(r)
 
         return rectangles
 
