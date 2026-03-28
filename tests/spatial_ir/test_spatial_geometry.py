@@ -267,5 +267,81 @@ class TestStencilIR(unittest.TestCase):
         split = split_rectangles(rects)
         self.check_rectangle_split_result(rects, split)
 
+    # ------------------------------------------------------------------
+    # Tests for Rectangle.largest_contained_x / largest_contained_y
+    # ------------------------------------------------------------------
+
+    def test_largest_contained_stride1(self):
+        """Stride-1 ranges: last PE equals stop - 1."""
+        r = RectWithId(x_range=(0, 7, 1), y_range=(2, 5, 1), metadata=0)
+        self.assertEqual(r.largest_contained_x(), 6)
+        self.assertEqual(r.largest_contained_y(), 4)
+
+    def test_largest_contained_stride2_even(self):
+        """Stride-2 starting at 0: last PE is the largest even index below stop."""
+        # [0:6:2] = {0, 2, 4}  → last = 4
+        r = RectWithId(x_range=(0, 6, 2), y_range=(0, 6, 2), metadata=0)
+        self.assertEqual(r.largest_contained_x(), 4)
+        self.assertEqual(r.largest_contained_y(), 4)
+
+    def test_largest_contained_stride2_odd(self):
+        """Stride-2 starting at 1: last PE is the largest odd index below stop."""
+        # [1:6:2] = {1, 3, 5}  → last = 5
+        r = RectWithId(x_range=(1, 6, 2), y_range=(1, 6, 2), metadata=0)
+        self.assertEqual(r.largest_contained_x(), 5)
+        self.assertEqual(r.largest_contained_y(), 5)
+
+    def test_largest_contained_non_canonical_stop(self):
+        """Non-canonical stop (stop not on stride boundary): last PE should equal stop rounded down."""
+        # [5:6:2] has canonical stop 7 but only covers {5}; largest_contained_x must return 5.
+        r = RectWithId(x_range=(5, 6, 2), y_range=(0, 4, 1), metadata=0)
+        self.assertEqual(r.largest_contained_x(), 5)
+        # [0:4:1] → last = 3
+        self.assertEqual(r.largest_contained_y(), 3)
+
+    def test_largest_contained_single_pe(self):
+        """Ranges that cover exactly one PE."""
+        r = RectWithId(x_range=(3, 4, 1), y_range=(7, 8, 1), metadata=0)
+        self.assertEqual(r.largest_contained_x(), 3)
+        self.assertEqual(r.largest_contained_y(), 7)
+
+        r2 = RectWithId(x_range=(6, 7, 2), y_range=(9, 10, 3), metadata=0)
+        self.assertEqual(r2.largest_contained_x(), 6)
+        self.assertEqual(r2.largest_contained_y(), 9)
+
+    def test_largest_contained_large_stride(self):
+        """Stride larger than the covered range: still only one PE."""
+        # [3:8:4] = {3, 7}  → last = 7
+        r = RectWithId(x_range=(3, 8, 4), y_range=(0, 1, 1), metadata=0)
+        self.assertEqual(r.largest_contained_x(), 7)
+
+        # [3:6:4] = {3}  → last = 3  (7 is beyond stop=6)
+        r2 = RectWithId(x_range=(3, 6, 4), y_range=(0, 1, 1), metadata=0)
+        self.assertEqual(r2.largest_contained_x(), 3)
+
+    def test_largest_contained_rect_size_consistency(self):
+        """
+        Verify that building rect_size from largest_contained_{x,y}+1 gives the
+        correct tight bounding box for a collection of rectangles – the scenario
+        that caused the 'expected N PEs, got M' regression in the CSL layout.
+        """
+        # Simulate the stride-2 blocks of the uvbke benchmark:
+        # even-start:  [0:6:2] = {0,2,4}  |  odd-start:  [1:6:2] = {1,3,5}
+        # edge blocks: [5:6:2] = {5}  (canonical stop 7, but max PE is still 5)
+        rects = [
+            RectWithId(x_range=(0, 6, 2), y_range=(0, 6, 2), metadata=0),
+            RectWithId(x_range=(1, 6, 2), y_range=(0, 6, 2), metadata=1),
+            RectWithId(x_range=(0, 6, 2), y_range=(1, 6, 2), metadata=2),
+            RectWithId(x_range=(1, 6, 2), y_range=(1, 6, 2), metadata=3),
+            RectWithId(x_range=(5, 6, 2), y_range=(5, 6, 2), metadata=4),  # non-canonical stop
+        ]
+        x0 = min(r.x_range[0] for r in rects)
+        y0 = min(r.y_range[0] for r in rects)
+        x1 = max(r.largest_contained_x() + 1 for r in rects)
+        y1 = max(r.largest_contained_y() + 1 for r in rects)
+        self.assertEqual(x1 - x0, 6, "rect_size width should be 6, not 7")
+        self.assertEqual(y1 - y0, 6, "rect_size height should be 6, not 7")
+
+
 if __name__ == '__main__':
     unittest.main()

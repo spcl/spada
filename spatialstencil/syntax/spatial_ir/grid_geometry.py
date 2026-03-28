@@ -73,6 +73,32 @@ class Rectangle(Generic[T]):
         """
         return _rectangles_intersect(self, other)
 
+    def largest_contained_x(self) -> int:
+        """
+        Return the largest X index actually covered by this rectangle.
+
+        For a range [start:stop:stride], the last covered PE is
+        ``start + floor((stop - start - 1) / stride) * stride``.
+        This differs from the canonical stop (``start + ceil(…) * stride``)
+        by at most ``stride - 1``, which matters when building the layout
+        rectangle size.
+        """
+        start, stop, stride = self.x_range
+        if start >= stop:
+            return start
+        return start + ((stop - start - 1) // stride) * stride
+
+    def largest_contained_y(self) -> int:
+        """
+        Return the largest Y index actually covered by this rectangle.
+
+        See :meth:`largest_contained_x` for details.
+        """
+        start, stop, stride = self.y_range
+        if start >= stop:
+            return start
+        return start + ((stop - start - 1) // stride) * stride
+
     def __str__(self):
         return f"[({self.x_range[0]}, {self.x_range[1]}, {self.x_range[2]}) x ({self.y_range[0]}, {self.y_range[1]}, {self.y_range[2]}) - {self.metadata}]"
 
