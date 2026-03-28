@@ -16,7 +16,7 @@
  **/
 kernel @two_phase_reduce_1d<G, S, K>(stream<f32, K>[G*S,1] readonly a_in, stream<f32, K>[1,1] writeonly out) {
 
-    place i16 i, i16 j in [0:G*S] {
+    place i16 i, i16 j in [0:G*S, 0] {
         // Data Array
         f32[K] a
     }
