@@ -5,7 +5,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Compile the spatial stencil program
-sptlc "$SCRIPT_DIR/../../samples/spatial/blas/add.sptl" add_sptl -p N=8
+sptlc "$SCRIPT_DIR/../../samples/spatial/simple/add.sptl" add_sptl -p N=8
 
 python <<EOF
 import numpy as np

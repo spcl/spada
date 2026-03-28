@@ -1,0 +1,22 @@
+/**
+ * BLAS-1 axpy: y <- alpha * x + y
+ *
+ * Each of the N×N PEs holds K elements of x and K elements of y.
+ * The scalar alpha is a compile-time parameter broadcast to every PE.
+ **/
+kernel @axpy<N, K>(stream<f32, K>[N, N] readonly x, f32 alpha,
+                   stream<f32, K>[N, N] readonly y,
+                   stream<f32, K>[N, N] writeonly out) {
+    place u16 i, u16 j in [0:N, 0:N] {
+        f32[K] local_x;
+        f32[K] local_y;
+    }
+    compute u16 i, u16 j in [0:N, 0:N] {
+        await receive(local_x, x[i, j]);
+        await receive(local_y, y[i, j]);
+        for u16 k in [0:K] {
+            local_y[k] = alpha * local_x[k] + local_y[k];
+        }
+        await send(local_y, out[i, j]);
+    }
+}
