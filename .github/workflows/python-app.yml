@@ -13,22 +13,39 @@ permissions:
   contents: read
 
 jobs:
-  build:
-
+  test-pytest:
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
+
     - name: Set up Python 3.10
       uses: actions/setup-python@v6
       with:
         python-version: "3.10"
-        cache: "pip" # caching pip dependencies
+        cache: "pip"
 
-    # - name: Install Cairo
-    #   run: |
-    #     sudo apt-get update
-    #     sudo apt install libcairo2-dev pkg-config python3-dev      
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest
+        if [ -f requirements-ci.txt ]; then pip install -r requirements-ci.txt; fi
+
+    - name: Test with pytest
+      run: |
+        PYTHONPATH=`pwd` pytest
+
+  test-csl:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.10"
+        cache: "pip"
 
     - name: Install Python dependencies
       run: |
@@ -71,10 +88,6 @@ jobs:
     - name: Test Cerebras SDK
       run: |
         ./cerebras-sdk/cslc -h
-
-    - name: Test with pytest
-      run: |
-        PYTHONPATH=`pwd` pytest
 
     - name: Test CSL with simulator
       run: |
