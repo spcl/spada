@@ -642,6 +642,55 @@ class RelativeStreamDeclaration(SpatialNode):
 
 
 @dataclass
+class MulticastStreamDeclaration(SpatialNode):
+    """
+    A stream declaration that multicasts to a contiguous range of PEs along one axis.
+
+    Exactly one of ``dx`` / ``dy`` must be a :class:`RangeExpression` whose
+    ``start`` ≥ 1; the other must be a scalar :class:`Expression`.
+
+    Example: ``relative_stream(0, [1:K])`` broadcasts from the local PE to
+    PEs at y+1, y+2, …, y+K-1 using multicast
+    """
+    dx: Union['Expression', 'RangeExpression']
+    dy: Union['Expression', 'RangeExpression']
+    routing: Optional[RoutingDeclaration] = None
+
+    def validate(self) -> None:
+        dx_is_range = isinstance(self.dx, RangeExpression)
+        dy_is_range = isinstance(self.dy, RangeExpression)
+        assert dx_is_range != dy_is_range, \
+            "Exactly one of dx/dy must be a RangeExpression in MulticastStreamDeclaration."
+        if not dx_is_range:
+            assert isinstance(self.dx, Expression)
+        if not dy_is_range:
+            assert isinstance(self.dy, Expression)
+        if self.routing:
+            assert isinstance(self.routing, RoutingDeclaration)
+
+    @property
+    def multicast_axis(self) -> Literal['x', 'y']:
+        return 'x' if isinstance(self.dx, RangeExpression) else 'y'
+
+    @property
+    def multicast_range(self) -> 'RangeExpression':
+        return self.dx if isinstance(self.dx, RangeExpression) else self.dy
+
+    @property
+    def fixed_offset(self) -> 'Expression':
+        return self.dy if isinstance(self.dx, RangeExpression) else self.dx
+
+    def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
+        routing_str = ""
+        if self.routing:
+            routing_str = f" {{\n{self.routing.as_ir(indent + 1)}\n{indent_str}}}"
+        dx_str = f'[{self.dx.as_ir()}]' if isinstance(self.dx, RangeExpression) else self.dx.as_ir()
+        dy_str = f'[{self.dy.as_ir()}]' if isinstance(self.dy, RangeExpression) else self.dy.as_ir()
+        return f'relative_stream({dx_str}, {dy_str}){routing_str}'
+
+
+@dataclass
 class ExternStreamDeclaration(SpatialNode):
     """
     A stream declaration inside a dataflow block that declares a communication stream
@@ -672,12 +721,12 @@ class StreamDeclaration(SpatialNode):
     """
     dtype: StreamType
     stream_name: Identifier
-    stream: RelativeStreamDeclaration | ExternStreamDeclaration
+    stream: RelativeStreamDeclaration | MulticastStreamDeclaration | ExternStreamDeclaration
 
     def validate(self) -> None:
         assert isinstance(self.dtype, StreamType)
         assert isinstance(self.stream_name, Identifier)
-        assert isinstance(self.stream, (RelativeStreamDeclaration, ExternStreamDeclaration))
+        assert isinstance(self.stream, (RelativeStreamDeclaration, MulticastStreamDeclaration, ExternStreamDeclaration))
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent

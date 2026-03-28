@@ -436,6 +436,37 @@ class _AutoHopResolver(spir.NodeTransformer):
         node.routing = new_routing
         return node
 
+    def visit_MulticastStreamDeclaration(self, node: spir.MulticastStreamDeclaration):
+        node = self.generic_visit(node)
+        # Inject default routing if none provided.
+        if node.routing is None:
+            node.routing = spir.RoutingDeclaration(hops=[], channel="auto")
+            return node
+        # Normalise hops: multicast does not use point-to-point hops.
+        new_routing = copy.copy(node.routing)
+        new_routing.hops = []
+        node.routing = new_routing
+        # Validate the range and fixed offset.
+        rng = node.multicast_range
+        start = rng.start.eval()
+        if start < 1:
+            raise ValueError(
+                f"Multicast stream range start must be >= 1, got {start}. "
+                "The sender is always at offset 0 and cannot be included in the receiver range."
+            )
+        stop = rng.stop.eval() if rng.stop is not None else None
+        if stop is not None and stop <= start:
+            raise ValueError(
+                f"Multicast stream range [{start}:{stop}] is empty (stop must be > start)."
+            )
+        fixed = node.fixed_offset.eval()
+        if fixed != 0:
+            raise ValueError(
+                f"Multicast stream has a non-zero fixed offset ({fixed}) in the non-multicast dimension. "
+                "Combined-axis multicasting is not yet supported; the fixed offset must be 0."
+            )
+        return node
+
 
 def resolve_auto_hops(kernel: spir.Kernel) -> spir.Kernel:
     """

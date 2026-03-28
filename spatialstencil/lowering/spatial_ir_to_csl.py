@@ -1119,6 +1119,54 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
             if isinstance(stream.stream, spir.ExternStreamDeclaration):
                 continue  # Extern streams do not have on-chip routing
 
+            if isinstance(stream.stream, spir.MulticastStreamDeclaration):
+                if sent and received:
+                    raise ValueError(
+                        f"Multicast stream '{stream.stream_name.as_ir()}' is both sent and received "
+                        f"within the same compute rectangle [{rect.x_range[0]}:{rect.x_range[1]}, "
+                        f"{rect.y_range[0]}:{rect.y_range[1]}]. "
+                        "Sender and receiver compute blocks must be in separate rectangles for multicast streams."
+                    )
+                if not sent:
+                    # All multicast routing is emitted by the rectangle that sends this stream.
+                    continue
+                rng = stream.stream.multicast_range
+                start = int(rng.start.eval())
+                stop = int(rng.stop.eval())
+                axis = stream.stream.multicast_axis
+                if axis == 'y':
+                    tx_dir, rx_dir = 'SOUTH', 'NORTH'
+                    def _coord(k): return 'pe_x', f'pe_y + {k}'  # noqa: E731
+                else:
+                    tx_dir, rx_dir = 'EAST', 'WEST'
+                    def _coord(k): return f'pe_x + {k}', 'pe_y'  # noqa: E731
+
+                # Sender: inject into fabric toward receivers.
+                routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{RAMP}, .tx = .{%s} } });\n' % (
+                    color_name_outbound, tx_dir)
+                if routing_inst not in routing_instructions:
+                    inst += routing_inst
+                    routing_instructions.add(routing_inst)
+
+                # Intermediate receivers: forward and simultaneously deliver to RAMP.
+                for k in range(start, stop - 1):
+                    cx, cy = _coord(k)
+                    routing_inst = INDENT + '@set_color_config(%s, %s, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s, RAMP} } });\n' % (
+                        cx, cy, color_name_outbound, rx_dir, tx_dir)
+                    if routing_inst not in routing_instructions:
+                        inst += routing_inst
+                        routing_instructions.add(routing_inst)
+
+                # Last receiver: deliver to RAMP only, no forwarding.
+                k_last = stop - 1
+                cx, cy = _coord(k_last)
+                routing_inst = INDENT + '@set_color_config(%s, %s, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{RAMP} } });\n' % (
+                    cx, cy, color_name_outbound, rx_dir)
+                if routing_inst not in routing_instructions:
+                    inst += routing_inst
+                    routing_instructions.add(routing_inst)
+                continue
+
             if len(stream.stream.routing.hops) == 1:  # Inbound and outbound generated together
                 route = _route_dir(*stream.stream.routing.hops[0].offset)
                 if sent:
