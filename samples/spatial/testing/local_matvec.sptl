@@ -1,0 +1,45 @@
+/**
+ * Local K×K matrix-vector multiply: z[k] = sum_l A_flat[k*K+l] * x[l].
+ * Single PE; used to verify nested for-loop execution in the compiler.
+ **/
+kernel @local_matvec<K>(
+    stream<f32, K*K>[1, 1] readonly  inp_A,
+    stream<f32, K>[1, 1]   readonly  inp_x,
+    stream<f32, K>[1, 1]   writeonly out
+) {
+    place i16 i, i16 j in [0:1, 0:1] {
+        f32[K*K] A_flat
+        f32[K]   x
+        f32[K]   z
+    }
+
+    phase {
+        compute i16 i, i16 j in [0, 0] {
+            await receive(A_flat, inp_A[i, j])
+        }
+    }
+
+    phase {
+        compute i16 i, i16 j in [0, 0] {
+            await receive(x, inp_x[i, j])
+        }
+    }
+
+    // z[k] = sum_l A_flat[k*K+l] * x[l]
+    phase {
+        compute i16 i, i16 j in [0, 0] {
+            for i16 k in [0:K] {
+                z[k] = 0.0
+            }
+            for i16 k, i16 l in [0:K, 0:K] {
+                z[k] = z[k] + A_flat[k*K + l] * x[l]
+            }
+        }
+    }
+
+    phase {
+        compute i16 i, i16 j in [0, 0] {
+            await send(z, out[i, j])
+        }
+    }
+}
