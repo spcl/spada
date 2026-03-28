@@ -18,6 +18,28 @@ from spatialstencil.syntax.csl.statements import name_to_csl, dtype_as_csl, expr
 UniqueDSDDict = dict[str, list[tuple[str, cslstruct.DataStructureDescriptor]]]
 
 
+def canonicalize_kernel(kernel: spir.Kernel) -> spir.Kernel:
+    """
+    Runs the full canonicalization pipeline required before CSL lowering.
+
+    This is the single source of truth for the pass ordering.  Both
+    :func:`lower_spatial_ir_to_csl` and the metadata generation in
+    ``compiler.py`` must call this function so that the two pipelines
+    always stay in sync.
+
+    :param kernel: A fully concretized Spatial IR kernel.
+    :return: The transformed kernel, ready for
+             :func:`~spatialstencil.syntax.spatial_ir.canonicalization.consolidate_rectangles_to_equivalence_classes`.
+    """
+    kernel = canonicalization.inline_metaprogramming(kernel)
+    kernel = canonicalization.canonicalize_phases(kernel)
+    kernel = canonicalization.reduce_streams(kernel)
+    kernel = canonical_subgrids.canonicalize_subgrids(kernel)
+    kernel = canonicalization.resolve_auto_hops(kernel)
+    kernel = canonicalization.inline_phases(kernel)
+    return kernel
+
+
 def lower_spatial_ir_to_csl(kernel: spir.Kernel,
                             rect_offset: tuple[int, int] = (0, 0),
                             disable_benchmarking: bool = False,
@@ -52,13 +74,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     #        * There is no "orphan" block that does not have all matching place/dataflow/compute (pass)
     #     * There are no phases in the code, there may be local phases for each rectangle (pass)
 
-    # Check if virtual rectangles are equal, consolidate, add phase-end remark at end of computation
-    kernel = canonicalization.inline_metaprogramming(kernel)
-    kernel = canonicalization.canonicalize_phases(kernel)
-    kernel = canonicalization.reduce_streams(kernel)
-    kernel = canonical_subgrids.canonicalize_subgrids(kernel)
-    kernel = canonicalization.resolve_auto_hops(kernel)
-    kernel = canonicalization.inline_phases(kernel)
+    # Run the shared canonicalization pipeline (single source of truth: canonicalize_kernel).
+    kernel = canonicalize_kernel(kernel)
 
     # Check if we are streaming or using memcpy mode
     use_memcpy_mode = analysis.kernel_uses_memcpy_mode(kernel)
@@ -122,13 +139,11 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     ###############################################
     # Generate main layout file
 
-    # Compute the actual PE bounding box from the equivalence-class rectangles using the actually contained x and y
-    x0 = min(r.x_range[0] for r in rectangles)
-    y0 = min(r.y_range[0] for r in rectangles)
+    # Compute the tight PE bounding box. kernel.get_grid_rect() now returns tight bounds
+    # (last-contained PE + 1) rather than canonicalized stops.
+    x0, x1, y0, y1 = kernel.get_grid_rect()
     assert x0 == 0, "PE Grid must start at x=0"
     assert y0 == 0, "PE Grid must start at y=0"
-    x1 = max(r.largest_contained_x() + 1 for r in rectangles)
-    y1 = max(r.largest_contained_y() + 1 for r in rectangles)
     rect_size = x1 - x0, y1 - y0
 
     # Collect unique routes for all rectangles
