@@ -1,0 +1,194 @@
+/**
+ * Distributed GEMV with two-phase X reduction: y = alpha * A * x + beta * y
+ *
+ * Grid [0:G*S, 0:PY] — G groups of S PEs along the i/x axis, PY along the j/y axis.
+ * (!) Requires S even.
+ *
+ * Data layout (row-major blocks):
+ *   A: (PY*K) rows × (G*S*K) cols — PE(i,j) holds K×K block A[j*K:(j+1)*K, i*K:(i+1)*K]
+ *   x: G*S*K elements             — PE(i,0) initially holds x[i*K:(i+1)*K]
+ *   y: PY*K elements              — PE(0,j) initially holds y[j*K:(j+1)*K]
+ *
+ * Algorithm:
+ *   Phase 1: All PEs load their K×K block of A.
+ *   Phase 2: The j=0 column loads x; the i=0 column loads y.
+ *   Phase 3: Broadcast x in the Y direction (j=0 → j=PY-1), red/blue checkerboard.
+ *   Phase 4: Local matmul z = A_block @ x.
+ *   Phase 5 (X1): Within-group chain reduce in X.
+ *            Each group gx ∈ [0:G] reduces z westward into its root PE(gx*S, j).
+ *            Single-hop streams, S even → east corner always at an odd index → sends blue.
+ *   Phase 6 (X2): Cross-group chain reduce in X.
+ *            The G group roots (i = 0, S, 2S, ..., (G-1)*S) reduce into i=0.
+ *            Multi-hop auto-routed streams spanning S hops each.
+ *            Root PE(0,j) applies alpha*z + beta*y_block and writes output.
+ *
+ * Constraints: G >= 2, S >= 2 (even), PY >= 2, K >= 1
+ **/
+kernel @gemv_twophase<G, S, PY, K>(
+    stream<f32, K>[G*S, 1]    readonly  inp_x,   // x blocks: PE(i,0) for i=0..G*S-1
+    stream<f32, K*K>[G*S, PY] readonly  inp_A,   // A blocks: all PEs
+    stream<f32, K>[1, PY]     readonly  inp_y,   // y blocks: PE(0,j) for j=0..PY-1
+    f32                                 alpha,    // scalar multiplier for A*x
+    f32                                 beta,     // scalar multiplier for y
+    stream<f32, K>[1, PY]     writeonly out       // result: PE(0,j) for j=0..PY-1
+) {
+    place i16 i, i16 j in [0:G*S, 0:PY] {
+        f32[K*K] A_flat   // row-major K×K matrix block
+        f32[K]   x        // x chunk for this PE column (populated by broadcast)
+        f32[K]   z        // local partial result; accumulated during reduction
+        f32[K]   y_block  // y chunk; read from host, used only at i=0
+    }
+
+    // Phase 1: Load A blocks on every PE.
+    phase {
+        compute i16 i, i16 j in [0:G*S, 0:PY] {
+            await receive(A_flat, inp_A[i, j])
+        }
+    }
+
+    // Phase 2: Load x on the j=0 column and y on the i=0 column.
+    phase {
+        compute i16 i, i16 j in [0:G*S, 0] {
+            await receive(x, inp_x[i, j])
+        }
+        compute i16 i, i16 j in [0, 0:PY] {
+            await receive(y_block, inp_y[i, j])
+        }
+    }
+
+    // Phase 3: Broadcast x in the Y direction (j=0 → j=PY-1).
+    // Mirrors gemv.sptl: relative_stream(0,1), j-based parity.
+    phase {
+        dataflow i16 i, i16 j in [0:G*S, 0:PY] {
+            stream<f32> red = relative_stream(0, 1) {
+                hops = [(0, 1)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(0, 1) {
+                hops = [(0, 1)],
+                channel = 1
+            }
+        }
+
+        compute i16 i, i16 j in [0:G*S, 0] {
+            await send(x, blue)
+        }
+        compute i16 i, i16 j in [0:G*S, 1:PY-1:2] {
+            await foreach i16 k, f32 v in [0:K], receive(blue) {
+                x[k] = v
+                await send(v, red)
+            }
+        }
+        compute i16 i, i16 j in [0:G*S, 2:PY-1:2] {
+            await foreach i16 k, f32 v in [0:K], receive(red) {
+                x[k] = v
+                await send(v, blue)
+            }
+        }
+        compute i16 i, i16 j in [0:G*S, PY-1] {
+            await receive(x, red if (PY-1) % 2 == 0 else blue)
+        }
+    }
+
+    // Phase 4: Local K×K matrix-vector multiply: z[k] = sum_l A_flat[k*K+l] * x[l].
+    phase {
+        compute i16 i, i16 j in [0:G*S, 0:PY] {
+            for i16 k in [0:K] {
+                z[k] = 0.0
+            }
+            for i16 k, i16 l in [0:K, 0:K] {
+                z[k] = z[k] + A_flat[k*K + l] * x[l]
+            }
+        }
+    }
+
+    // Phase 5 (X1): Within-group chain reduce in X.
+    // S is even, so the east corner of each group (at (gx+1)*S-1) is always at an odd
+    // global index → it sends blue. Single-hop westward streams on channels 2, 3.
+    phase {
+        dataflow i16 i, i16 j in [0:G*S, 0:PY] {
+            stream<f32> red = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 2
+            }
+            stream<f32> blue = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 3
+            }
+        }
+
+        for i16 gx in [0:G] {
+            // West corner of group (i=gx*S): accumulate from blue, no send.
+            compute i16 i, i16 j in [gx * S, 0:PY] {
+                await foreach i16 k, f32 v in [0:K], receive(blue) {
+                    z[k] = z[k] + v
+                }
+            }
+            // Middle odd: receive red, accumulate, forward on blue.
+            compute i16 i, i16 j in [gx * S + 1 : (gx+1) * S - 1 : 2, 0:PY] {
+                await foreach i16 k, f32 v in [0:K], receive(red) {
+                    z[k] = z[k] + v
+                    await send(z[k], blue)
+                }
+            }
+            // Middle even: receive blue, accumulate, forward on red.
+            compute i16 i, i16 j in [gx * S + 2 : (gx+1) * S - 1 : 2, 0:PY] {
+                await foreach i16 k, f32 v in [0:K], receive(blue) {
+                    z[k] = z[k] + v
+                    await send(z[k], red)
+                }
+            }
+            // East corner (i=(gx+1)*S-1): always odd global index when S is even → send blue.
+            compute i16 i, i16 j in [(gx+1) * S - 1, 0:PY] {
+                await send(z, blue)
+            }
+        }
+    }
+
+    // Phase 6 (X2): Cross-group chain reduce in X.
+    // G group roots at i=0, S, 2S, ..., (G-1)*S reduce into i=0.
+    // Multi-hop auto-routed westward streams on channels 4, 5.
+    // Root PE(0,j) applies alpha*z + beta*y_block and writes output.
+    phase {
+        dataflow i16 i, i16 j in [0:G*S:S, 0:PY] {
+            stream<f32> green = relative_stream(-S, 0) {
+                hops = auto,
+                channel = 4
+            }
+            stream<f32> yellow = relative_stream(-S, 0) {
+                hops = auto,
+                channel = 5
+            }
+        }
+
+        // East corner (i=(G-1)*S): group-level index G-1; even → yellow, odd → green.
+        compute i16 i, i16 j in [(G-1)*S, 0:PY] {
+            await send(z, yellow if (G-1) % 2 == 0 else green)
+        }
+        // Middle odd groups (i=S, 3S, ...): receive yellow, accumulate, forward on green.
+        compute i16 i, i16 j in [S:(G-1)*S:2*S, 0:PY] {
+            await foreach i16 k, f32 v in [0:K], receive(yellow) {
+                z[k] = z[k] + v
+                await send(z[k], green)
+            }
+        }
+        // Middle even groups (i=2S, 4S, ...): receive green, accumulate, forward on yellow.
+        compute i16 i, i16 j in [2*S:(G-1)*S:2*S, 0:PY] {
+            await foreach i16 k, f32 v in [0:K], receive(green) {
+                z[k] = z[k] + v
+                await send(z[k], yellow)
+            }
+        }
+        // Root (i=0): group-level index 0 is even → receives green.
+        // Apply alpha*z + beta*y_block then output.
+        compute i16 i, i16 j in [0, 0:PY] {
+            await foreach i16 k, f32 v in [0:K], receive(green) {
+                z[k] = z[k] + v
+            }
+            for i16 k in [0:K] {
+                z[k] = alpha * z[k] + beta * y_block[k]
+            }
+            await send(z, out[i, j])
+        }
+    }
+}
