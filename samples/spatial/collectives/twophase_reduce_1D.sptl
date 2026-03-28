@@ -90,16 +90,16 @@ kernel @two_phase_reduce_1d<G, S, K>(stream<f32, K>[G*S,1] readonly a_in, stream
             await send(a, out[i, j])
         }
 
-        // Middle Part (odd)
-        compute i16 i, i16 j in [S:G*S:2*S, 0] {
+        // Middle Part (odd): upper bound is (G-1)*S to exclude the east corner
+        compute i16 i, i16 j in [S:(G-1)*S:2*S, 0] {
             await foreach i16 k, f32 x in [0:K], receive(red) {
                 a[k] = a[k] + x
                 await send(a[k], blue)
             }
         }
 
-        // Middle Part (even)
-        compute i16 i, i16 j in [2*S:G*S:2*S, 0] {
+        // Middle Part (even): upper bound is (G-1)*S to exclude the east corner
+        compute i16 i, i16 j in [2*S:(G-1)*S:2*S, 0] {
             await foreach i16 k, f32 x in [0:K], receive(blue) {
                 a[k] = a[k] + x
                 await send(a[k], red)
