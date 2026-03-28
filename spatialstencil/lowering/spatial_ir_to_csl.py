@@ -439,13 +439,18 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
             prefix = "d" if task.task_type == 'data' else ""
             current_code.write(f'    @block({prefix}task_{i}_id);\n')
 
-    # Activate all source tasks
+    # Activate/unblock all source tasks.
+    # Local tasks are started with @activate; data tasks are started with @unblock
+    # (they then run when data arrives on their color channel).
     non_source_tasks = set(n for i, t in enumerate(tasks) for n, _ in t.outgoing if n != i)
     source_tasks = [t for i, t in enumerate(tasks) if i not in non_source_tasks]
     for task in source_tasks:
         i = next(i for i, t in enumerate(tasks) if task is t)
         prefix = "d" if task.task_type == 'data' else ""
-        current_code.write(f'    @activate({prefix}task_{i}_id);\n')
+        if task.task_type == 'data':
+            current_code.write(f'    @unblock({prefix}task_{i}_id);\n')
+        else:
+            current_code.write(f'    @activate({prefix}task_{i}_id);\n')
     if not source_tasks:
         current_code.write(benchmark_postamble)
         # Unblock command stream if function is empty
