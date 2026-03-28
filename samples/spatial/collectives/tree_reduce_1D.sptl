@@ -67,7 +67,7 @@ kernel @tree_reduce_1d<L, K>(stream<f32, K>[1<<L, 1] readonly a_in, stream<f32, 
     // Root sends output
     phase {
         compute i16 i, i16 j in [0, 0] {
-            await send(partial, out[0, 0])
+            await send(partial, out[i, j])
         }
     }
 }
