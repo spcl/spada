@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/_lib.sh"
 
 TESTING_DIR="$(cd "$(dirname "$0")/../../samples/spatial/testing" && pwd)"
-FOLDER="multicast_simple_sptl"
+FOLDER="multicast_simple_y_sptl"
 
 run_multicast() {
     K=$1
