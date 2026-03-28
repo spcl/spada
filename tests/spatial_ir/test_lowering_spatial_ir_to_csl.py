@@ -5,14 +5,14 @@ import pytest
 
 
 def test_non_concrete_program():
-    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'blas', 'add.sptl')
+    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'simple', 'add.sptl')
     kernel = parser.parse_file(file)
     with pytest.raises(ValueError, match='parameter value'):
         lower_spatial_ir_to_csl(kernel)
 
 
 def test_add():
-    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'blas', 'add.sptl')
+    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'simple', 'add.sptl')
     kernel = parser.parse_file(file)
     kernel = passes.concretize_parameters(kernel, N=32)
     kernel = passes.constexpr_propagation(kernel)
