@@ -363,10 +363,13 @@ def split_rectangles(rectangles: list[Rectangle]) -> list[Rectangle]:
     """
     Main function to split rectangles until no intersections remain.
 
+    Empty rectangles (where start >= stop in any dimension) are discarded immediately
+    and never contribute to the output.
+
     :param rectangles: A list of rectangles to split
     :return: A list of non-overlapping rectangles (preserving metadata)
     """
-    result = rectangles.copy()
+    result = [r for r in rectangles if r.x_range[0] < r.x_range[1] and r.y_range[0] < r.y_range[1]]
     i = 0
     while i < len(result):
         has_split = False
