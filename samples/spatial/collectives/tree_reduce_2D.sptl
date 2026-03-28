@@ -55,7 +55,7 @@ kernel @tree_reduce_2d<LX, LY, K>(
     for i16 stage in [0:LY] {
         phase {
 
-            dataflow i16 i, i16 j in [0, 0 : 1<<LY : 1<<(stage+1)] {
+            dataflow i16 i, i16 j in [0, 0 : 1<<LY : 1<<(stage)] {
                 stream<f32> westward_jump = relative_stream(0, -(1<<stage)) {
                     hops = auto,
                     channel = stage + LX
