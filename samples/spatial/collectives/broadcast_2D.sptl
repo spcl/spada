@@ -17,7 +17,7 @@ kernel @broadcast_2d<NX, NY, K>(stream<f32, K>[1,1] readonly inp, stream<f32, K>
     // Phase 1: Root loads input
     phase {
         compute i16 i, i16 j in [0, 0] {
-            await receive(a, inp[0, 0])
+            await receive(a, inp[i, j])
         }
     }
 

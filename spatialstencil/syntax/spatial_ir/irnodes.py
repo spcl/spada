@@ -754,7 +754,8 @@ class ReceiveStatement(Statement):
 
     def validate(self) -> None:
         assert isinstance(self.local_array, (Identifier, ArraySlice))
-        assert isinstance(self.stream_name, (Identifier, ArraySlice))
+        # Allows conditionals for flexible stream choice (must be compile-time constant value!)
+        assert isinstance(self.stream_name, (Identifier, ArraySlice, TernaryOperator))
         if self.completion_name:
             assert isinstance(self.completion_name, Completion)
 
