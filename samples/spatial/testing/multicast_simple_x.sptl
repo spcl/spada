@@ -13,7 +13,7 @@ kernel @multicast_simple_x<K>(
     stream<f32, 1>[K, 1] writeonly out
 ) {
     place u16 i, u16 j in [0:K, 0:1] {
-        f32 val
+        f32 [1] val
     }
 
     dataflow u16 i, u16 j in [0:K, 0:1] {
