@@ -102,23 +102,27 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     # Compile the generated CSL files using the cslc command (and change the cwd to the output folder)
     # Get the fabric dimensions from the kernel and offsets from the command line arguments
     # Command: cslc layout.csl --fabric-dims=16,16 --fabric-offsets=0,0 --memcpy --channels=1
-    xbegin, xend, ybegin, yend = kernel.get_grid_rect()
-    kernel_dims = [xend - xbegin, yend - ybegin]
     memcpy_channels = 1  # TODO: Determine the number of memcpy channels (1-16) based on the kernel arguments
+
+    # Generate metadata.json file
+    # Run on a separate variable so the original kernel is not mutated.
+    # Use the same canonicalization pipeline as lower_spatial_ir_to_csl to keep both in sync.
+    kernel_meta = s2c.canonicalize_kernel(kernel)
+    input_args, output_args = analysis.get_kernel_stream_arguments(kernel_meta)
+    rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel_meta)
+    stream_extents = analysis.detect_stream_argument_extents(rectangles, kernel_meta)
+
+    # kernel_meta.get_grid_rect() returns tight bounds (last-contained PE + 1) after
+    # canonicalization has expanded all MetaForBlocks.
+    xbegin, xend, ybegin, yend = kernel_meta.get_grid_rect()
+    kernel_dims = [xend - xbegin, yend - ybegin]
+
     if memcpy_channels >= 0:
         xbegin += 4  # Memcpy needs 3 extra columns to the left, and 1 extra column for fabric offset
         xend += 4 + 2 + 1  # Memcpy needs 2 extra columns to the right, plus an extra column for fabric offset
         ybegin += 1
         yend += 1 + 1
 
-    # Generate metadata.json file
-    kernel = canonicalization.inline_metaprogramming(kernel)
-    kernel = canonicalization.canonicalize_phases(kernel)
-    kernel = canonicalization.reduce_streams(kernel)
-    kernel = canonicalization.inline_phases(kernel)
-    input_args, output_args = analysis.get_kernel_stream_arguments(kernel)
-    rectangles = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
-    stream_extents = analysis.detect_stream_argument_extents(rectangles, kernel)
     for argname, arg in itertools.chain(input_args.items(), output_args.items()):
         if len(arg["shape"]) > 0:  # Ignore scalar arguments
             arg_id = spa.Identifier(argname, 0)

@@ -1226,15 +1226,23 @@ class Kernel(SpatialNode):
 
     def get_grid_rect(self) -> tuple[int, int, int, int]:
         """
-        Returns the total PE grid size for this kernel.
-        
-        :return: A rectangle as a tuple of (x range begin, x range end, y range begin, y range end).
-        """
-        grid_rect: list[int | None] = [None, None, None, None]
-        for block in self.body:
-            grid_rect = _combine_grids(block.get_grid_rect(), grid_rect)
+        Returns the tight PE grid rectangle occupied by this kernel.
 
-        return tuple(grid_rect)  # type: ignore
+        Stop values reflect the actual last PE index + 1, not a
+        canonicalized stride boundary (which can be one stride larger).
+        
+        Kernel must have `MetaForBlock`'s resolved.
+
+        :return: (x_begin, x_end, y_begin, y_end)
+        """
+        rects = self.subgrids()
+        if not rects:
+            return (0, 0, 0, 0)
+        x0 = min(r.x_range[0] for r in rects)
+        y0 = min(r.y_range[0] for r in rects)
+        x1 = max(r.largest_contained_x() + 1 for r in rects)
+        y1 = max(r.largest_contained_y() + 1 for r in rects)
+        return (x0, x1, y0, y1)
 
     def get_grid_stride(self) -> tuple[int, int]:
         """
