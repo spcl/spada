@@ -54,13 +54,9 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
 
     # Check if virtual rectangles are equal, consolidate, add phase-end remark at end of computation
     kernel = canonicalization.inline_metaprogramming(kernel)
-    print("Inlined metaprogramming...")
-    print(kernel.as_ir())
     kernel = canonicalization.canonicalize_phases(kernel)
     kernel = canonicalization.reduce_streams(kernel)
     kernel = canonical_subgrids.canonicalize_subgrids(kernel)
-    print("Canonicalized subgrids")
-    print(kernel.as_ir())
     kernel = canonicalization.resolve_auto_hops(kernel)
     kernel = canonicalization.inline_phases(kernel)
 

@@ -29,9 +29,9 @@ _COLLECTIVES_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'samples'
 _COLLECTIVES_1D = [
     ('scalar_reduce_1D.sptl',    dict(N=4)),
     ('chain_reduce_1D.sptl',     dict(N=4,  K=2)),
-    ('tree_reduce_1D.sptl',      dict[str, int](L=1,  K=1)),
+    ('tree_reduce_1D.sptl',      dict[str, int](L=1,  K=2)),
     ('tree_reduce_1D.sptl',      dict[str, int](L=2,  K=2)),
-    #('tree_reduce_1D.sptl',      dict[str, int](L=3,  K=2)),
+    ('tree_reduce_1D.sptl',      dict[str, int](L=3,  K=2)),
     ('twophase_reduce_1D.sptl',  dict(G=3,  S=4, K=2)),
     ('twophase_reduce_1D.sptl',  dict(G=4,  S=4, K=2)),
     ('broadcast_1D.sptl',        dict(N=4,  K=4))
