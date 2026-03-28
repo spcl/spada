@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Compile the spatial stencil program
 FOLDER_NAME="copy_sptl"
-sptlc "$SCRIPT_DIR/../../samples/spatial/neighbor_copy.sptl" "$FOLDER_NAME" -p K=2
+sptlc "$SCRIPT_DIR/../../samples/spatial/simple/neighbor_copy.sptl" "$FOLDER_NAME" -p K=2
 
 python <<EOF
 import numpy as np
