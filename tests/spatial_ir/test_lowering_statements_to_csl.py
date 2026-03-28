@@ -101,7 +101,7 @@ def test_receive_statement_array_strided():
     else:
         assert False, "Expected layout definition not found in generated CSL"
 
-    assert '@range(i16, 0, 8, 3)' in f.code, "Expected strided range not found in generated CSL"
+    assert '@range(i16, 0, 9, 3)' in f.code, "Expected strided range not found in generated CSL"
 
 
 def test_send_statement_scalar():
