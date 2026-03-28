@@ -72,11 +72,11 @@ kernel @chain_reduce_2d<NX, NY, K>(stream<f32, K>[NX,NY] readonly a_in, stream<f
         dataflow i16 i, i16 j in [0, 0:NY] {
             stream<f32> red = relative_stream(0, -1) {
                 hops = [(0, -1)],
-                channel = 0
+                channel = 2
             }
             stream<f32> blue = relative_stream(0, -1) {
                 hops = [(0, -1)],
-                channel = 1
+                channel = 3
             }
         }
 
