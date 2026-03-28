@@ -2,9 +2,6 @@
  * Load data on a 2D grid, output only the first column (i=0).
  * out[0, j] = inp[0, j] for j in 0..NY-1.
  *
- * Because inp spans [NX, NY] (both > 1) but out spans [1, NY],
- * any H2D memcpy order mismatch places wrong data on PE(0, j)
- * and the D2H copy (1-wide) cannot undo it.
  */
 kernel @identity_2d<NX, NY, K>(
     stream<f32, K>[NX, NY] readonly  inp,
