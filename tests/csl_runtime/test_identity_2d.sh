@@ -27,11 +27,23 @@ timeout -s 9 120 cs_python "$RUNTIME_PY" "$FOLDER" a_in.npy --benchmark
 
 python3 - <<PYEOF
 import numpy as np, sys
-inp = np.load('a_in.npy')
-out = np.load('OUT_out.npy')   # expected shape (1, NY, K)
-ref = inp[0:1, :, :]           # first column: inp[0, j, :] for all j
+NX, NY, K = $NX, $NY, $K
+inp = np.load('a_in.npy')       # (NX, NY, K)
+out = np.load('OUT_out.npy')    # expected (1, NY, K)
+ref = inp[0:1, :, :]            # first column: inp[0, j, :] for all j
+
+print(f"inp shape: {inp.shape}")
+print(f"out shape: {out.shape}")
+print()
+
 if not np.allclose(out, ref, atol=1e-6):
     print(f"FAILED: max abs diff = {float(np.max(np.abs(out - ref))):.3e}")
+    print()
+    print("Full input grid (inp[i, j, :]):")
+    for i in range(NX):
+        for j in range(NY):
+            print(f"  inp[{i},{j}] = {inp[i, j, :]}")
+    print()
     print(f"  expected: {ref.flatten()}")
     print(f"  got:      {out.flatten()}")
     sys.exit(1)
