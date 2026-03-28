@@ -1,0 +1,107 @@
+/**
+ * Pipelined 2D broadcast from PE (0,0) to all NX*NY PEs with K elements.
+ * X-Y pattern:
+ *   Phase X: broadcast along row j=0 (root (0,0) → (NX-1,0))
+ *   Phase Y: each column i broadcasts from (i,0) to (i,NY-1)
+ *
+ * Each phase is the exact inverse of the corresponding chain-reduce phase:
+ * streams point in the positive direction and the red/blue roles are swapped.
+ * (!) Assumes NX, NY >= 2 (!)
+ **/
+kernel @broadcast_2d<NX, NY, K>(stream<f32, K>[1,1] readonly inp, stream<f32, K>[NX,NY] writeonly out) {
+
+    place i16 i, i16 j in [0:NX, 0:NY] {
+        f32[K] a
+    }
+
+    // Phase 1: Root loads input
+    phase {
+        compute i16 i, i16 j in [0, 0] {
+            await receive(a, inp[0, 0])
+        }
+    }
+
+    // Phase X: Broadcast along X (row j=0 only).
+    // Inverse of chain-reduce X: streams point east (+1,0).
+    //   root (i=0, even)  → send blue
+    //   odd  i            → receive blue, forward red
+    //   even i (middle)   → receive red,  forward blue
+    //   east corner (NX-1)→ receive (red if even, blue if odd)
+    phase {
+        dataflow i16 i, i16 j in [0:NX, 0] {
+            stream<f32> red = relative_stream(1, 0) {
+                hops = [(1, 0)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(1, 0) {
+                hops = [(1, 0)],
+                channel = 1
+            }
+        }
+
+        compute i16 i, i16 j in [0, 0] {
+            await send(a, blue)
+        }
+        compute i16 i, i16 j in [1:NX-1:2, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = x
+                await send(x, red)
+            }
+        }
+        compute i16 i, i16 j in [2:NX-1:2, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(red) {
+                a[k] = x
+                await send(x, blue)
+            }
+        }
+        compute i16 i, i16 j in [NX-1, 0] {
+            await receive(a, red if (NX-1) % 2 == 0 else blue)
+        }
+    }
+
+    // Phase Y: Broadcast along Y (all columns simultaneously).
+    // After Phase X every PE at j=0 holds the broadcast value.
+    // Inverse of chain-reduce Y: streams point south (0,+1).
+    //   north corner (j=0, even) → send blue
+    //   odd  j                   → receive blue, forward red
+    //   even j (middle)          → receive red,  forward blue
+    //   south corner (j=NY-1)    → receive (red if even, blue if odd)
+    phase {
+        dataflow i16 i, i16 j in [0:NX, 0:NY] {
+            stream<f32> red = relative_stream(0, 1) {
+                hops = [(0, 1)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(0, 1) {
+                hops = [(0, 1)],
+                channel = 1
+            }
+        }
+
+        compute i16 i, i16 j in [0:NX, 0] {
+            await send(a, blue)
+        }
+        compute i16 i, i16 j in [0:NX, 1:NY-1:2] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = x
+                await send(x, red)
+            }
+        }
+        compute i16 i, i16 j in [0:NX, 2:NY-1:2] {
+            await foreach i16 k, f32 x in [0:K], receive(red) {
+                a[k] = x
+                await send(x, blue)
+            }
+        }
+        compute i16 i, i16 j in [0:NX, NY-1] {
+            await receive(a, red if (NY-1) % 2 == 0 else blue)
+        }
+    }
+
+    // Phase 4: All PEs write output
+    phase {
+        compute i16 i, i16 j in [0:NX, 0:NY] {
+            await send(a, out[i, j])
+        }
+    }
+}

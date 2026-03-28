@@ -1,0 +1,105 @@
+/**
+ * Pipelined 2D chain reduce over NX*NY PEs with K elements per PE.
+ * Root is at (0,0). X-Y pattern:
+ *   Phase X: each row reduces westward into its column-0 PE
+ *   Phase Y: column 0 reduces northward into the root (0,0)
+ *
+ * Both phases use the same red-blue checkerboard pattern as chain_reduce_1D,
+ * extended to the full 2D domain (X phase) or to column 0 (Y phase).
+ * (!) Assumes NX, NY >= 2 (!)
+ **/
+kernel @chain_reduce_2d<NX, NY, K>(stream<f32, K>[NX,NY] readonly a_in, stream<f32, K>[1,1] writeonly out) {
+
+    place i16 i, i16 j in [0:NX, 0:NY] {
+        f32[K] a
+    }
+
+    // Phase 1: All PEs load their input
+    phase {
+        compute i16 i, i16 j in [0:NX, 0:NY] {
+            await receive(a, a_in[i, j])
+        }
+    }
+
+    // Phase X: Reduce along X (every row independently, all NY rows in parallel).
+    // Streams point west (-1,0). Pattern mirrors chain_reduce_1D with j free.
+    //   east corner (i=NX-1)  → send (red if even, blue if odd)
+    //   odd  i (middle)       → receive red,  accumulate, forward blue
+    //   even i (middle)       → receive blue, accumulate, forward red
+    //   west corner (i=0)     → receive blue, accumulate
+    phase {
+        dataflow i16 i, i16 j in [0:NX, 0:NY] {
+            stream<f32> red = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 1
+            }
+        }
+
+        compute i16 i, i16 j in [NX-1, 0:NY] {
+            await send(a, red if (NX-1) % 2 == 0 else blue)
+        }
+        compute i16 i, i16 j in [1:NX-1:2, 0:NY] {
+            await foreach i16 k, f32 x in [0:K], receive(red) {
+                a[k] = a[k] + x
+                await send(a[k], blue)
+            }
+        }
+        compute i16 i, i16 j in [2:NX-1:2, 0:NY] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+                await send(a[k], red)
+            }
+        }
+        // West corners (i=0, all rows): accumulate row sum; no send
+        compute i16 i, i16 j in [0, 0:NY] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+            }
+        }
+    }
+
+    // Phase Y: Reduce along Y (column 0 only, from j=NY-1 northward to root (0,0)).
+    // Streams point north (0,-1). Pattern mirrors chain_reduce_1D with j as index.
+    //   south corner (j=NY-1) → send (red if even, blue if odd)
+    //   odd  j (middle)       → receive red,  accumulate, forward blue
+    //   even j (middle)       → receive blue, accumulate, forward red
+    //   root  (j=0)           → receive blue, accumulate, send output
+    phase {
+        dataflow i16 i, i16 j in [0, 0:NY] {
+            stream<f32> red = relative_stream(0, -1) {
+                hops = [(0, -1)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(0, -1) {
+                hops = [(0, -1)],
+                channel = 1
+            }
+        }
+
+        compute i16 i, i16 j in [0, NY-1] {
+            await send(a, red if (NY-1) % 2 == 0 else blue)
+        }
+        compute i16 i, i16 j in [0, 1:NY-1:2] {
+            await foreach i16 k, f32 x in [0:K], receive(red) {
+                a[k] = a[k] + x
+                await send(a[k], blue)
+            }
+        }
+        compute i16 i, i16 j in [0, 2:NY-1:2] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+                await send(a[k], red)
+            }
+        }
+        compute i16 i, i16 j in [0, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+            }
+            await send(a, out[i, j])
+        }
+    }
+}
