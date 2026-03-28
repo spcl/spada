@@ -12,9 +12,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TESTING_DIR="$(cd "$(dirname "$0")/../../samples/spatial/testing" && pwd)"
 FOLDER="multicast_simple_y_sptl"
 
-run_multicast() {
+run_multicast_y() {
     K=$1
-    echo "--- multicast_simple K=$K ---"
+    echo "--- multicast_simple_y K=$K ---"
 
     sptlc "$TESTING_DIR/multicast_simple_y.sptl" "$FOLDER" -p K=$K
 
@@ -31,7 +31,7 @@ PYEOF
     cleanup "$FOLDER"
 }
 
-run_multicast 2
-run_multicast 3
-run_multicast 5
-run_multicast 8
+run_multicast_y 2
+run_multicast_y 3
+run_multicast_y 5
+run_multicast_y 8
