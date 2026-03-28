@@ -40,7 +40,7 @@ kernel @tree_reduce_1d<L, K>(stream<f32, K>[1<<L, 1] readonly a_in, stream<f32, 
             dataflow i16 i, i16 j in [0 : 1<<L : 1<<(stage), 0] {
                 stream<f32> westward_jump = relative_stream(-(1<<stage), 0) {
                     hops = auto,
-                    channel = 0
+                    channel = stage
                 }
             }
 

@@ -124,11 +124,11 @@ kernel @twophase_reduce_2d<GX, SX, GY, SY, K>(
         dataflow i16 i, i16 j in [0, 0:GY*SY] {
             stream<f32> red = relative_stream(0, -1) {
                 hops = [(0, -1)],
-                channel = 0
+                channel = 2
             }
             stream<f32> blue = relative_stream(0, -1) {
                 hops = [(0, -1)],
-                channel = 1
+                channel = 3
             }
         }
 
@@ -169,11 +169,11 @@ kernel @twophase_reduce_2d<GX, SX, GY, SY, K>(
         dataflow i16 i, i16 j in [0, 0:GY*SY:SY] {
             stream<f32> red = relative_stream(0, -SY) {
                 hops = [(0, -1)],
-                channel = 0
+                channel = 2
             }
             stream<f32> blue = relative_stream(0, -SY) {
                 hops = [(0, -1)],
-                channel = 1
+                channel = 3
             }
         }
 

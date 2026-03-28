@@ -33,7 +33,7 @@ kernel @tree_reduce_2d<LX, LY, K>(
             dataflow i16 i, i16 j in [0 : 1<<LX : 1<<(stage), 0:1<<LY] {
                 stream<f32> westward_jump = relative_stream(-(1<<stage), 0) {
                     hops = auto,
-                    channel = 0
+                    channel = stage
                 }
             }
 
@@ -58,7 +58,7 @@ kernel @tree_reduce_2d<LX, LY, K>(
             dataflow i16 i, i16 j in [0, 0 : 1<<LY : 1<<(stage+1)] {
                 stream<f32> westward_jump = relative_stream(0, -(1<<stage)) {
                     hops = auto,
-                    channel = 0
+                    channel = stage + L
                 }
             }
 
