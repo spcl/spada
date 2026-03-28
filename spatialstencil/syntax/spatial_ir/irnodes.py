@@ -434,6 +434,10 @@ class SubgridExpression(SpatialNode):
         """
         Get the concrete grid rectangle defined by the subgrid expression.
 
+        Stop values are canonicalized by rounding up to the next stride boundary so that
+        ranges that cover the same set of PEs (e.g., (3,4,2) and (3,5,2)) produce the
+        same key regardless of which split path generated them.
+
         :return: A tuple of (start_x, stop_x, start_y, stop_y)
         """
         start_x, start_y = self.x_range.start.eval(), self.y_range.start.eval()
@@ -454,7 +458,12 @@ class SubgridExpression(SpatialNode):
         if not isinstance(stop_y, int):
             raise TypeError(f'Cannot obtain concrete grid size. y range value "{stop_y.as_ir()}" is not integral')
 
-        return start_x, stop_x, start_y, stop_y
+        x_stride, y_stride = self.get_grid_stride()
+        # Canonicalize: round stop up to the next stride boundary relative to start.
+        def _canon(start, stop, stride):
+            offset = stop - start
+            return start + ((offset + stride - 1) // stride) * stride
+        return start_x, _canon(start_x, stop_x, x_stride), start_y, _canon(start_y, stop_y, y_stride)
 
     def get_grid_stride(self) -> tuple[int, int]:
         """
