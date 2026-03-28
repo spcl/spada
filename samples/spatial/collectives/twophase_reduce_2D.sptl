@@ -1,0 +1,206 @@
+/**
+ * Pipelined Two-Phase Reduce over (GX*SX) x (GY*SY) PEs with K elements per PE.
+ * Root is at (0,0). X-Y pattern:
+ *   Phase X (two-phase): reduce every row into column 0
+ *     X1: within-group reduce across SX consecutive PEs per group (meta-for over GX groups)
+ *     X2: cross-group reduce across the GX group representatives in each row
+ *   Phase Y (two-phase): reduce column 0 into root (0,0)
+ *     Y1: within-group reduce across SY consecutive PEs per group (meta-for over GY groups)
+ *     Y2: cross-group reduce across the GY group representatives in column 0
+ *
+ * (!) Assumes SX, SY are even (!)
+ **/
+kernel @twophase_reduce_2d<GX, SX, GY, SY, K>(
+    stream<f32, K>[GX*SX, GY*SY] readonly a_in,
+    stream<f32, K>[1,1] writeonly out
+) {
+
+    place i16 i, i16 j in [0:GX*SX, 0:GY*SY] {
+        f32[K] a
+    }
+
+    // Phase 1: All PEs load input
+    phase {
+        compute i16 i, i16 j in [0:GX*SX, 0:GY*SY] {
+            await receive(a, a_in[i, j])
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase X1: Within-group reduce in X, for every row.
+    // Each group [gx*SX .. (gx+1)*SX-1] in X reduces westward into gx*SX.
+    // Streams are single-hop westward (-1,0); SX even → east corner always odd.
+    // All GY*SY rows participate in parallel.
+    // -------------------------------------------------------------------------
+    phase {
+        dataflow i16 i, i16 j in [0:GX*SX, 0:GY*SY] {
+            stream<f32> red = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 1
+            }
+        }
+
+        for i16 gx in [0:GX] {
+            // West corner of group: accumulate, no send
+            compute i16 i, i16 j in [gx * SX, 0:GY*SY] {
+                await foreach i16 k, f32 x in [0:K], receive(blue) {
+                    a[k] = a[k] + x
+                }
+            }
+            // Middle odd
+            compute i16 i, i16 j in [gx * SX + 1 : (gx+1) * SX - 1 : 2, 0:GY*SY] {
+                await foreach i16 k, f32 x in [0:K], receive(red) {
+                    a[k] = a[k] + x
+                    await send(a[k], blue)
+                }
+            }
+            // Middle even
+            compute i16 i, i16 j in [gx * SX + 2 : (gx+1) * SX - 1 : 2, 0:GY*SY] {
+                await foreach i16 k, f32 x in [0:K], receive(blue) {
+                    a[k] = a[k] + x
+                    await send(a[k], red)
+                }
+            }
+            // East corner: always at an odd global X index when SX is even → send blue
+            compute i16 i, i16 j in [(gx+1) * SX - 1, 0:GY*SY] {
+                await send(a, blue)
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase X2: Cross-group reduce in X, for every row.
+    // GX group representatives at i = 0, SX, 2*SX, ..., (GX-1)*SX reduce
+    // westward into column 0. Multi-hop streams span SX hops each.
+    // -------------------------------------------------------------------------
+    phase {
+        dataflow i16 i, i16 j in [0:GX*SX:SX, 0:GY*SY] {
+            stream<f32> red = relative_stream(-SX, 0) {
+                hops = [(-1, 0)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(-SX, 0) {
+                hops = [(-1, 0)],
+                channel = 1
+            }
+        }
+
+        // West corner (column 0): accumulate, no send
+        compute i16 i, i16 j in [0, 0:GY*SY] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+            }
+        }
+        // Middle odd group representatives
+        compute i16 i, i16 j in [SX:(GX-1)*SX:2*SX, 0:GY*SY] {
+            await foreach i16 k, f32 x in [0:K], receive(red) {
+                a[k] = a[k] + x
+                await send(a[k], blue)
+            }
+        }
+        // Middle even group representatives
+        compute i16 i, i16 j in [2*SX:(GX-1)*SX:2*SX, 0:GY*SY] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+                await send(a[k], red)
+            }
+        }
+        // East corner: group-level index GX-1; even → red, odd → blue
+        compute i16 i, i16 j in [(GX-1)*SX, 0:GY*SY] {
+            await send(a, red if (GX-1) % 2 == 0 else blue)
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase Y1: Within-group reduce in Y, for column 0 only.
+    // Each group [gy*SY .. (gy+1)*SY-1] in Y reduces northward into gy*SY.
+    // Streams are single-hop northward (0,-1); SY even → south corner always odd.
+    // -------------------------------------------------------------------------
+    phase {
+        dataflow i16 i, i16 j in [0, 0:GY*SY] {
+            stream<f32> red = relative_stream(0, -1) {
+                hops = [(0, -1)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(0, -1) {
+                hops = [(0, -1)],
+                channel = 1
+            }
+        }
+
+        for i16 gy in [0:GY] {
+            // North corner of group: accumulate, no send
+            compute i16 i, i16 j in [0, gy * SY] {
+                await foreach i16 k, f32 x in [0:K], receive(blue) {
+                    a[k] = a[k] + x
+                }
+            }
+            // Middle odd
+            compute i16 i, i16 j in [0, gy * SY + 1 : (gy+1) * SY - 1 : 2] {
+                await foreach i16 k, f32 x in [0:K], receive(red) {
+                    a[k] = a[k] + x
+                    await send(a[k], blue)
+                }
+            }
+            // Middle even
+            compute i16 i, i16 j in [0, gy * SY + 2 : (gy+1) * SY - 1 : 2] {
+                await foreach i16 k, f32 x in [0:K], receive(blue) {
+                    a[k] = a[k] + x
+                    await send(a[k], red)
+                }
+            }
+            // South corner: always at an odd global Y index when SY is even → send blue
+            compute i16 i, i16 j in [0, (gy+1) * SY - 1] {
+                await send(a, blue)
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase Y2: Cross-group reduce in Y, for column 0 only.
+    // GY group representatives at j = 0, SY, 2*SY, ..., (GY-1)*SY reduce
+    // northward into root (0,0). Multi-hop streams span SY hops each.
+    // -------------------------------------------------------------------------
+    phase {
+        dataflow i16 i, i16 j in [0, 0:GY*SY:SY] {
+            stream<f32> red = relative_stream(0, -SY) {
+                hops = [(0, -1)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(0, -SY) {
+                hops = [(0, -1)],
+                channel = 1
+            }
+        }
+
+        // Root (0,0): accumulate and send output
+        compute i16 i, i16 j in [0, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+            }
+            await send(a, out[i, j])
+        }
+        // Middle odd group representatives
+        compute i16 i, i16 j in [0, SY:(GY-1)*SY:2*SY] {
+            await foreach i16 k, f32 x in [0:K], receive(red) {
+                a[k] = a[k] + x
+                await send(a[k], blue)
+            }
+        }
+        // Middle even group representatives
+        compute i16 i, i16 j in [0, 2*SY:(GY-1)*SY:2*SY] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+                await send(a[k], red)
+            }
+        }
+        // South corner: group-level index GY-1; even → red, odd → blue
+        compute i16 i, i16 j in [0, (GY-1)*SY] {
+            await send(a, red if (GY-1) % 2 == 0 else blue)
+        }
+    }
+}
