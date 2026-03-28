@@ -150,7 +150,7 @@ def test_extern_stream():
     assert isinstance(out_decl.stream, spast.ExternStreamDeclaration)
     assert in_decl.stream.direction == 'in'
     assert out_decl.stream.direction == 'out'
-    assert out_decl.stream.routing.channel == 3
+    assert out_decl.stream.routing.resolved_channel == 3
 
 
 if __name__ == '__main__':
