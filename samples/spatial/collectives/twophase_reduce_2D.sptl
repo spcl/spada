@@ -76,16 +76,17 @@ kernel @twophase_reduce_2d<GX, SX, GY, SY, K>(
     // Phase X2: Cross-group reduce in X, for every row.
     // GX group representatives at i = 0, SX, 2*SX, ..., (GX-1)*SX reduce
     // westward into column 0. Multi-hop streams span SX hops each.
+    // Uses channels 2,3 to avoid conflict with Phase X1 (channels 0,1).
     // -------------------------------------------------------------------------
     phase {
         dataflow i16 i, i16 j in [0:GX*SX:SX, 0:GY*SY] {
             stream<f32> red = relative_stream(-SX, 0) {
                 hops = auto,
-                channel = 0
+                channel = 2
             }
             stream<f32> blue = relative_stream(-SX, 0) {
                 hops =  auto,
-                channel = 1
+                channel = 3
             }
         }
 
@@ -119,16 +120,17 @@ kernel @twophase_reduce_2d<GX, SX, GY, SY, K>(
     // Phase Y1: Within-group reduce in Y, for column 0 only.
     // Each group [gy*SY .. (gy+1)*SY-1] in Y reduces northward into gy*SY.
     // Streams are single-hop northward (0,-1); SY even → south corner always odd.
+    // Uses channels 4,5 to avoid conflict with Phase X1 (0,1) and X2 (2,3).
     // -------------------------------------------------------------------------
     phase {
         dataflow i16 i, i16 j in [0, 0:GY*SY] {
             stream<f32> red = relative_stream(0, -1) {
                 hops = [(0, -1)],
-                channel = 2
+                channel = 4
             }
             stream<f32> blue = relative_stream(0, -1) {
                 hops = [(0, -1)],
-                channel = 3
+                channel = 5
             }
         }
 
@@ -164,16 +166,17 @@ kernel @twophase_reduce_2d<GX, SX, GY, SY, K>(
     // Phase Y2: Cross-group reduce in Y, for column 0 only.
     // GY group representatives at j = 0, SY, 2*SY, ..., (GY-1)*SY reduce
     // northward into root (0,0). Multi-hop streams span SY hops each.
+    // Uses channels 6,7 to avoid conflict with Phase Y1 (4,5).
     // -------------------------------------------------------------------------
     phase {
         dataflow i16 i, i16 j in [0, 0:GY*SY:SY] {
             stream<f32> red = relative_stream(0, -SY) {
                 hops = auto,
-                channel = 2
+                channel = 6
             }
             stream<f32> blue = relative_stream(0, -SY) {
                 hops = auto,
-                channel = 3
+                channel = 7
             }
         }
 
