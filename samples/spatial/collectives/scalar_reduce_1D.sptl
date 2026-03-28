@@ -2,6 +2,7 @@
  * Simple 1D scalar chain reduction
  * N is the number of PEs in the first row.
  * Root is 0,0
+ * WARNING: Unsupported example by CSL backend -- Requires switching configuration between receive and send!
  **/
  kernel @reduce<N>(stream<f32, 1>[N] readonly inp, stream<f32, 1> writeonly out) {
 
