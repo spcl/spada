@@ -121,8 +121,15 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
 
     ###############################################
     # Generate main layout file
-    grid_rect = kernel.get_grid_rect()
-    rect_size = grid_rect[1] - grid_rect[0], grid_rect[3] - grid_rect[2]
+
+    # Compute the actual PE bounding box from the equivalence-class rectangles using the actually contained x and y
+    x0 = min(r.x_range[0] for r in rectangles)
+    y0 = min(r.y_range[0] for r in rectangles)
+    assert x0 == 0, "PE Grid must start at x=0"
+    assert y0 == 0, "PE Grid must start at y=0"
+    x1 = max(r.largest_contained_x() + 1 for r in rectangles)
+    y1 = max(r.largest_contained_y() + 1 for r in rectangles)
+    rect_size = x1 - x0, y1 - y0
 
     # Collect unique routes for all rectangles
     routes_per_rectangle = _collect_routes(rectangles, color_maps)
