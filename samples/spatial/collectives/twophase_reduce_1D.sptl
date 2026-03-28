@@ -83,11 +83,11 @@ kernel @two_phase_reduce_1d<G, S, K>(stream<f32, K>[G*S,1] readonly a_in, stream
         dataflow i16 i, i16 j in [0:S*G:S, 0] {
             stream<f32> red = relative_stream(-S, 0) {
                 hops = [(-1, 0)],
-                channel = 0
+                channel = 2
             }
             stream<f32> blue = relative_stream(-S, 0) {
                 hops = [(-1, 0)],
-                channel = 1
+                channel = 3
             }
         }
 
