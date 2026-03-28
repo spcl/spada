@@ -21,15 +21,15 @@ kernel @multihop<K>(stream<f32, K>[1, 1] readonly inp, stream<f32, K>[1, 1] writ
     }
 
     // PE 2: receive from the host input and forward west.
-    compute u16 i, u16 j in [2:3, 0] {
-        await foreach u16 k, f32 x in [0:K], receive(inp[0, 0]) {
+    compute u16 i, u16 j in [2, 0] {
+        await foreach u16 k, f32 x in [0:K], receive(inp[i, j]) {
             a[k] = x
         }
         await send(a, west2)
     }
 
     // PE 0: receive the relayed data and write to host output.
-    compute u16 i, u16 j in [0:1, 0] {
+    compute u16 i, u16 j in [0, 0] {
         await receive(a, west2)
         await send(a, out)
     }
