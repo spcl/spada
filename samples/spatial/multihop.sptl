@@ -1,0 +1,36 @@
+/**
+ * Minimal multi-hop relay: PE 2 sends K f32 values to PE 0 through a
+ * 2-hop westward stream (PE 2 → PE 1 → PE 0).  PE 1 acts as a pure
+ * routing relay with no compute tasks.
+ *
+ * Parameter K — number of f32 elements to transfer.
+ **/
+kernel @multihop<K>(stream<f32, K>[1, 1] readonly inp, stream<f32, K>[1, 1] writeonly out) {
+
+    // All three PEs declare storage so PE 1 receives @set_tile_code.
+    place u16 i, u16 j in [0:3, 0] {
+        f32[K] a
+    }
+
+    // 2-hop westward stream: each hop moves one PE to the west.
+    dataflow u16 i, u16 j in [0:3, 0] {
+        stream<f32> west2 = relative_stream(-2, 0) {
+            hops = [(-1, 0), (-1, 0)],
+            channel = 0
+        }
+    }
+
+    // PE 2: receive from the host input and forward west.
+    compute u16 i, u16 j in [2:3, 0] {
+        await foreach u16 k, f32 x in [0:K], receive(inp[0, 0]) {
+            a[k] = x
+        }
+        await send(a, west2)
+    }
+
+    // PE 0: receive the relayed data and write to host output.
+    compute u16 i, u16 j in [0:1, 0] {
+        await receive(a, west2)
+        await send(a, out)
+    }
+}

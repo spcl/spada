@@ -1154,29 +1154,16 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
                             inst += routing_inst
                             routing_instructions.add(routing_inst)
                 if received:
-                    cur_offx = 0
-                    cur_offy = 0
+                    # The receiver only configures itself (pe_x + 0, pe_y + 0).
+                    # Intermediate PEs are configured by the sender block above,
+                    # which walks forward through hops[1:] relative to the sender PE.
                     last_hop = stream.stream.routing.hops[-1]
                     route = (_route_dir(*last_hop.offset)[0], 'RAMP')
-                    routing_inst = INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                        cur_offx, cur_offy, color_name_inbound, route[0], route[1])
+                    routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
+                        color_name_inbound, route[0], route[1])
                     if routing_inst not in routing_instructions:
                         inst += routing_inst
                         routing_instructions.add(routing_inst)
-                    # Walk backward through the hops (from receiver toward sender) to
-                    # configure each intermediate PE.  The offset from the receiver is
-                    # the NEGATION of the forward hop offset, so we subtract.
-                    cur_offx -= last_hop.offset[0]
-                    cur_offy -= last_hop.offset[1]
-                    for hop in reversed(stream.stream.routing.hops[:-1]):
-                        route = _route_dir(*hop.offset)
-                        routing_inst = INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                            cur_offx, cur_offy, color_name_inbound, route[0], route[1])
-                        if routing_inst not in routing_instructions:
-                            inst += routing_inst
-                            routing_instructions.add(routing_inst)
-                        cur_offx -= hop.offset[0]
-                        cur_offy -= hop.offset[1]
 
         result[(rect.x_range[0], rect.y_range[0])] = inst
 
