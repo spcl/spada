@@ -24,10 +24,26 @@ def test_add():
         print('=============')
 
 
-def test_reduce():
-    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'reduce.sptl')
+_COLLECTIVES_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'collectives')
+
+_COLLECTIVES = [
+    ('scalar_reduce_1D.sptl',    dict(N=4)),
+    ('chain_reduce_1D.sptl',     dict(N=4,  K=2)),
+    ('tree_reduce_1D.sptl',      dict(L=3,  K=2)),
+    ('twophase_reduce_1D.sptl',  dict(G=3,  S=4, K=2)),
+    ('broadcast_1D.sptl',        dict(N=4,  K=4)),
+    ('chain_reduce_2D.sptl',     dict(NX=4, NY=4, K=2)),
+    ('tree_reduce_2D.sptl',      dict(LX=2, LY=2, K=2)),
+    ('twophase_reduce_2D.sptl',  dict(GX=2, SX=4, GY=2, SY=4, K=2)),
+    ('broadcast_2D.sptl',        dict(NX=4, NY=4, K=2)),
+]
+
+
+@pytest.mark.parametrize('filename,params', _COLLECTIVES, ids=[c[0] for c in _COLLECTIVES])
+def test_collective(filename, params):
+    file = os.path.join(_COLLECTIVES_DIR, filename)
     kernel = parser.parse_file(file)
-    kernel = passes.concretize_parameters(kernel, N=32)
+    kernel = passes.concretize_parameters(kernel, **params)
     kernel = passes.constexpr_propagation(kernel)
     print(kernel.as_ir())
     csl_files = lower_spatial_ir_to_csl(kernel)
@@ -35,7 +51,7 @@ def test_reduce():
         print('=============')
         print(f.filename, ':')
         print(f.code)
-        print('=============')
+        print('='*13)
 
 
 def test_two_phase_split():
@@ -83,7 +99,8 @@ def test_forward_sum():
 if __name__ == '__main__':
     test_non_concrete_program()
     test_add()
-    test_reduce()
+    for _fname, _params in _COLLECTIVES:
+        test_collective(_fname, _params)
     test_two_phase_split()
     test_laplacian()
     test_forward_sum()
