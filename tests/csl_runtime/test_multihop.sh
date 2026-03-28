@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 K=4
 FOLDER="multihop_sptl"
-SAMPLES_DIR="$(cd "$SCRIPT_DIR/../../samples/spatial/simple" && pwd)"
+SAMPLES_DIR="$(cd "$SCRIPT_DIR/../../samples/spatial/testing" && pwd)"
 
 sptlc "$SAMPLES_DIR/multihop.sptl" "$FOLDER" -p K=$K
 
