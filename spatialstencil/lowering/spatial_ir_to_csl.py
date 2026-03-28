@@ -492,23 +492,23 @@ def _collect_colors_globally(kernel: spir.Kernel, rectangles: list[Rectangle[PEB
             if stream_decl.stream_name not in sends_recvs:
                 continue  # Unused stream
             outbound, inbound = sends_recvs[stream_decl.stream_name]
-            if stream_decl.stream.routing.channel == "auto":
+            if stream_decl.stream.routing.resolved_channel == "auto":
                 if outbound:
                     auto_stream_is_written.add(stream_decl.stream_name)
                 if inbound:
                     auto_stream_is_read.add(stream_decl.stream_name)
                 continue  # Skip remainder of "auto" channels and assign them below
             if outbound:
-                channel_is_written.add(stream_decl.stream.routing.channel)
+                channel_is_written.add(stream_decl.stream.routing.resolved_channel)
             if inbound:
-                channel_is_read.add(stream_decl.stream.routing.channel)
+                channel_is_read.add(stream_decl.stream.routing.resolved_channel)
 
     max_channel = max(channel_is_read.union(channel_is_written), default=-1)
 
     # Assign all "auto" channels
     for rect in rectangles:
         for stream_decl in rect.metadata.dataflow.statements:
-            if stream_decl.stream.routing.channel == "auto":
+            if stream_decl.stream.routing.resolved_channel == "auto":
                 stream_decl.stream.routing.channel = max_channel + 1
                 if stream_decl.stream_name in auto_stream_is_written:
                     channel_is_written.add(max_channel + 1)
@@ -567,13 +567,14 @@ def _allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Ke
         if stream_decl.stream.routing is None:
             raise SyntaxError(f'Non-routed stream "{name}". When generating CSL, Spatial IR code must have all streams '
                               'routed.')
-        if stream_decl.stream.routing.channel == 'auto':
+        resolved = stream_decl.stream.routing.resolved_channel
+        if resolved == 'auto':
             raise SyntaxError(f'"auto" stream channel found in stream "{name}". All streams must be concretized prior '
                               'to lowering to CSL')
 
         if outbound:
             # Look up channel in color map
-            this_color = channel_to_color[channel_offset + stream_decl.stream.routing.channel]
+            this_color = channel_to_color[channel_offset + resolved]
 
             # Add to mapping
             result[name + "_OUT"] = csl.COLORS[this_color]
@@ -582,7 +583,7 @@ def _allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Ke
 
         if inbound:
             # Look up channel in color map
-            this_color = channel_to_color[channel_offset + stream_decl.stream.routing.channel]
+            this_color = channel_to_color[channel_offset + resolved]
 
             # Add to mapping
             result[name + "_IN"] = csl.COLORS[this_color]

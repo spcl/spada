@@ -567,9 +567,18 @@ class RoutingHop(SpatialNode):
 class RoutingDeclaration(SpatialNode):
     """
     A routing declaration for a stream, optionally specifying hops and channel.
+
+    The ``channel`` field may hold:
+    * ``"auto"``  – the channel number is assigned automatically.
+    * ``int``     – a literal channel number (assigned programmatically or parsed from
+                    a plain integer literal).
+    * ``Expression`` – a compile-time constant expression (e.g. a parameter or
+                    meta-for loop variable such as ``stage``).  It must evaluate to
+                    an integer by the time CSL lowering runs; use
+                    :attr:`resolved_channel` to obtain the concrete value.
     """
     hops: Union[list[RoutingHop], Literal["auto"]] = "auto"  # list of hops or 'auto'
-    channel: Union[int, Literal["auto"]] = "auto"  # Channel ID or 'auto'
+    channel: Union["Expression", int, Literal["auto"]] = "auto"
 
     def validate(self) -> None:
         if isinstance(self.hops, list):
@@ -577,10 +586,34 @@ class RoutingDeclaration(SpatialNode):
                 dx, dy = hop.offset
                 assert abs(dx) + abs(dy) == 1, "Each hop must have an absolute sum of 1."
 
+    @property
+    def resolved_channel(self) -> Union[int, Literal["auto"]]:
+        """
+        Return the channel as a concrete integer, evaluating any compile-time
+        constant expression if necessary.  Raises ``ValueError`` if the channel
+        expression has not been fully reduced to a constant yet.
+        """
+        if self.channel == "auto":
+            return "auto"
+        if isinstance(self.channel, int):
+            return self.channel
+        val = self.channel.eval()
+        if not isinstance(val, int):
+            raise ValueError(
+                f"Channel expression '{self.channel.as_ir()}' did not evaluate to an integer. "
+                "Ensure all parameters and loop variables are concretized before CSL lowering."
+            )
+        return val
+
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         hops_str = "auto" if self.hops == "auto" else f"[{', '.join(hop.as_ir() for hop in self.hops)}]"
-        channel_str = "auto" if self.channel == "auto" else str(self.channel)
+        if self.channel == "auto":
+            channel_str = "auto"
+        elif isinstance(self.channel, int):
+            channel_str = str(self.channel)
+        else:
+            channel_str = self.channel.as_ir()
         return f"{indent_str}hops = {hops_str}, \n{indent_str}channel = {channel_str}"
 
 
