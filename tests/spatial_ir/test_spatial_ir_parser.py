@@ -65,7 +65,7 @@ def test_spatial_roundtrip_two_phase():
     """
     Tests a roundtrip IR->parse->IR->parse->IR for differences.
     """
-    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'two_phase.sptl')
+    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'testing', 'two_phase.sptl')
     _rountrip_test(file)
 
 
@@ -100,12 +100,12 @@ def _rountrip_test(file):
 
 
 def test_spatial_roundtrip_two_phase_unrouted():
-    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'two_phase_unrouted.sptl')
+    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'testing', 'two_phase_unrouted.sptl')
     _rountrip_test(file)
 
 
 def test_spatial_roundtrip_two_phase_split():
-    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'two_phase_split.sptl')
+    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'testing', 'two_phase_split.sptl')
     _rountrip_test(file)
 
 
