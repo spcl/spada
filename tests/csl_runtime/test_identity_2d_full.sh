@@ -2,7 +2,6 @@
 # Debug test: full 2D identity copy (out[i,j] == inp[i,j] for all PEs).
 # Prints the complete permutation applied by the host↔device memcpy,
 # revealing which inp[ii,jj] each PE actually received.
-# Not part of the normal test suite; run manually to diagnose memcpy ordering.
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
