@@ -70,11 +70,11 @@ kernel @broadcast_2d<NX, NY, K>(stream<f32, K>[1,1] readonly inp, stream<f32, K>
         dataflow i16 i, i16 j in [0:NX, 0:NY] {
             stream<f32> red = relative_stream(0, 1) {
                 hops = [(0, 1)],
-                channel = 0
+                channel = 2
             }
             stream<f32> blue = relative_stream(0, 1) {
                 hops = [(0, 1)],
-                channel = 1
+                channel = 3
             }
         }
 
