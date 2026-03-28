@@ -1,0 +1,115 @@
+/**
+ * Pipelined Two-Phase Reduce over G*S PEs with K elements per PE.
+ * PEs are in a row (first row) and the root is at 0,0.
+ * (!) Assumes S is even (!)
+ **/
+kernel @two_phase_reduce_1d<G, S, K>(stream<f32, K>[G*S,1] readonly a_in, stream<f32, K>[1,1] writeonly out) {
+
+    place i16 i, i16 j in [0:G*S] {
+        // Data Array
+        f32[K] a
+    }
+
+    // Receive Input
+    phase {
+        compute i16 i, i16 j in [0:G*S, 0] {  // Odd PEs
+            await receive(a, a_in[i, j])
+        }
+    }
+
+    phase {
+
+        // Configure streams in red-blue checkerboarding pattern
+        // Note: These patterns assume S is even.
+        // Otherwise, we'd need to define the dataflow within the meta-for loop
+        dataflow i16 i, i16 j in [0:S*G, 0] {
+            stream<f32> red = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 1
+            }
+        }
+        // Phase 1: Reduce each group
+        //outer meta loop over the groups
+        for i16 group in [0:G] {
+            // Define a reduction over each (disjoint) group
+            // local west corner (root)
+            compute i16 i, i16 j in [group * S, 0] {
+                // only receive (blue)
+                await foreach i16 k, f32 x in [0:K], receive(blue) {
+                    a[k] = a[k] + x
+                }
+            }
+            // middle part (odd)
+            compute i16 i, i16 j in [group * S + 1 : (group+1) * S - 1: 2, 0] {
+                await foreach i16 k, f32 x in [0:K], receive(red) {
+                    a[k] = a[k] + x
+                    await send(a[k], blue)
+                }
+            }
+            // middle part (even)
+            compute i16 i, i16 j in [group * S + 2 : (group+1) * S - 1: 2, 0] {
+                await foreach i16 k, f32 x in [0:K], receive(blue) {
+                    a[k] = a[k] + x
+                    await send(a[k], red)
+                }
+            }
+            // local east corner
+            compute i16 i, i16 j in [ (group+1) * S - 1, 0] {
+                // only send
+                await send(a, red)
+            }
+        }
+    }
+    
+    phase {
+        // Phase 2: Reduce over all groups
+
+        // Configure streams in multi-hop red-blue checkerboarding pattern
+        dataflow i16 i, i16 j in [0:S*G:S, 0] {
+            stream<f32> red = relative_stream(-S, 0) {
+                hops = [(-1, 0)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(-S, 0) {
+                hops = [(-1, 0)],
+                channel = 1
+            }
+        }
+
+        // West Corner (Root)
+        compute i16 i, i16 j in [0, 0] {
+            // only receive (blue)
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+            }
+        }
+
+        // Middle Part (odd)
+        compute i16 i, i16 j in [S:G*S:2*S, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(red) {
+                a[k] = a[k] + x
+                await send(a[k], blue)
+            }
+        }
+
+        // Middle Part (even)
+        compute i16 i, i16 j in [2*S:G*S:2*S, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+                await send(a[k], red)
+            }
+        }
+
+        // East Corner
+        compute i16 i, i16 j in [G*S-1, 0] {
+            // Allows for both even or odd number of groups
+            await send(a, red if (G-1) % 2 == 0 else blue)
+        }
+
+    }
+
+}
