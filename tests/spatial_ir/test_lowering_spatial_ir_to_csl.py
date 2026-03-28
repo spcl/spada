@@ -27,17 +27,21 @@ def test_add():
 _COLLECTIVES_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'collectives')
 
 _COLLECTIVES_1D = [
-    #('scalar_reduce_1D.sptl',    dict(N=4)),
-    #('chain_reduce_1D.sptl',     dict(N=4,  K=2)),
-    #('tree_reduce_1D.sptl',      dict(L=3,  K=2)),
-    #('twophase_reduce_1D.sptl',  dict(G=3,  S=4, K=2)),
+    ('scalar_reduce_1D.sptl',    dict(N=4)),
+    ('chain_reduce_1D.sptl',     dict(N=4,  K=2)),
+    ('tree_reduce_1D.sptl',      dict[str, int](L=1,  K=1)),
+    ('tree_reduce_1D.sptl',      dict[str, int](L=2,  K=2)),
+    #('tree_reduce_1D.sptl',      dict[str, int](L=3,  K=2)),
+    ('twophase_reduce_1D.sptl',  dict(G=3,  S=4, K=2)),
+    ('twophase_reduce_1D.sptl',  dict(G=4,  S=4, K=2)),
     ('broadcast_1D.sptl',        dict(N=4,  K=4))
 ]
 
 _COLLECTIVES_2D = [
     ('chain_reduce_2D.sptl',     dict(NX=4, NY=4, K=2)),
     ('tree_reduce_2D.sptl',      dict(LX=2, LY=2, K=2)),
-    ('twophase_reduce_2D.sptl',  dict(GX=3, SX=4, GY=3, SY=4, K=2)),
+    ('twophase_reduce_2D.sptl',  dict[str, int](GX=3, SX=4, GY=3, SY=4, K=2)),
+    ('twophase_reduce_2D.sptl',  dict[str, int](GX=4, SX=4, GY=4, SY=4, K=2)),
     ('broadcast_2D.sptl',        dict(NX=4, NY=4, K=2)),
 ]
 
@@ -115,8 +119,10 @@ def test_forward_sum():
 if __name__ == '__main__':
     test_non_concrete_program()
     test_add()
-    for _fname, _params in _COLLECTIVES:
-        test_collective(_fname, _params)
+    for _fname, _params in _COLLECTIVES_1D:
+        test_collective_1d(_fname, _params)
+    for _fname, _params in _COLLECTIVES_2D:
+        test_collective_2d(_fname, _params)
     test_two_phase_split()
     test_laplacian()
     test_forward_sum()

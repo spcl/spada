@@ -393,6 +393,48 @@ def reduce_streams(kernel: spir.Kernel) -> spir.Kernel:
     return kernel
 
 
+class _AutoHopResolver(spir.NodeTransformer):
+    """
+    Replaces ``hops = auto`` in every RelativeStreamDeclaration with an explicit
+    hop list computed from the stream's (dx, dy) offset.
+
+    Routing heuristic: move in the X direction first (one step at a time),
+    then in the Y direction.  Each hop has |step| == 1 in exactly one axis.
+    """
+
+    def visit_RelativeStreamDeclaration(self, node: spir.RelativeStreamDeclaration):
+        node = self.generic_visit(node)
+        if node.routing is None or node.routing.hops != "auto":
+            return node
+
+        dx = node.dx.eval()
+        dy = node.dy.eval()
+
+        step_x = 1 if dx > 0 else -1
+        step_y = 1 if dy > 0 else -1
+
+        hops = (
+            [spir.RoutingHop((step_x, 0)) for _ in range(abs(dx))]
+            + [spir.RoutingHop((0, step_y)) for _ in range(abs(dy))]
+        )
+
+        new_routing = copy.copy(node.routing)
+        new_routing.hops = hops
+        node.routing = new_routing
+        return node
+
+
+def resolve_auto_hops(kernel: spir.Kernel) -> spir.Kernel:
+    """
+    Resolves all ``hops = auto`` routing declarations into explicit hop lists.
+
+    Uses a shortest X-then-Y path: first traverse all steps in the X direction,
+    then all steps in the Y direction.  This matches the natural column-major
+    routing expected by the CSL backend.
+    """
+    return _AutoHopResolver().visit(kernel)
+
+
 class _BulkCommunicationLowerer(spir.NodeTransformer):
 
     def __init__(self, place: spir.PlaceBlock):
