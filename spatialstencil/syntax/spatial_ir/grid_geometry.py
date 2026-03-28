@@ -238,18 +238,53 @@ def _rectangles_equal(rect1: Rectangle, rect2: Rectangle) -> bool:
     """
     return rect1.x_range == rect2.x_range and rect1.y_range == rect2.y_range
 
+def _checkerboard(rect: Rectangle[T], x_stride: int, y_stride: int) -> list[Rectangle[T]]:
+    """
+    Decompose a rectangle into sub-rectangles whose strides match (x_stride, y_stride).
+
+    When rect has stride 1 in a dimension and the target stride is N > 1, this produces
+    N sub-rectangles (one per offset 0..N-1) that together tile rect exactly.
+    If the strides already match in a dimension no extra splitting happens there.
+
+    :param rect: The rectangle to checkerboard.
+    :param x_stride: Target X stride (must be a multiple of rect.x_range[2]).
+    :param y_stride: Target Y stride (must be a multiple of rect.y_range[2]).
+    :return: List of rectangles with the target strides that together cover rect.
+    """
+    x_start, x_stop, x_s = rect.x_range
+    y_start, y_stop, y_s = rect.y_range
+
+    results: list[Rectangle[T]] = []
+    for dx in range(x_stride // x_s):
+        new_x_start = x_start + dx * x_s
+        if new_x_start >= x_stop:
+            continue
+        for dy in range(y_stride // y_s):
+            new_y_start = y_start + dy * y_s
+            if new_y_start >= y_stop:
+                continue
+            results.append(Rectangle(
+                (new_x_start, x_stop, x_stride),
+                (new_y_start, y_stop, y_stride),
+                rect.metadata,
+            ))
+    return results
+
+
 def split_rectangle(rect1: Rectangle[T], rect2: Rectangle) -> list[Rectangle[T]]:
     """
     Split rect1 by rect2 and return the non-overlapping parts, preserving metadata.
-    Assumes x-strides are equal to each other and y-strides are equal to each other.
-    If not the case, please apply checkerboarding first.
-    
-    The result consists of the intersection (if any) plus up to 4 rectangles:
+
+    When the strides of rect1 and rect2 differ (and one stride is 1), rect1 is first
+    checkerboarded into sub-blocks whose strides match rect2, then each sub-block is
+    split using the equal-stride path.
+
+    The equal-stride result consists of the intersection (if any) plus up to 4 rectangles:
     - Top: above the intersection (spans full width of rect1)
     - Bottom: below the intersection (spans full width of rect1)
     - Left: to the left of the intersection (spans intersection height)
     - Right: to the right of the intersection (spans intersection height)
-    
+
     :param rect1: The rectangle to split
     :param rect2: The rectangle to split by
     :return: A list of non-overlapping sub-rectangles of rect1, which together
@@ -260,10 +295,24 @@ def split_rectangle(rect1: Rectangle[T], rect2: Rectangle) -> list[Rectangle[T]]
     y1_start, y1_stop, y1_stride = rect1.y_range
     x2_start, x2_stop, x2_stride = rect2.x_range
     y2_start, y2_stop, y2_stride = rect2.y_range
-    
-    # Verify equal strides assumption
-    assert x1_stride == x2_stride, "X strides must be equal. Apply checkerboarding before splitting."
-    assert y1_stride == y2_stride, "Y strides must be equal. Apply checkerboarding before splitting."
+
+    # If strides differ, checkerboard rect1 to match rect2's strides, then split each piece.
+    # We only need to checkerboard when rect1 is the fine-grained rectangle (smaller stride);
+    # when rect1 already has the larger stride, fall through to the direct intersection split.
+    if x1_stride != x2_stride or y1_stride != y2_stride:
+        assert x1_stride == 1 or x2_stride == 1 or x1_stride == x2_stride, \
+            f"Cannot split: incompatible X strides {x1_stride} vs {x2_stride}"
+        assert y1_stride == 1 or y2_stride == 1 or y1_stride == y2_stride, \
+            f"Cannot split: incompatible Y strides {y1_stride} vs {y2_stride}"
+        if x1_stride < x2_stride or y1_stride < y2_stride:
+            target_x = max(x1_stride, x2_stride)
+            target_y = max(y1_stride, y2_stride)
+            pieces = _checkerboard(rect1, target_x, target_y)
+            result: list[Rectangle[T]] = []
+            for piece in pieces:
+                result.extend(split_rectangle(piece, rect2))
+            return result
+        # rect1 has larger strides than rect2; fall through to the intersection split below.
     
     intersection = rect1.intersection(rect2)
     

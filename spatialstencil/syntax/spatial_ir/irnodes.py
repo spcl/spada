@@ -1251,29 +1251,28 @@ class Kernel(SpatialNode):
         if any(isinstance(stmt, MetaForBlock) for stmt in self.body):
             raise NotImplementedError('Subgrid extraction requires unrolling of metaprogramming blocks.')
 
+        def _to_range3(t: tuple) -> tuple[int, int, int]:
+            """Normalise a 1-tuple (scalar point) to a 3-tuple (start, start+1, 1)."""
+            if len(t) == 1:
+                return (t[0], t[0] + 1, 1)
+            return t
+
+        def _make_rect(block, phase_id):
+            x = _to_range3(block.subgrid.x_range.as_tuple())
+            y = _to_range3(block.subgrid.y_range.as_tuple())
+            return Rectangle(x, y, (phase_id, block))
+
         rectangles = []
         phase_id = 1
         for elem in self.body:
             if isinstance(elem, Phase):
-                rectangles.extend([
-                    Rectangle(a.subgrid.x_range.as_tuple(), a.subgrid.y_range.as_tuple(), (phase_id, a))
-                    for a in elem.place
-                ])
-
-                rectangles.extend([
-                    Rectangle(a.subgrid.x_range.as_tuple(), a.subgrid.y_range.as_tuple(), (phase_id, a))
-                    for a in elem.dataflow
-                ])
-
-                rectangles.extend([
-                    Rectangle(a.subgrid.x_range.as_tuple(), a.subgrid.y_range.as_tuple(), (phase_id, a))
-                    for a in elem.compute
-                ])
+                rectangles.extend([_make_rect(a, phase_id) for a in elem.place])
+                rectangles.extend([_make_rect(a, phase_id) for a in elem.dataflow])
+                rectangles.extend([_make_rect(a, phase_id) for a in elem.compute])
                 phase_id += 1
             else:
                 assert isinstance(elem, (ComputeBlock, DataflowBlock, PlaceBlock))
-                rectangles.append(
-                    Rectangle(elem.subgrid.x_range.as_tuple(), elem.subgrid.y_range.as_tuple(), (0, elem)))
+                rectangles.append(_make_rect(elem, 0))
 
         return rectangles
 
