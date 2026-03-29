@@ -1,19 +1,16 @@
 /**
- * Simple x-axis multicast: PE (0,0) receives one value from the host,
+ * Simple x-axis multicast: PE (0,0) receives two values from the host,
  * outputs it locally, and multicasts it to PEs (1,0) ... (K-1,0).
  * Every PE writes its copy to the output.
- *
- * Input:  stream<f32,1>[1,1] — one f32 delivered to PE (0,0).
- * Output: stream<f32,1>[K,1] — K f32 values, one per PE.
  *
  * Expected: OUT_out[k, 0, 0] == inp[0, 0, 0]  for k in 0..K-1.
  **/
 kernel @multicast_simple_x<K>(
-    stream<f32, 1>[1, 1] readonly  inp,
-    stream<f32, 1>[K, 1] writeonly out
+    stream<f32, 2>[1, 1] readonly  inp,
+    stream<f32, 2>[K, 1] writeonly out
 ) {
     place u16 i, u16 j in [0:K, 0:1] {
-        f32 [1] val
+        f32[2] val
     }
 
     dataflow u16 i, u16 j in [0:K, 0:1] {

@@ -39,7 +39,7 @@ def _multicast_kernel(K: int | str = 'K', channel: int = 0) -> str:
     return f"""
     kernel @test<K>() {{
         place u16 i, u16 j in [0:1, 0:K] {{
-            f32 val
+            f32[1] val
         }}
         dataflow u16 i, u16 j in [0:1, 0:K] {{
             stream<f32> s = relative_stream(0, [1:K]) {{
@@ -232,7 +232,7 @@ def test_multicast_error_send_and_receive_same_rectangle():
     """A compute rectangle that both sends and receives on a multicast stream must be rejected."""
     code = """
     kernel @test<>() {
-        place u16 i, u16 j in [0:1, 0:4] { f32 val }
+        place u16 i, u16 j in [0:1, 0:4] { f32[1] val }
         dataflow u16 i, u16 j in [0:1, 0:4] {
             stream<f32> s = relative_stream(0, [1:3]) { hops = auto, channel = 0 }
         }
