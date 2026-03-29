@@ -10,86 +10,86 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[4, 4] readonly _u_po
     f32[5] utens_0_0_0
     f32[5] utens_stage_0_0_0
     f32[5] wcon_0_0_0
-    f32[5] _refactored_wcon_1_0_0_0_0#1
-    f32[2] gcv_0_0_0
-    f32[2] _temp_0_0_0
-    f32[2] _temp_0_0_0#1
-    f32[2] cs_0_0_0
-    f32[2] ccol_0_0_0#1
-    f32[2] bcol_0_0_0
-    f32[2] correction_term_0_0_0
-    f32[2] _temp_0_0_0#2
-    f32[2] dcol_0_0_0#1
-    f32[2] _temp_0_0_0#3
-    f32[2] _temp_0_0_0#4
-    f32[2] _temp_0_0_0#5
-    f32[2] divided_0_0_0
-    f32[2] ccol_0_0_0#2
-    f32[2] dcol_0_0_0#2
-    f32[4] gav_0_0_m1
-    f32[4] gav_0_0_0
-    f32[4] _temp_0_0_0#6
-    f32[4] gcv_0_0_m1
-    f32[4] gcv_0_0_0#1
-    f32[4] _temp_0_0_0#7
-    f32[4] _temp_0_0_0#8
-    f32[4] as__0_0_m1
-    f32[4] as__0_0_0
-    f32[4] cs_0_0_m1
-    f32[4] cs_0_0_0#1
-    f32[4] acol_0_0_0
-    f32[4] ccol_0_0_m1
-    f32[4] ccol_0_0_0#3
-    f32[4] bcol_0_0_0#1
-    f32[4] _temp_0_0_0#9
-    f32[4] correction_term_0_0_m1
-    f32[4] correction_term_0_0_0#1
-    f32[4] _temp_0_0_0#10
-    f32[4] _temp_0_0_0#11
-    f32[4] _temp_0_0_0#12
-    f32[4] _temp_0_0_0#13
-    f32[4] dcol_0_0_m1
-    f32[4] dcol_0_0_0#3
-    f32[4] _temp_0_0_0#14
-    f32[4] _temp_0_0_0#15
-    f32[4] _temp_0_0_0#16
-    f32[4] divided_0_0_0#1
-    f32[4] _temp_0_0_0#17
-    f32[4] _temp_0_0_0#18
-    f32[4] ccol_0_0_0#4
-    f32[4] dcol_0_0_0#4
-    f32[4] _temp_0_0_0#19
-    f32[4] _temp_0_0_0#20
-    f32[5] gav_0_0_m1#1
-    f32[5] gav_0_0_0#1
-    f32[5] _temp_0_0_0#21
-    f32[5] as__0_0_m1#1
-    f32[5] as__0_0_0#1
-    f32[5] acol_0_0_0#1
-    f32[5] bcol_0_0_0#2
-    f32[5] correction_term_0_0_m1#1
-    f32[5] correction_term_0_0_0#2
-    f32[5] _temp_0_0_0#22
-    f32[5] dcol_0_0_m1#1
-    f32[5] dcol_0_0_0#5
-    f32[5] _temp_0_0_0#23
-    f32[5] _temp_0_0_0#24
-    f32[5] _temp_0_0_0#25
-    f32[5] divided_0_0_0#2
-    f32[5] _temp_0_0_0#26
-    f32[5] _temp_0_0_0#27
-    f32[5] dcol_0_0_0#6
-    f32[5] _temp_0_0_0#28
-    f32[5] _temp_0_0_0#29
-    f32[5] datacol_0_0_0
-    f32[5] data_col_0_0_0#1
-    f32[5] utens_stage_0_0_0#2
-    f32[5] _temp_0_0_0#30
-    f32[4] datacol_0_0_0#1
+    f32[5] _refactored_wcon_1_0_0_0_0#2
+    f32[2] gcv_0_0_0#1
+    f32[2] _temp_0_0_0#6
+    f32[2] _temp_0_0_0#7
+    f32[2] cs_0_0_0#1
+    f32[2] ccol_0_0_0#3
+    f32[2] bcol_0_0_0#1
+    f32[2] correction_term_0_0_0#1
+    f32[2] _temp_0_0_0#8
+    f32[2] dcol_0_0_0#3
+    f32[2] _temp_0_0_0#9
+    f32[2] _temp_0_0_0#10
+    f32[2] _temp_0_0_0#11
+    f32[2] divided_0_0_0#1
+    f32[2] ccol_0_0_0#4
+    f32[2] dcol_0_0_0#4
+    f32[4] gav_0_0_m1#1
+    f32[4] gav_0_0_0#1
+    f32[4] _temp_0_0_0#27
+    f32[4] gcv_0_0_m1#1
+    f32[4] gcv_0_0_0#3
+    f32[4] _temp_0_0_0#28
+    f32[4] _temp_0_0_0#29
+    f32[4] as__0_0_m1#1
+    f32[4] as__0_0_0#1
+    f32[4] cs_0_0_m1#1
+    f32[4] cs_0_0_0#3
+    f32[4] acol_0_0_0#1
+    f32[4] ccol_0_0_m1#1
+    f32[4] ccol_0_0_0#7
+    f32[4] bcol_0_0_0#3
+    f32[4] _temp_0_0_0#30
+    f32[4] correction_term_0_0_m1#1
+    f32[4] correction_term_0_0_0#3
     f32[4] _temp_0_0_0#31
-    f32[4] data_col_0_0_0#2
-    f32[4] utens_stage_0_0_0#3
     f32[4] _temp_0_0_0#32
+    f32[4] _temp_0_0_0#33
+    f32[4] _temp_0_0_0#34
+    f32[4] dcol_0_0_m1#1
+    f32[4] dcol_0_0_0#7
+    f32[4] _temp_0_0_0#35
+    f32[4] _temp_0_0_0#36
+    f32[4] _temp_0_0_0#37
+    f32[4] divided_0_0_0#3
+    f32[4] _temp_0_0_0#38
+    f32[4] _temp_0_0_0#39
+    f32[4] ccol_0_0_0#8
+    f32[4] dcol_0_0_0#8
+    f32[4] _temp_0_0_0#40
+    f32[4] _temp_0_0_0#41
+    f32[5] gav_0_0_m1#3
+    f32[5] gav_0_0_0#3
+    f32[5] _temp_0_0_0#51
+    f32[5] as__0_0_m1#3
+    f32[5] as__0_0_0#3
+    f32[5] acol_0_0_0#3
+    f32[5] bcol_0_0_0#5
+    f32[5] correction_term_0_0_m1#3
+    f32[5] correction_term_0_0_0#5
+    f32[5] _temp_0_0_0#52
+    f32[5] dcol_0_0_m1#3
+    f32[5] dcol_0_0_0#11
+    f32[5] _temp_0_0_0#53
+    f32[5] _temp_0_0_0#54
+    f32[5] _temp_0_0_0#55
+    f32[5] divided_0_0_0#5
+    f32[5] _temp_0_0_0#56
+    f32[5] _temp_0_0_0#57
+    f32[5] dcol_0_0_0#12
+    f32[5] _temp_0_0_0#58
+    f32[5] _temp_0_0_0#59
+    f32[5] datacol_0_0_0#1
+    f32[5] data_col_0_0_0#2
+    f32[5] utens_stage_0_0_0#3
+    f32[5] _temp_0_0_0#61
+    f32[4] datacol_0_0_0#3
+    f32[4] _temp_0_0_0#64
+    f32[4] data_col_0_0_0#4
+    f32[4] utens_stage_0_0_0#5
+    f32[4] _temp_0_0_0#65
   }
   place u16 i, u16 j in [2:5:2 , 0:4:1] {
     f32[5] utens_stage_0_0_0#1
@@ -102,7 +102,7 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[4, 4] readonly _u_po
     f32[5] utens_0_0_0
     f32[5] utens_stage_0_0_0
     f32[5] wcon_0_0_0
-    f32[5] _refactored_wcon_1_0_0_0_0#1
+    f32[5] _refactored_wcon_1_0_0_0_0#3
     f32[2] gcv_0_0_0
     f32[2] _temp_0_0_0
     f32[2] _temp_0_0_0#1
@@ -120,68 +120,68 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[4, 4] readonly _u_po
     f32[2] dcol_0_0_0#2
     f32[4] gav_0_0_m1
     f32[4] gav_0_0_0
-    f32[4] _temp_0_0_0#6
+    f32[4] _temp_0_0_0#12
     f32[4] gcv_0_0_m1
-    f32[4] gcv_0_0_0#1
-    f32[4] _temp_0_0_0#7
-    f32[4] _temp_0_0_0#8
+    f32[4] gcv_0_0_0#2
+    f32[4] _temp_0_0_0#13
+    f32[4] _temp_0_0_0#14
     f32[4] as__0_0_m1
     f32[4] as__0_0_0
     f32[4] cs_0_0_m1
-    f32[4] cs_0_0_0#1
+    f32[4] cs_0_0_0#2
     f32[4] acol_0_0_0
     f32[4] ccol_0_0_m1
-    f32[4] ccol_0_0_0#3
-    f32[4] bcol_0_0_0#1
-    f32[4] _temp_0_0_0#9
-    f32[4] correction_term_0_0_m1
-    f32[4] correction_term_0_0_0#1
-    f32[4] _temp_0_0_0#10
-    f32[4] _temp_0_0_0#11
-    f32[4] _temp_0_0_0#12
-    f32[4] _temp_0_0_0#13
-    f32[4] dcol_0_0_m1
-    f32[4] dcol_0_0_0#3
-    f32[4] _temp_0_0_0#14
+    f32[4] ccol_0_0_0#5
+    f32[4] bcol_0_0_0#2
     f32[4] _temp_0_0_0#15
+    f32[4] correction_term_0_0_m1
+    f32[4] correction_term_0_0_0#2
     f32[4] _temp_0_0_0#16
-    f32[4] divided_0_0_0#1
     f32[4] _temp_0_0_0#17
     f32[4] _temp_0_0_0#18
-    f32[4] ccol_0_0_0#4
-    f32[4] dcol_0_0_0#4
     f32[4] _temp_0_0_0#19
+    f32[4] dcol_0_0_m1
+    f32[4] dcol_0_0_0#5
     f32[4] _temp_0_0_0#20
-    f32[5] gav_0_0_m1#1
-    f32[5] gav_0_0_0#1
-    f32[5] _temp_0_0_0#21
-    f32[5] as__0_0_m1#1
-    f32[5] as__0_0_0#1
-    f32[5] acol_0_0_0#1
-    f32[5] bcol_0_0_0#2
-    f32[5] correction_term_0_0_m1#1
-    f32[5] correction_term_0_0_0#2
-    f32[5] _temp_0_0_0#22
-    f32[5] dcol_0_0_m1#1
-    f32[5] dcol_0_0_0#5
-    f32[5] _temp_0_0_0#23
-    f32[5] _temp_0_0_0#24
-    f32[5] _temp_0_0_0#25
-    f32[5] divided_0_0_0#2
-    f32[5] _temp_0_0_0#26
-    f32[5] _temp_0_0_0#27
-    f32[5] dcol_0_0_0#6
-    f32[5] _temp_0_0_0#28
-    f32[5] _temp_0_0_0#29
+    f32[4] _temp_0_0_0#21
+    f32[4] _temp_0_0_0#22
+    f32[4] divided_0_0_0#2
+    f32[4] _temp_0_0_0#23
+    f32[4] _temp_0_0_0#24
+    f32[4] ccol_0_0_0#6
+    f32[4] dcol_0_0_0#6
+    f32[4] _temp_0_0_0#25
+    f32[4] _temp_0_0_0#26
+    f32[5] gav_0_0_m1#2
+    f32[5] gav_0_0_0#2
+    f32[5] _temp_0_0_0#42
+    f32[5] as__0_0_m1#2
+    f32[5] as__0_0_0#2
+    f32[5] acol_0_0_0#2
+    f32[5] bcol_0_0_0#4
+    f32[5] correction_term_0_0_m1#2
+    f32[5] correction_term_0_0_0#4
+    f32[5] _temp_0_0_0#43
+    f32[5] dcol_0_0_m1#2
+    f32[5] dcol_0_0_0#9
+    f32[5] _temp_0_0_0#44
+    f32[5] _temp_0_0_0#45
+    f32[5] _temp_0_0_0#46
+    f32[5] divided_0_0_0#4
+    f32[5] _temp_0_0_0#47
+    f32[5] _temp_0_0_0#48
+    f32[5] dcol_0_0_0#10
+    f32[5] _temp_0_0_0#49
+    f32[5] _temp_0_0_0#50
     f32[5] datacol_0_0_0
     f32[5] data_col_0_0_0#1
     f32[5] utens_stage_0_0_0#2
-    f32[5] _temp_0_0_0#30
-    f32[4] datacol_0_0_0#1
-    f32[4] _temp_0_0_0#31
-    f32[4] data_col_0_0_0#2
-    f32[4] utens_stage_0_0_0#3
-    f32[4] _temp_0_0_0#32
+    f32[5] _temp_0_0_0#60
+    f32[4] datacol_0_0_0#2
+    f32[4] _temp_0_0_0#62
+    f32[4] data_col_0_0_0#3
+    f32[4] utens_stage_0_0_0#4
+    f32[4] _temp_0_0_0#63
   }
   place u16 i, u16 j in [3:5:2 , 0:4:1] {
     f32[5] utens_stage_0_0_0#1
@@ -194,7 +194,7 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[4, 4] readonly _u_po
     f32[5] utens_0_0_0
     f32[5] utens_stage_0_0_0
     f32[5] wcon_0_0_0
-    f32[5] _refactored_wcon_1_0_0_0_0#1
+    f32[5] _refactored_wcon_1_0_0_0_0#3
     f32[2] gcv_0_0_0
     f32[2] _temp_0_0_0
     f32[2] _temp_0_0_0#1
@@ -212,68 +212,68 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[4, 4] readonly _u_po
     f32[2] dcol_0_0_0#2
     f32[4] gav_0_0_m1
     f32[4] gav_0_0_0
-    f32[4] _temp_0_0_0#6
+    f32[4] _temp_0_0_0#12
     f32[4] gcv_0_0_m1
-    f32[4] gcv_0_0_0#1
-    f32[4] _temp_0_0_0#7
-    f32[4] _temp_0_0_0#8
+    f32[4] gcv_0_0_0#2
+    f32[4] _temp_0_0_0#13
+    f32[4] _temp_0_0_0#14
     f32[4] as__0_0_m1
     f32[4] as__0_0_0
     f32[4] cs_0_0_m1
-    f32[4] cs_0_0_0#1
+    f32[4] cs_0_0_0#2
     f32[4] acol_0_0_0
     f32[4] ccol_0_0_m1
-    f32[4] ccol_0_0_0#3
-    f32[4] bcol_0_0_0#1
-    f32[4] _temp_0_0_0#9
-    f32[4] correction_term_0_0_m1
-    f32[4] correction_term_0_0_0#1
-    f32[4] _temp_0_0_0#10
-    f32[4] _temp_0_0_0#11
-    f32[4] _temp_0_0_0#12
-    f32[4] _temp_0_0_0#13
-    f32[4] dcol_0_0_m1
-    f32[4] dcol_0_0_0#3
-    f32[4] _temp_0_0_0#14
+    f32[4] ccol_0_0_0#5
+    f32[4] bcol_0_0_0#2
     f32[4] _temp_0_0_0#15
+    f32[4] correction_term_0_0_m1
+    f32[4] correction_term_0_0_0#2
     f32[4] _temp_0_0_0#16
-    f32[4] divided_0_0_0#1
     f32[4] _temp_0_0_0#17
     f32[4] _temp_0_0_0#18
-    f32[4] ccol_0_0_0#4
-    f32[4] dcol_0_0_0#4
     f32[4] _temp_0_0_0#19
+    f32[4] dcol_0_0_m1
+    f32[4] dcol_0_0_0#5
     f32[4] _temp_0_0_0#20
-    f32[5] gav_0_0_m1#1
-    f32[5] gav_0_0_0#1
-    f32[5] _temp_0_0_0#21
-    f32[5] as__0_0_m1#1
-    f32[5] as__0_0_0#1
-    f32[5] acol_0_0_0#1
-    f32[5] bcol_0_0_0#2
-    f32[5] correction_term_0_0_m1#1
-    f32[5] correction_term_0_0_0#2
-    f32[5] _temp_0_0_0#22
-    f32[5] dcol_0_0_m1#1
-    f32[5] dcol_0_0_0#5
-    f32[5] _temp_0_0_0#23
-    f32[5] _temp_0_0_0#24
-    f32[5] _temp_0_0_0#25
-    f32[5] divided_0_0_0#2
-    f32[5] _temp_0_0_0#26
-    f32[5] _temp_0_0_0#27
-    f32[5] dcol_0_0_0#6
-    f32[5] _temp_0_0_0#28
-    f32[5] _temp_0_0_0#29
+    f32[4] _temp_0_0_0#21
+    f32[4] _temp_0_0_0#22
+    f32[4] divided_0_0_0#2
+    f32[4] _temp_0_0_0#23
+    f32[4] _temp_0_0_0#24
+    f32[4] ccol_0_0_0#6
+    f32[4] dcol_0_0_0#6
+    f32[4] _temp_0_0_0#25
+    f32[4] _temp_0_0_0#26
+    f32[5] gav_0_0_m1#2
+    f32[5] gav_0_0_0#2
+    f32[5] _temp_0_0_0#42
+    f32[5] as__0_0_m1#2
+    f32[5] as__0_0_0#2
+    f32[5] acol_0_0_0#2
+    f32[5] bcol_0_0_0#4
+    f32[5] correction_term_0_0_m1#2
+    f32[5] correction_term_0_0_0#4
+    f32[5] _temp_0_0_0#43
+    f32[5] dcol_0_0_m1#2
+    f32[5] dcol_0_0_0#9
+    f32[5] _temp_0_0_0#44
+    f32[5] _temp_0_0_0#45
+    f32[5] _temp_0_0_0#46
+    f32[5] divided_0_0_0#4
+    f32[5] _temp_0_0_0#47
+    f32[5] _temp_0_0_0#48
+    f32[5] dcol_0_0_0#10
+    f32[5] _temp_0_0_0#49
+    f32[5] _temp_0_0_0#50
     f32[5] datacol_0_0_0
     f32[5] data_col_0_0_0#1
     f32[5] utens_stage_0_0_0#2
-    f32[5] _temp_0_0_0#30
-    f32[4] datacol_0_0_0#1
-    f32[4] _temp_0_0_0#31
-    f32[4] data_col_0_0_0#2
-    f32[4] utens_stage_0_0_0#3
-    f32[4] _temp_0_0_0#32
+    f32[5] _temp_0_0_0#60
+    f32[4] datacol_0_0_0#2
+    f32[4] _temp_0_0_0#62
+    f32[4] data_col_0_0_0#3
+    f32[4] utens_stage_0_0_0#4
+    f32[4] _temp_0_0_0#63
   }
   place u16 i#1, u16 j#1 in [5:6:2 , 0:4:1] {
     f32[5] wcon_0_0_0
@@ -283,43 +283,43 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[4, 4] readonly _u_po
   }
   dataflow u16 i#5, u16 j#5 in [5:6:2 , 0:4:1] {
     stream<f32> _stream_wcon#1 = relative_stream(-1, 0) {
-      hops = [(-1, 0)], 
-      channel = 0
-    }
+  hops = [(-1, 0)], 
+  channel = 0
+}
     stream<f32> _stream_wcon#2 = relative_stream(-1, 0) {
-      hops = [(-1, 0)], 
-      channel = 1
-    }
+  hops = [(-1, 0)], 
+  channel = 1
+}
   }
   dataflow u16 i#5, u16 j#5 in [2:5:2 , 0:4:1] {
-    stream<f32> _stream_wcon#1 = relative_stream(-1, 0) {
-      hops = [(-1, 0)], 
-      channel = 0
-    }
-    stream<f32> _stream_wcon#2 = relative_stream(-1, 0) {
-      hops = [(-1, 0)], 
-      channel = 1
-    }
+    stream<f32> _stream_wcon#3 = relative_stream(-1, 0) {
+  hops = [(-1, 0)], 
+  channel = 2
+}
+    stream<f32> _stream_wcon#4 = relative_stream(-1, 0) {
+  hops = [(-1, 0)], 
+  channel = 3
+}
   }
   dataflow u16 i#5, u16 j#5 in [3:5:2 , 0:4:1] {
-    stream<f32> _stream_wcon#1 = relative_stream(-1, 0) {
-      hops = [(-1, 0)], 
-      channel = 0
-    }
-    stream<f32> _stream_wcon#2 = relative_stream(-1, 0) {
-      hops = [(-1, 0)], 
-      channel = 1
-    }
+    stream<f32> _stream_wcon#3 = relative_stream(-1, 0) {
+  hops = [(-1, 0)], 
+  channel = 2
+}
+    stream<f32> _stream_wcon#4 = relative_stream(-1, 0) {
+  hops = [(-1, 0)], 
+  channel = 3
+}
   }
   dataflow u16 i#5, u16 j#5 in [1:2:2 , 0:4:1] {
-    stream<f32> _stream_wcon#1 = relative_stream(-1, 0) {
-      hops = [(-1, 0)], 
-      channel = 0
-    }
-    stream<f32> _stream_wcon#2 = relative_stream(-1, 0) {
-      hops = [(-1, 0)], 
-      channel = 1
-    }
+    stream<f32> _stream_wcon#5 = relative_stream(-1, 0) {
+  hops = [(-1, 0)], 
+  channel = 4
+}
+    stream<f32> _stream_wcon#6 = relative_stream(-1, 0) {
+  hops = [(-1, 0)], 
+  channel = 5
+}
   }
   compute u16 i#2, u16 j#2 in [1:2:2 , 0:4:1] {
     await receive(u_pos_0_0_0, _u_pos[i#2, j#2])
@@ -328,104 +328,104 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[4, 4] readonly _u_po
     await receive(utens_stage_0_0_0, _utens_stage[i#2, j#2])
     await receive(wcon_0_0_0, _wcon[i#2, j#2])
     awaitall
-    completion _recv_comp = foreach i32 k, f32 x in [0:5:1], receive(_stream_wcon#2) {
-      _refactored_wcon_1_0_0_0_0#1[k] = x
+    completion _recv_comp = foreach i32 k, f32 x in [0:5:1], receive(_stream_wcon#6) {
+      _refactored_wcon_1_0_0_0_0#2[k] = x
     }
     await _recv_comp
     await map i32 k#1 in [0:4:1] {
-      _refactored_wcon_1_0_0_0_0[k#1] = _refactored_wcon_1_0_0_0_0#1[k#1]
+      _refactored_wcon_1_0_0_0_0[k#1] = _refactored_wcon_1_0_0_0_0#2[k#1]
     }
     awaitall
     for i32 k#2 in [0:1:1] {
-      _temp_0_0_0[k#2] = _refactored_wcon_1_0_0_0_0[(k#2 + 1)]
-      _temp_0_0_0#1[k#2] = (_temp_0_0_0[k#2] + wcon_0_0_0[(k#2 + 1)])
-      gcv_0_0_0[k#2] = (0.25 * _temp_0_0_0#1[k#2])
-      cs_0_0_0[k#2] = (gcv_0_0_0[k#2] * 0.5)
-      ccol_0_0_0#1[k#2] = (gcv_0_0_0[k#2] * 0.5)
-      bcol_0_0_0[k#2] = (_dtr_stage - ccol_0_0_0#1[k#2])
-      _temp_0_0_0#2[k#2] = (u_stage_0_0_0[(k#2 + 1)] - u_stage_0_0_0[k#2])
-      correction_term_0_0_0[k#2] = (-cs_0_0_0[k#2] * _temp_0_0_0#2[k#2])
-      _temp_0_0_0#3[k#2] = (_dtr_stage * u_pos_0_0_0[k#2])
-      _temp_0_0_0#4[k#2] = (_temp_0_0_0#3[k#2] + utens_0_0_0[k#2])
-      _temp_0_0_0#5[k#2] = (_temp_0_0_0#4[k#2] + utens_stage_0_0_0[k#2])
-      dcol_0_0_0#1[k#2] = (_temp_0_0_0#5[k#2] + correction_term_0_0_0[k#2])
-      divided_0_0_0[k#2] = (1.0 / bcol_0_0_0[k#2])
-      ccol_0_0_0#2[k#2] = (ccol_0_0_0#1[k#2] * divided_0_0_0[k#2])
-      dcol_0_0_0#2[k#2] = (dcol_0_0_0#1[k#2] * divided_0_0_0[k#2])
-      ccol_0_0_0[k#2] = ccol_0_0_0#2[k#2]
-      dcol_0_0_0[k#2] = dcol_0_0_0#2[k#2]
+      _temp_0_0_0#6[k#2] = _refactored_wcon_1_0_0_0_0[(k#2 + 1)]
+      _temp_0_0_0#7[k#2] = (_temp_0_0_0#6[k#2] + wcon_0_0_0[(k#2 + 1)])
+      gcv_0_0_0#1[k#2] = (0.25 * _temp_0_0_0#7[k#2])
+      cs_0_0_0#1[k#2] = (gcv_0_0_0#1[k#2] * 0.5)
+      ccol_0_0_0#3[k#2] = (gcv_0_0_0#1[k#2] * 0.5)
+      bcol_0_0_0#1[k#2] = (_dtr_stage - ccol_0_0_0#3[k#2])
+      _temp_0_0_0#8[k#2] = (u_stage_0_0_0[(k#2 + 1)] - u_stage_0_0_0[k#2])
+      correction_term_0_0_0#1[k#2] = (-cs_0_0_0#1[k#2] * _temp_0_0_0#8[k#2])
+      _temp_0_0_0#9[k#2] = (_dtr_stage * u_pos_0_0_0[k#2])
+      _temp_0_0_0#10[k#2] = (_temp_0_0_0#9[k#2] + utens_0_0_0[k#2])
+      _temp_0_0_0#11[k#2] = (_temp_0_0_0#10[k#2] + utens_stage_0_0_0[k#2])
+      dcol_0_0_0#3[k#2] = (_temp_0_0_0#11[k#2] + correction_term_0_0_0#1[k#2])
+      divided_0_0_0#1[k#2] = (1.0 / bcol_0_0_0#1[k#2])
+      ccol_0_0_0#4[k#2] = (ccol_0_0_0#3[k#2] * divided_0_0_0#1[k#2])
+      dcol_0_0_0#4[k#2] = (dcol_0_0_0#3[k#2] * divided_0_0_0#1[k#2])
+      ccol_0_0_0[k#2] = ccol_0_0_0#4[k#2]
+      dcol_0_0_0[k#2] = dcol_0_0_0#4[k#2]
     }
     awaitall
     for i32 k#3 in [1:3:1] {
-      _temp_0_0_0#6[k#3] = (_refactored_wcon_1_0_0_0_0[k#3] + wcon_0_0_0[k#3])
-      gav_0_0_0[k#3] = (-0.25 * _temp_0_0_0#6[k#3])
-      _temp_0_0_0#7[k#3] = _refactored_wcon_1_0_0_0_0[(k#3 + 1)]
-      _temp_0_0_0#8[k#3] = (_temp_0_0_0#7[k#3] + wcon_0_0_0[(k#3 + 1)])
-      gcv_0_0_0#1[k#3] = (0.25 * _temp_0_0_0#8[k#3])
-      as__0_0_0[k#3] = (gav_0_0_0[k#3] * 0.5)
-      cs_0_0_0#1[k#3] = (gcv_0_0_0#1[k#3] * 0.5)
-      acol_0_0_0[k#3] = (gav_0_0_0[k#3] * 0.5)
-      ccol_0_0_0#3[k#3] = (gcv_0_0_0#1[k#3] * 0.5)
-      _temp_0_0_0#9[k#3] = (_dtr_stage - acol_0_0_0[k#3])
-      bcol_0_0_0#1[k#3] = (_temp_0_0_0#9[k#3] - ccol_0_0_0#3[k#3])
-      _temp_0_0_0#10[k#3] = (u_stage_0_0_0[(k#3 + 1)] - u_stage_0_0_0[k#3])
-      _temp_0_0_0#11[k#3] = (cs_0_0_0#1[k#3] * _temp_0_0_0#10[k#3])
-      _temp_0_0_0#12[k#3] = (u_stage_0_0_0[(k#3 - 1)] - u_stage_0_0_0[k#3])
-      _temp_0_0_0#13[k#3] = (-as__0_0_0[k#3] * _temp_0_0_0#12[k#3])
-      correction_term_0_0_0#1[k#3] = (_temp_0_0_0#13[k#3] - _temp_0_0_0#11[k#3])
-      _temp_0_0_0#14[k#3] = (_dtr_stage * u_pos_0_0_0[k#3])
-      _temp_0_0_0#15[k#3] = (_temp_0_0_0#14[k#3] + utens_0_0_0[k#3])
-      _temp_0_0_0#16[k#3] = (_temp_0_0_0#15[k#3] + utens_stage_0_0_0[k#3])
-      dcol_0_0_0#3[k#3] = (_temp_0_0_0#16[k#3] + correction_term_0_0_0#1[k#3])
-      _temp_0_0_0#17[k#3] = (ccol_0_0_0#3[(k#3 - 1)] * acol_0_0_0[k#3])
-      _temp_0_0_0#18[k#3] = (bcol_0_0_0#1[k#3] - _temp_0_0_0#17[k#3])
-      divided_0_0_0#1[k#3] = (1.0 / _temp_0_0_0#18[k#3])
-      ccol_0_0_0#4[k#3] = (ccol_0_0_0#3[k#3] * divided_0_0_0#1[k#3])
-      _temp_0_0_0#19[k#3] = (dcol_0_0_0#3[(k#3 - 1)] * acol_0_0_0[k#3])
-      _temp_0_0_0#20[k#3] = (dcol_0_0_0#3[k#3] - _temp_0_0_0#19[k#3])
-      dcol_0_0_0#4[k#3] = (_temp_0_0_0#20[k#3] * divided_0_0_0#1[k#3])
-      ccol_0_0_0[k#3] = ccol_0_0_0#4[k#3]
-      dcol_0_0_0[k#3] = dcol_0_0_0#4[k#3]
+      _temp_0_0_0#27[k#3] = (_refactored_wcon_1_0_0_0_0[k#3] + wcon_0_0_0[k#3])
+      gav_0_0_0#1[k#3] = (-0.25 * _temp_0_0_0#27[k#3])
+      _temp_0_0_0#28[k#3] = _refactored_wcon_1_0_0_0_0[(k#3 + 1)]
+      _temp_0_0_0#29[k#3] = (_temp_0_0_0#28[k#3] + wcon_0_0_0[(k#3 + 1)])
+      gcv_0_0_0#3[k#3] = (0.25 * _temp_0_0_0#29[k#3])
+      as__0_0_0#1[k#3] = (gav_0_0_0#1[k#3] * 0.5)
+      cs_0_0_0#3[k#3] = (gcv_0_0_0#3[k#3] * 0.5)
+      acol_0_0_0#1[k#3] = (gav_0_0_0#1[k#3] * 0.5)
+      ccol_0_0_0#7[k#3] = (gcv_0_0_0#3[k#3] * 0.5)
+      _temp_0_0_0#30[k#3] = (_dtr_stage - acol_0_0_0#1[k#3])
+      bcol_0_0_0#3[k#3] = (_temp_0_0_0#30[k#3] - ccol_0_0_0#7[k#3])
+      _temp_0_0_0#31[k#3] = (u_stage_0_0_0[(k#3 + 1)] - u_stage_0_0_0[k#3])
+      _temp_0_0_0#32[k#3] = (cs_0_0_0#3[k#3] * _temp_0_0_0#31[k#3])
+      _temp_0_0_0#33[k#3] = (u_stage_0_0_0[(k#3 - 1)] - u_stage_0_0_0[k#3])
+      _temp_0_0_0#34[k#3] = (-as__0_0_0#1[k#3] * _temp_0_0_0#33[k#3])
+      correction_term_0_0_0#3[k#3] = (_temp_0_0_0#34[k#3] - _temp_0_0_0#32[k#3])
+      _temp_0_0_0#35[k#3] = (_dtr_stage * u_pos_0_0_0[k#3])
+      _temp_0_0_0#36[k#3] = (_temp_0_0_0#35[k#3] + utens_0_0_0[k#3])
+      _temp_0_0_0#37[k#3] = (_temp_0_0_0#36[k#3] + utens_stage_0_0_0[k#3])
+      dcol_0_0_0#7[k#3] = (_temp_0_0_0#37[k#3] + correction_term_0_0_0#3[k#3])
+      _temp_0_0_0#38[k#3] = (ccol_0_0_0[(k#3 - 1)] * acol_0_0_0#1[k#3])
+      _temp_0_0_0#39[k#3] = (bcol_0_0_0#3[k#3] - _temp_0_0_0#38[k#3])
+      divided_0_0_0#3[k#3] = (1.0 / _temp_0_0_0#39[k#3])
+      ccol_0_0_0#8[k#3] = (ccol_0_0_0#7[k#3] * divided_0_0_0#3[k#3])
+      _temp_0_0_0#40[k#3] = (dcol_0_0_0[(k#3 - 1)] * acol_0_0_0#1[k#3])
+      _temp_0_0_0#41[k#3] = (dcol_0_0_0#7[k#3] - _temp_0_0_0#40[k#3])
+      dcol_0_0_0#8[k#3] = (_temp_0_0_0#41[k#3] * divided_0_0_0#3[k#3])
+      ccol_0_0_0[k#3] = ccol_0_0_0#8[k#3]
+      dcol_0_0_0[k#3] = dcol_0_0_0#8[k#3]
     }
     awaitall
     for i32 k#4 in [3:4:1] {
-      _temp_0_0_0#21[k#4] = (_refactored_wcon_1_0_0_0_0[k#4] + wcon_0_0_0[k#4])
-      gav_0_0_0#1[k#4] = (-0.25 * _temp_0_0_0#21[k#4])
-      as__0_0_0#1[k#4] = (gav_0_0_0#1[k#4] * 0.5)
-      acol_0_0_0#1[k#4] = (gav_0_0_0#1[k#4] * 0.5)
-      bcol_0_0_0#2[k#4] = (_dtr_stage - acol_0_0_0#1[k#4])
-      _temp_0_0_0#22[k#4] = (u_stage_0_0_0[(k#4 - 1)] - u_stage_0_0_0[k#4])
-      correction_term_0_0_0#2[k#4] = (-as__0_0_0#1[k#4] * _temp_0_0_0#22[k#4])
-      _temp_0_0_0#23[k#4] = (_dtr_stage * u_pos_0_0_0[k#4])
-      _temp_0_0_0#24[k#4] = (_temp_0_0_0#23[k#4] + utens_0_0_0[k#4])
-      _temp_0_0_0#25[k#4] = (_temp_0_0_0#24[k#4] + utens_stage_0_0_0[k#4])
-      dcol_0_0_0#5[k#4] = (_temp_0_0_0#25[k#4] + correction_term_0_0_0#2[k#4])
-      _temp_0_0_0#26[k#4] = (ccol_0_0_0[(k#4 - 1)] * acol_0_0_0#1[k#4])
-      _temp_0_0_0#27[k#4] = (bcol_0_0_0#2[k#4] - _temp_0_0_0#26[k#4])
-      divided_0_0_0#2[k#4] = (1.0 / _temp_0_0_0#27[k#4])
-      _temp_0_0_0#28[k#4] = (dcol_0_0_0#5[(k#4 - 1)] * acol_0_0_0#1[k#4])
-      _temp_0_0_0#29[k#4] = (dcol_0_0_0#5[k#4] - _temp_0_0_0#28[k#4])
-      dcol_0_0_0#6[k#4] = (_temp_0_0_0#29[k#4] * divided_0_0_0#2[k#4])
-      dcol_0_0_0[k#4] = dcol_0_0_0#6[k#4]
+      _temp_0_0_0#51[k#4] = (_refactored_wcon_1_0_0_0_0[k#4] + wcon_0_0_0[k#4])
+      gav_0_0_0#3[k#4] = (-0.25 * _temp_0_0_0#51[k#4])
+      as__0_0_0#3[k#4] = (gav_0_0_0#3[k#4] * 0.5)
+      acol_0_0_0#3[k#4] = (gav_0_0_0#3[k#4] * 0.5)
+      bcol_0_0_0#5[k#4] = (_dtr_stage - acol_0_0_0#3[k#4])
+      _temp_0_0_0#52[k#4] = (u_stage_0_0_0[(k#4 - 1)] - u_stage_0_0_0[k#4])
+      correction_term_0_0_0#5[k#4] = (-as__0_0_0#3[k#4] * _temp_0_0_0#52[k#4])
+      _temp_0_0_0#53[k#4] = (_dtr_stage * u_pos_0_0_0[k#4])
+      _temp_0_0_0#54[k#4] = (_temp_0_0_0#53[k#4] + utens_0_0_0[k#4])
+      _temp_0_0_0#55[k#4] = (_temp_0_0_0#54[k#4] + utens_stage_0_0_0[k#4])
+      dcol_0_0_0#11[k#4] = (_temp_0_0_0#55[k#4] + correction_term_0_0_0#5[k#4])
+      _temp_0_0_0#56[k#4] = (ccol_0_0_0[(k#4 - 1)] * acol_0_0_0#3[k#4])
+      _temp_0_0_0#57[k#4] = (bcol_0_0_0#5[k#4] - _temp_0_0_0#56[k#4])
+      divided_0_0_0#5[k#4] = (1.0 / _temp_0_0_0#57[k#4])
+      _temp_0_0_0#58[k#4] = (dcol_0_0_0[(k#4 - 1)] * acol_0_0_0#3[k#4])
+      _temp_0_0_0#59[k#4] = (dcol_0_0_0#11[k#4] - _temp_0_0_0#58[k#4])
+      dcol_0_0_0#12[k#4] = (_temp_0_0_0#59[k#4] * divided_0_0_0#5[k#4])
+      dcol_0_0_0[k#4] = dcol_0_0_0#12[k#4]
     }
     awaitall
     for i32 k#5 in [3:2:-1] {
-      datacol_0_0_0[k#5] = dcol_0_0_0[k#5]
-      data_col_0_0_0#1[k#5] = datacol_0_0_0[k#5]
-      _temp_0_0_0#30[k#5] = (datacol_0_0_0[k#5] - u_pos_0_0_0[k#5])
-      utens_stage_0_0_0#2[k#5] = (_dtr_stage * _temp_0_0_0#30[k#5])
-      data_col_0_0_0[k#5] = data_col_0_0_0#1[k#5]
-      utens_stage_0_0_0#1[k#5] = utens_stage_0_0_0#2[k#5]
+      datacol_0_0_0#1[k#5] = dcol_0_0_0[k#5]
+      data_col_0_0_0#2[k#5] = datacol_0_0_0#1[k#5]
+      _temp_0_0_0#61[k#5] = (datacol_0_0_0#1[k#5] - u_pos_0_0_0[k#5])
+      utens_stage_0_0_0#3[k#5] = (_dtr_stage * _temp_0_0_0#61[k#5])
+      data_col_0_0_0[k#5] = data_col_0_0_0#2[k#5]
+      utens_stage_0_0_0#1[k#5] = utens_stage_0_0_0#3[k#5]
     }
     awaitall
     for i32 k#6 in [2:-1:-1] {
-      _temp_0_0_0#31[k#6] = (ccol_0_0_0[k#6] * data_col_0_0_0[(k#6 + 1)])
-      datacol_0_0_0#1[k#6] = (dcol_0_0_0[k#6] - _temp_0_0_0#31[k#6])
-      data_col_0_0_0#2[k#6] = datacol_0_0_0#1[k#6]
-      _temp_0_0_0#32[k#6] = (datacol_0_0_0#1[k#6] - u_pos_0_0_0[k#6])
-      utens_stage_0_0_0#3[k#6] = (_dtr_stage * _temp_0_0_0#32[k#6])
-      data_col_0_0_0[k#6] = data_col_0_0_0#2[k#6]
-      utens_stage_0_0_0#1[k#6] = utens_stage_0_0_0#3[k#6]
+      _temp_0_0_0#64[k#6] = (ccol_0_0_0[k#6] * data_col_0_0_0[(k#6 + 1)])
+      datacol_0_0_0#3[k#6] = (dcol_0_0_0[k#6] - _temp_0_0_0#64[k#6])
+      data_col_0_0_0#4[k#6] = datacol_0_0_0#3[k#6]
+      _temp_0_0_0#65[k#6] = (datacol_0_0_0#3[k#6] - u_pos_0_0_0[k#6])
+      utens_stage_0_0_0#5[k#6] = (_dtr_stage * _temp_0_0_0#65[k#6])
+      data_col_0_0_0[k#6] = data_col_0_0_0#4[k#6]
+      utens_stage_0_0_0#1[k#6] = utens_stage_0_0_0#5[k#6]
     }
     awaitall
     await send(utens_stage_0_0_0#1, __kernel_out_0[(i#2 - 1), (j#2 - 0)])
@@ -438,14 +438,14 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[4, 4] readonly _u_po
     await receive(utens_stage_0_0_0, _utens_stage[i#2, j#2])
     await receive(wcon_0_0_0, _wcon[i#2, j#2])
     awaitall
-    completion _recv_comp = foreach i32 k, f32 x in [0:5:1], receive(_stream_wcon#1) {
-      _refactored_wcon_1_0_0_0_0#1[k] = x
+    completion _recv_comp = foreach i32 k, f32 x in [0:5:1], receive(_stream_wcon#3) {
+      _refactored_wcon_1_0_0_0_0#3[k] = x
     }
-    completion _send_comp = send(wcon_0_0_0, _stream_wcon#2)
+    completion _send_comp = send(wcon_0_0_0, _stream_wcon#4)
     await _send_comp
     await _recv_comp
     await map i32 k#1 in [0:4:1] {
-      _refactored_wcon_1_0_0_0_0[k#1] = _refactored_wcon_1_0_0_0_0#1[k#1]
+      _refactored_wcon_1_0_0_0_0[k#1] = _refactored_wcon_1_0_0_0_0#3[k#1]
     }
     awaitall
     for i32 k#2 in [0:1:1] {
@@ -469,75 +469,75 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[4, 4] readonly _u_po
     }
     awaitall
     for i32 k#3 in [1:3:1] {
-      _temp_0_0_0#6[k#3] = (_refactored_wcon_1_0_0_0_0[k#3] + wcon_0_0_0[k#3])
-      gav_0_0_0[k#3] = (-0.25 * _temp_0_0_0#6[k#3])
-      _temp_0_0_0#7[k#3] = _refactored_wcon_1_0_0_0_0[(k#3 + 1)]
-      _temp_0_0_0#8[k#3] = (_temp_0_0_0#7[k#3] + wcon_0_0_0[(k#3 + 1)])
-      gcv_0_0_0#1[k#3] = (0.25 * _temp_0_0_0#8[k#3])
+      _temp_0_0_0#12[k#3] = (_refactored_wcon_1_0_0_0_0[k#3] + wcon_0_0_0[k#3])
+      gav_0_0_0[k#3] = (-0.25 * _temp_0_0_0#12[k#3])
+      _temp_0_0_0#13[k#3] = _refactored_wcon_1_0_0_0_0[(k#3 + 1)]
+      _temp_0_0_0#14[k#3] = (_temp_0_0_0#13[k#3] + wcon_0_0_0[(k#3 + 1)])
+      gcv_0_0_0#2[k#3] = (0.25 * _temp_0_0_0#14[k#3])
       as__0_0_0[k#3] = (gav_0_0_0[k#3] * 0.5)
-      cs_0_0_0#1[k#3] = (gcv_0_0_0#1[k#3] * 0.5)
+      cs_0_0_0#2[k#3] = (gcv_0_0_0#2[k#3] * 0.5)
       acol_0_0_0[k#3] = (gav_0_0_0[k#3] * 0.5)
-      ccol_0_0_0#3[k#3] = (gcv_0_0_0#1[k#3] * 0.5)
-      _temp_0_0_0#9[k#3] = (_dtr_stage - acol_0_0_0[k#3])
-      bcol_0_0_0#1[k#3] = (_temp_0_0_0#9[k#3] - ccol_0_0_0#3[k#3])
-      _temp_0_0_0#10[k#3] = (u_stage_0_0_0[(k#3 + 1)] - u_stage_0_0_0[k#3])
-      _temp_0_0_0#11[k#3] = (cs_0_0_0#1[k#3] * _temp_0_0_0#10[k#3])
-      _temp_0_0_0#12[k#3] = (u_stage_0_0_0[(k#3 - 1)] - u_stage_0_0_0[k#3])
-      _temp_0_0_0#13[k#3] = (-as__0_0_0[k#3] * _temp_0_0_0#12[k#3])
-      correction_term_0_0_0#1[k#3] = (_temp_0_0_0#13[k#3] - _temp_0_0_0#11[k#3])
-      _temp_0_0_0#14[k#3] = (_dtr_stage * u_pos_0_0_0[k#3])
-      _temp_0_0_0#15[k#3] = (_temp_0_0_0#14[k#3] + utens_0_0_0[k#3])
-      _temp_0_0_0#16[k#3] = (_temp_0_0_0#15[k#3] + utens_stage_0_0_0[k#3])
-      dcol_0_0_0#3[k#3] = (_temp_0_0_0#16[k#3] + correction_term_0_0_0#1[k#3])
-      _temp_0_0_0#17[k#3] = (ccol_0_0_0#3[(k#3 - 1)] * acol_0_0_0[k#3])
-      _temp_0_0_0#18[k#3] = (bcol_0_0_0#1[k#3] - _temp_0_0_0#17[k#3])
-      divided_0_0_0#1[k#3] = (1.0 / _temp_0_0_0#18[k#3])
-      ccol_0_0_0#4[k#3] = (ccol_0_0_0#3[k#3] * divided_0_0_0#1[k#3])
-      _temp_0_0_0#19[k#3] = (dcol_0_0_0#3[(k#3 - 1)] * acol_0_0_0[k#3])
-      _temp_0_0_0#20[k#3] = (dcol_0_0_0#3[k#3] - _temp_0_0_0#19[k#3])
-      dcol_0_0_0#4[k#3] = (_temp_0_0_0#20[k#3] * divided_0_0_0#1[k#3])
-      ccol_0_0_0[k#3] = ccol_0_0_0#4[k#3]
-      dcol_0_0_0[k#3] = dcol_0_0_0#4[k#3]
+      ccol_0_0_0#5[k#3] = (gcv_0_0_0#2[k#3] * 0.5)
+      _temp_0_0_0#15[k#3] = (_dtr_stage - acol_0_0_0[k#3])
+      bcol_0_0_0#2[k#3] = (_temp_0_0_0#15[k#3] - ccol_0_0_0#5[k#3])
+      _temp_0_0_0#16[k#3] = (u_stage_0_0_0[(k#3 + 1)] - u_stage_0_0_0[k#3])
+      _temp_0_0_0#17[k#3] = (cs_0_0_0#2[k#3] * _temp_0_0_0#16[k#3])
+      _temp_0_0_0#18[k#3] = (u_stage_0_0_0[(k#3 - 1)] - u_stage_0_0_0[k#3])
+      _temp_0_0_0#19[k#3] = (-as__0_0_0[k#3] * _temp_0_0_0#18[k#3])
+      correction_term_0_0_0#2[k#3] = (_temp_0_0_0#19[k#3] - _temp_0_0_0#17[k#3])
+      _temp_0_0_0#20[k#3] = (_dtr_stage * u_pos_0_0_0[k#3])
+      _temp_0_0_0#21[k#3] = (_temp_0_0_0#20[k#3] + utens_0_0_0[k#3])
+      _temp_0_0_0#22[k#3] = (_temp_0_0_0#21[k#3] + utens_stage_0_0_0[k#3])
+      dcol_0_0_0#5[k#3] = (_temp_0_0_0#22[k#3] + correction_term_0_0_0#2[k#3])
+      _temp_0_0_0#23[k#3] = (ccol_0_0_0[(k#3 - 1)] * acol_0_0_0[k#3])
+      _temp_0_0_0#24[k#3] = (bcol_0_0_0#2[k#3] - _temp_0_0_0#23[k#3])
+      divided_0_0_0#2[k#3] = (1.0 / _temp_0_0_0#24[k#3])
+      ccol_0_0_0#6[k#3] = (ccol_0_0_0#5[k#3] * divided_0_0_0#2[k#3])
+      _temp_0_0_0#25[k#3] = (dcol_0_0_0[(k#3 - 1)] * acol_0_0_0[k#3])
+      _temp_0_0_0#26[k#3] = (dcol_0_0_0#5[k#3] - _temp_0_0_0#25[k#3])
+      dcol_0_0_0#6[k#3] = (_temp_0_0_0#26[k#3] * divided_0_0_0#2[k#3])
+      ccol_0_0_0[k#3] = ccol_0_0_0#6[k#3]
+      dcol_0_0_0[k#3] = dcol_0_0_0#6[k#3]
     }
     awaitall
     for i32 k#4 in [3:4:1] {
-      _temp_0_0_0#21[k#4] = (_refactored_wcon_1_0_0_0_0[k#4] + wcon_0_0_0[k#4])
-      gav_0_0_0#1[k#4] = (-0.25 * _temp_0_0_0#21[k#4])
-      as__0_0_0#1[k#4] = (gav_0_0_0#1[k#4] * 0.5)
-      acol_0_0_0#1[k#4] = (gav_0_0_0#1[k#4] * 0.5)
-      bcol_0_0_0#2[k#4] = (_dtr_stage - acol_0_0_0#1[k#4])
-      _temp_0_0_0#22[k#4] = (u_stage_0_0_0[(k#4 - 1)] - u_stage_0_0_0[k#4])
-      correction_term_0_0_0#2[k#4] = (-as__0_0_0#1[k#4] * _temp_0_0_0#22[k#4])
-      _temp_0_0_0#23[k#4] = (_dtr_stage * u_pos_0_0_0[k#4])
-      _temp_0_0_0#24[k#4] = (_temp_0_0_0#23[k#4] + utens_0_0_0[k#4])
-      _temp_0_0_0#25[k#4] = (_temp_0_0_0#24[k#4] + utens_stage_0_0_0[k#4])
-      dcol_0_0_0#5[k#4] = (_temp_0_0_0#25[k#4] + correction_term_0_0_0#2[k#4])
-      _temp_0_0_0#26[k#4] = (ccol_0_0_0[(k#4 - 1)] * acol_0_0_0#1[k#4])
-      _temp_0_0_0#27[k#4] = (bcol_0_0_0#2[k#4] - _temp_0_0_0#26[k#4])
-      divided_0_0_0#2[k#4] = (1.0 / _temp_0_0_0#27[k#4])
-      _temp_0_0_0#28[k#4] = (dcol_0_0_0#5[(k#4 - 1)] * acol_0_0_0#1[k#4])
-      _temp_0_0_0#29[k#4] = (dcol_0_0_0#5[k#4] - _temp_0_0_0#28[k#4])
-      dcol_0_0_0#6[k#4] = (_temp_0_0_0#29[k#4] * divided_0_0_0#2[k#4])
-      dcol_0_0_0[k#4] = dcol_0_0_0#6[k#4]
+      _temp_0_0_0#42[k#4] = (_refactored_wcon_1_0_0_0_0[k#4] + wcon_0_0_0[k#4])
+      gav_0_0_0#2[k#4] = (-0.25 * _temp_0_0_0#42[k#4])
+      as__0_0_0#2[k#4] = (gav_0_0_0#2[k#4] * 0.5)
+      acol_0_0_0#2[k#4] = (gav_0_0_0#2[k#4] * 0.5)
+      bcol_0_0_0#4[k#4] = (_dtr_stage - acol_0_0_0#2[k#4])
+      _temp_0_0_0#43[k#4] = (u_stage_0_0_0[(k#4 - 1)] - u_stage_0_0_0[k#4])
+      correction_term_0_0_0#4[k#4] = (-as__0_0_0#2[k#4] * _temp_0_0_0#43[k#4])
+      _temp_0_0_0#44[k#4] = (_dtr_stage * u_pos_0_0_0[k#4])
+      _temp_0_0_0#45[k#4] = (_temp_0_0_0#44[k#4] + utens_0_0_0[k#4])
+      _temp_0_0_0#46[k#4] = (_temp_0_0_0#45[k#4] + utens_stage_0_0_0[k#4])
+      dcol_0_0_0#9[k#4] = (_temp_0_0_0#46[k#4] + correction_term_0_0_0#4[k#4])
+      _temp_0_0_0#47[k#4] = (ccol_0_0_0[(k#4 - 1)] * acol_0_0_0#2[k#4])
+      _temp_0_0_0#48[k#4] = (bcol_0_0_0#4[k#4] - _temp_0_0_0#47[k#4])
+      divided_0_0_0#4[k#4] = (1.0 / _temp_0_0_0#48[k#4])
+      _temp_0_0_0#49[k#4] = (dcol_0_0_0[(k#4 - 1)] * acol_0_0_0#2[k#4])
+      _temp_0_0_0#50[k#4] = (dcol_0_0_0#9[k#4] - _temp_0_0_0#49[k#4])
+      dcol_0_0_0#10[k#4] = (_temp_0_0_0#50[k#4] * divided_0_0_0#4[k#4])
+      dcol_0_0_0[k#4] = dcol_0_0_0#10[k#4]
     }
     awaitall
     for i32 k#5 in [3:2:-1] {
       datacol_0_0_0[k#5] = dcol_0_0_0[k#5]
       data_col_0_0_0#1[k#5] = datacol_0_0_0[k#5]
-      _temp_0_0_0#30[k#5] = (datacol_0_0_0[k#5] - u_pos_0_0_0[k#5])
-      utens_stage_0_0_0#2[k#5] = (_dtr_stage * _temp_0_0_0#30[k#5])
+      _temp_0_0_0#60[k#5] = (datacol_0_0_0[k#5] - u_pos_0_0_0[k#5])
+      utens_stage_0_0_0#2[k#5] = (_dtr_stage * _temp_0_0_0#60[k#5])
       data_col_0_0_0[k#5] = data_col_0_0_0#1[k#5]
       utens_stage_0_0_0#1[k#5] = utens_stage_0_0_0#2[k#5]
     }
     awaitall
     for i32 k#6 in [2:-1:-1] {
-      _temp_0_0_0#31[k#6] = (ccol_0_0_0[k#6] * data_col_0_0_0[(k#6 + 1)])
-      datacol_0_0_0#1[k#6] = (dcol_0_0_0[k#6] - _temp_0_0_0#31[k#6])
-      data_col_0_0_0#2[k#6] = datacol_0_0_0#1[k#6]
-      _temp_0_0_0#32[k#6] = (datacol_0_0_0#1[k#6] - u_pos_0_0_0[k#6])
-      utens_stage_0_0_0#3[k#6] = (_dtr_stage * _temp_0_0_0#32[k#6])
-      data_col_0_0_0[k#6] = data_col_0_0_0#2[k#6]
-      utens_stage_0_0_0#1[k#6] = utens_stage_0_0_0#3[k#6]
+      _temp_0_0_0#62[k#6] = (ccol_0_0_0[k#6] * data_col_0_0_0[(k#6 + 1)])
+      datacol_0_0_0#2[k#6] = (dcol_0_0_0[k#6] - _temp_0_0_0#62[k#6])
+      data_col_0_0_0#3[k#6] = datacol_0_0_0#2[k#6]
+      _temp_0_0_0#63[k#6] = (datacol_0_0_0#2[k#6] - u_pos_0_0_0[k#6])
+      utens_stage_0_0_0#4[k#6] = (_dtr_stage * _temp_0_0_0#63[k#6])
+      data_col_0_0_0[k#6] = data_col_0_0_0#3[k#6]
+      utens_stage_0_0_0#1[k#6] = utens_stage_0_0_0#4[k#6]
     }
     awaitall
     await send(utens_stage_0_0_0#1, __kernel_out_0[(i#2 - 1), (j#2 - 0)])
@@ -550,14 +550,14 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[4, 4] readonly _u_po
     await receive(utens_stage_0_0_0, _utens_stage[i#2, j#2])
     await receive(wcon_0_0_0, _wcon[i#2, j#2])
     awaitall
-    completion _recv_comp = foreach i32 k, f32 x in [0:5:1], receive(_stream_wcon#2) {
-      _refactored_wcon_1_0_0_0_0#1[k] = x
+    completion _recv_comp = foreach i32 k, f32 x in [0:5:1], receive(_stream_wcon#4) {
+      _refactored_wcon_1_0_0_0_0#3[k] = x
     }
-    completion _send_comp = send(wcon_0_0_0, _stream_wcon#1)
+    completion _send_comp = send(wcon_0_0_0, _stream_wcon#3)
     await _send_comp
     await _recv_comp
     await map i32 k#1 in [0:4:1] {
-      _refactored_wcon_1_0_0_0_0[k#1] = _refactored_wcon_1_0_0_0_0#1[k#1]
+      _refactored_wcon_1_0_0_0_0[k#1] = _refactored_wcon_1_0_0_0_0#3[k#1]
     }
     awaitall
     for i32 k#2 in [0:1:1] {
@@ -581,75 +581,75 @@ kernel @vertical_advection<>(f32 _dtr_stage, stream<f32, 4>[4, 4] readonly _u_po
     }
     awaitall
     for i32 k#3 in [1:3:1] {
-      _temp_0_0_0#6[k#3] = (_refactored_wcon_1_0_0_0_0[k#3] + wcon_0_0_0[k#3])
-      gav_0_0_0[k#3] = (-0.25 * _temp_0_0_0#6[k#3])
-      _temp_0_0_0#7[k#3] = _refactored_wcon_1_0_0_0_0[(k#3 + 1)]
-      _temp_0_0_0#8[k#3] = (_temp_0_0_0#7[k#3] + wcon_0_0_0[(k#3 + 1)])
-      gcv_0_0_0#1[k#3] = (0.25 * _temp_0_0_0#8[k#3])
+      _temp_0_0_0#12[k#3] = (_refactored_wcon_1_0_0_0_0[k#3] + wcon_0_0_0[k#3])
+      gav_0_0_0[k#3] = (-0.25 * _temp_0_0_0#12[k#3])
+      _temp_0_0_0#13[k#3] = _refactored_wcon_1_0_0_0_0[(k#3 + 1)]
+      _temp_0_0_0#14[k#3] = (_temp_0_0_0#13[k#3] + wcon_0_0_0[(k#3 + 1)])
+      gcv_0_0_0#2[k#3] = (0.25 * _temp_0_0_0#14[k#3])
       as__0_0_0[k#3] = (gav_0_0_0[k#3] * 0.5)
-      cs_0_0_0#1[k#3] = (gcv_0_0_0#1[k#3] * 0.5)
+      cs_0_0_0#2[k#3] = (gcv_0_0_0#2[k#3] * 0.5)
       acol_0_0_0[k#3] = (gav_0_0_0[k#3] * 0.5)
-      ccol_0_0_0#3[k#3] = (gcv_0_0_0#1[k#3] * 0.5)
-      _temp_0_0_0#9[k#3] = (_dtr_stage - acol_0_0_0[k#3])
-      bcol_0_0_0#1[k#3] = (_temp_0_0_0#9[k#3] - ccol_0_0_0#3[k#3])
-      _temp_0_0_0#10[k#3] = (u_stage_0_0_0[(k#3 + 1)] - u_stage_0_0_0[k#3])
-      _temp_0_0_0#11[k#3] = (cs_0_0_0#1[k#3] * _temp_0_0_0#10[k#3])
-      _temp_0_0_0#12[k#3] = (u_stage_0_0_0[(k#3 - 1)] - u_stage_0_0_0[k#3])
-      _temp_0_0_0#13[k#3] = (-as__0_0_0[k#3] * _temp_0_0_0#12[k#3])
-      correction_term_0_0_0#1[k#3] = (_temp_0_0_0#13[k#3] - _temp_0_0_0#11[k#3])
-      _temp_0_0_0#14[k#3] = (_dtr_stage * u_pos_0_0_0[k#3])
-      _temp_0_0_0#15[k#3] = (_temp_0_0_0#14[k#3] + utens_0_0_0[k#3])
-      _temp_0_0_0#16[k#3] = (_temp_0_0_0#15[k#3] + utens_stage_0_0_0[k#3])
-      dcol_0_0_0#3[k#3] = (_temp_0_0_0#16[k#3] + correction_term_0_0_0#1[k#3])
-      _temp_0_0_0#17[k#3] = (ccol_0_0_0#3[(k#3 - 1)] * acol_0_0_0[k#3])
-      _temp_0_0_0#18[k#3] = (bcol_0_0_0#1[k#3] - _temp_0_0_0#17[k#3])
-      divided_0_0_0#1[k#3] = (1.0 / _temp_0_0_0#18[k#3])
-      ccol_0_0_0#4[k#3] = (ccol_0_0_0#3[k#3] * divided_0_0_0#1[k#3])
-      _temp_0_0_0#19[k#3] = (dcol_0_0_0#3[(k#3 - 1)] * acol_0_0_0[k#3])
-      _temp_0_0_0#20[k#3] = (dcol_0_0_0#3[k#3] - _temp_0_0_0#19[k#3])
-      dcol_0_0_0#4[k#3] = (_temp_0_0_0#20[k#3] * divided_0_0_0#1[k#3])
-      ccol_0_0_0[k#3] = ccol_0_0_0#4[k#3]
-      dcol_0_0_0[k#3] = dcol_0_0_0#4[k#3]
+      ccol_0_0_0#5[k#3] = (gcv_0_0_0#2[k#3] * 0.5)
+      _temp_0_0_0#15[k#3] = (_dtr_stage - acol_0_0_0[k#3])
+      bcol_0_0_0#2[k#3] = (_temp_0_0_0#15[k#3] - ccol_0_0_0#5[k#3])
+      _temp_0_0_0#16[k#3] = (u_stage_0_0_0[(k#3 + 1)] - u_stage_0_0_0[k#3])
+      _temp_0_0_0#17[k#3] = (cs_0_0_0#2[k#3] * _temp_0_0_0#16[k#3])
+      _temp_0_0_0#18[k#3] = (u_stage_0_0_0[(k#3 - 1)] - u_stage_0_0_0[k#3])
+      _temp_0_0_0#19[k#3] = (-as__0_0_0[k#3] * _temp_0_0_0#18[k#3])
+      correction_term_0_0_0#2[k#3] = (_temp_0_0_0#19[k#3] - _temp_0_0_0#17[k#3])
+      _temp_0_0_0#20[k#3] = (_dtr_stage * u_pos_0_0_0[k#3])
+      _temp_0_0_0#21[k#3] = (_temp_0_0_0#20[k#3] + utens_0_0_0[k#3])
+      _temp_0_0_0#22[k#3] = (_temp_0_0_0#21[k#3] + utens_stage_0_0_0[k#3])
+      dcol_0_0_0#5[k#3] = (_temp_0_0_0#22[k#3] + correction_term_0_0_0#2[k#3])
+      _temp_0_0_0#23[k#3] = (ccol_0_0_0[(k#3 - 1)] * acol_0_0_0[k#3])
+      _temp_0_0_0#24[k#3] = (bcol_0_0_0#2[k#3] - _temp_0_0_0#23[k#3])
+      divided_0_0_0#2[k#3] = (1.0 / _temp_0_0_0#24[k#3])
+      ccol_0_0_0#6[k#3] = (ccol_0_0_0#5[k#3] * divided_0_0_0#2[k#3])
+      _temp_0_0_0#25[k#3] = (dcol_0_0_0[(k#3 - 1)] * acol_0_0_0[k#3])
+      _temp_0_0_0#26[k#3] = (dcol_0_0_0#5[k#3] - _temp_0_0_0#25[k#3])
+      dcol_0_0_0#6[k#3] = (_temp_0_0_0#26[k#3] * divided_0_0_0#2[k#3])
+      ccol_0_0_0[k#3] = ccol_0_0_0#6[k#3]
+      dcol_0_0_0[k#3] = dcol_0_0_0#6[k#3]
     }
     awaitall
     for i32 k#4 in [3:4:1] {
-      _temp_0_0_0#21[k#4] = (_refactored_wcon_1_0_0_0_0[k#4] + wcon_0_0_0[k#4])
-      gav_0_0_0#1[k#4] = (-0.25 * _temp_0_0_0#21[k#4])
-      as__0_0_0#1[k#4] = (gav_0_0_0#1[k#4] * 0.5)
-      acol_0_0_0#1[k#4] = (gav_0_0_0#1[k#4] * 0.5)
-      bcol_0_0_0#2[k#4] = (_dtr_stage - acol_0_0_0#1[k#4])
-      _temp_0_0_0#22[k#4] = (u_stage_0_0_0[(k#4 - 1)] - u_stage_0_0_0[k#4])
-      correction_term_0_0_0#2[k#4] = (-as__0_0_0#1[k#4] * _temp_0_0_0#22[k#4])
-      _temp_0_0_0#23[k#4] = (_dtr_stage * u_pos_0_0_0[k#4])
-      _temp_0_0_0#24[k#4] = (_temp_0_0_0#23[k#4] + utens_0_0_0[k#4])
-      _temp_0_0_0#25[k#4] = (_temp_0_0_0#24[k#4] + utens_stage_0_0_0[k#4])
-      dcol_0_0_0#5[k#4] = (_temp_0_0_0#25[k#4] + correction_term_0_0_0#2[k#4])
-      _temp_0_0_0#26[k#4] = (ccol_0_0_0[(k#4 - 1)] * acol_0_0_0#1[k#4])
-      _temp_0_0_0#27[k#4] = (bcol_0_0_0#2[k#4] - _temp_0_0_0#26[k#4])
-      divided_0_0_0#2[k#4] = (1.0 / _temp_0_0_0#27[k#4])
-      _temp_0_0_0#28[k#4] = (dcol_0_0_0#5[(k#4 - 1)] * acol_0_0_0#1[k#4])
-      _temp_0_0_0#29[k#4] = (dcol_0_0_0#5[k#4] - _temp_0_0_0#28[k#4])
-      dcol_0_0_0#6[k#4] = (_temp_0_0_0#29[k#4] * divided_0_0_0#2[k#4])
-      dcol_0_0_0[k#4] = dcol_0_0_0#6[k#4]
+      _temp_0_0_0#42[k#4] = (_refactored_wcon_1_0_0_0_0[k#4] + wcon_0_0_0[k#4])
+      gav_0_0_0#2[k#4] = (-0.25 * _temp_0_0_0#42[k#4])
+      as__0_0_0#2[k#4] = (gav_0_0_0#2[k#4] * 0.5)
+      acol_0_0_0#2[k#4] = (gav_0_0_0#2[k#4] * 0.5)
+      bcol_0_0_0#4[k#4] = (_dtr_stage - acol_0_0_0#2[k#4])
+      _temp_0_0_0#43[k#4] = (u_stage_0_0_0[(k#4 - 1)] - u_stage_0_0_0[k#4])
+      correction_term_0_0_0#4[k#4] = (-as__0_0_0#2[k#4] * _temp_0_0_0#43[k#4])
+      _temp_0_0_0#44[k#4] = (_dtr_stage * u_pos_0_0_0[k#4])
+      _temp_0_0_0#45[k#4] = (_temp_0_0_0#44[k#4] + utens_0_0_0[k#4])
+      _temp_0_0_0#46[k#4] = (_temp_0_0_0#45[k#4] + utens_stage_0_0_0[k#4])
+      dcol_0_0_0#9[k#4] = (_temp_0_0_0#46[k#4] + correction_term_0_0_0#4[k#4])
+      _temp_0_0_0#47[k#4] = (ccol_0_0_0[(k#4 - 1)] * acol_0_0_0#2[k#4])
+      _temp_0_0_0#48[k#4] = (bcol_0_0_0#4[k#4] - _temp_0_0_0#47[k#4])
+      divided_0_0_0#4[k#4] = (1.0 / _temp_0_0_0#48[k#4])
+      _temp_0_0_0#49[k#4] = (dcol_0_0_0[(k#4 - 1)] * acol_0_0_0#2[k#4])
+      _temp_0_0_0#50[k#4] = (dcol_0_0_0#9[k#4] - _temp_0_0_0#49[k#4])
+      dcol_0_0_0#10[k#4] = (_temp_0_0_0#50[k#4] * divided_0_0_0#4[k#4])
+      dcol_0_0_0[k#4] = dcol_0_0_0#10[k#4]
     }
     awaitall
     for i32 k#5 in [3:2:-1] {
       datacol_0_0_0[k#5] = dcol_0_0_0[k#5]
       data_col_0_0_0#1[k#5] = datacol_0_0_0[k#5]
-      _temp_0_0_0#30[k#5] = (datacol_0_0_0[k#5] - u_pos_0_0_0[k#5])
-      utens_stage_0_0_0#2[k#5] = (_dtr_stage * _temp_0_0_0#30[k#5])
+      _temp_0_0_0#60[k#5] = (datacol_0_0_0[k#5] - u_pos_0_0_0[k#5])
+      utens_stage_0_0_0#2[k#5] = (_dtr_stage * _temp_0_0_0#60[k#5])
       data_col_0_0_0[k#5] = data_col_0_0_0#1[k#5]
       utens_stage_0_0_0#1[k#5] = utens_stage_0_0_0#2[k#5]
     }
     awaitall
     for i32 k#6 in [2:-1:-1] {
-      _temp_0_0_0#31[k#6] = (ccol_0_0_0[k#6] * data_col_0_0_0[(k#6 + 1)])
-      datacol_0_0_0#1[k#6] = (dcol_0_0_0[k#6] - _temp_0_0_0#31[k#6])
-      data_col_0_0_0#2[k#6] = datacol_0_0_0#1[k#6]
-      _temp_0_0_0#32[k#6] = (datacol_0_0_0#1[k#6] - u_pos_0_0_0[k#6])
-      utens_stage_0_0_0#3[k#6] = (_dtr_stage * _temp_0_0_0#32[k#6])
-      data_col_0_0_0[k#6] = data_col_0_0_0#2[k#6]
-      utens_stage_0_0_0#1[k#6] = utens_stage_0_0_0#3[k#6]
+      _temp_0_0_0#62[k#6] = (ccol_0_0_0[k#6] * data_col_0_0_0[(k#6 + 1)])
+      datacol_0_0_0#2[k#6] = (dcol_0_0_0[k#6] - _temp_0_0_0#62[k#6])
+      data_col_0_0_0#3[k#6] = datacol_0_0_0#2[k#6]
+      _temp_0_0_0#63[k#6] = (datacol_0_0_0#2[k#6] - u_pos_0_0_0[k#6])
+      utens_stage_0_0_0#4[k#6] = (_dtr_stage * _temp_0_0_0#63[k#6])
+      data_col_0_0_0[k#6] = data_col_0_0_0#3[k#6]
+      utens_stage_0_0_0#1[k#6] = utens_stage_0_0_0#4[k#6]
     }
     awaitall
     await send(utens_stage_0_0_0#1, __kernel_out_0[(i#2 - 1), (j#2 - 0)])
