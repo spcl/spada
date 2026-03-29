@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 from typing import Tuple
@@ -5,6 +6,7 @@ from typing import Tuple
 import pytest
 
 from spatialstencil.cli.gt4py_to_spatial import lower_function, lower_gt4py_to_sptl
+from spatialstencil.lowering import gt4py_to_stencil_ir
 from spatialstencil.lowering.stencil_to_spatial_routing import ChannelStrategy
 from spatialstencil.lowering.stencil_to_spatial_compute import HorizontalStencilTransformer
 from spatialstencil.lowering.stencil_to_spatial_dataflow import ProgramDataflow
@@ -228,6 +230,39 @@ def test_vadv():
         assert subgrids_dont_overlap(spatial_program)
 
 
+def test_fwbw_koffset_uses_accumulated_storage():
+    """Regression: k±1 accesses in FORWARD/BACKWARD stencil bodies must use
+    accumulated (program-scope) storage, not SSA-versioned intermediates.
+
+    The Thomas forward sweep in vertical_advection needs dcol[k-1] equal to
+    the Thomas-eliminated value from the previous k-iteration.  The bug was
+    that visit_Subscript used the SSA-specific local array (e.g.
+    dcol_0_0_0#3) instead of the accumulated array (dcol_0_0_0), yielding
+    uninitialised reads for the first k in each interval.
+    """
+    from spatialstencil.syntax.gt4py import parser as gt4py_parser
+
+    gtfuncs = gt4py_parser.parse_file(str(
+        Path(__file__).parent / Path('../../samples/stencils.py')))
+    program = gtfuncs['vertical_advection']
+    irprogram = gt4py_to_stencil_ir.lower_gt4py_to_stencil_ir(program, domain=(4, 4, 4))
+    type_inference.infer_field_extents(irprogram)
+    type_inference.infer_field_domains(irprogram)
+    kernel = lower_stencil_to_spatial(irprogram)
+    ir = kernel.as_ir()
+
+    # Detect the bug: an SSA-versioned array name (name#N) directly followed
+    # by an array index containing a k-offset (e.g. [(k#3 - 1)]).
+    # Accumulated storage is printed without a version suffix, so any match
+    # here means a local intermediate is being read at a neighbouring k-level.
+    bad = re.findall(r'\w+#\d+\[\([^)]*-\s*\d+\)\]', ir)
+    assert not bad, (
+        "k-offset accesses to SSA-versioned (non-accumulated) storage found; "
+        "these should use the accumulated field instead:\n  "
+        + "\n  ".join(bad)
+    )
+
+
 def test_gt4py_integration():
     from spatialstencil.syntax.gt4py import parser as gt4py_parser
     
@@ -247,4 +282,5 @@ if __name__ == '__main__':
     test_vertical_stencil_finishes()
     test_scalar_arguments()
     test_vadv()
+    test_fwbw_koffset_uses_accumulated_storage()
     test_gt4py_integration()
