@@ -209,6 +209,7 @@ Within a `place` block, the following statements are supported:
 
 - Allocate a local array field: `T[S_0, ...] field_name;`
 - Allocate a local scalar field: `T field_name;`
+- Declare an external field: `extern T field_name;` or `extern T[S_0, ...] field_name;`
 
 
 The subgrid of the `place` block is given by the PEs that lie in the `subgrid_expression`.
@@ -219,6 +220,54 @@ However, each `field_name` may appear at most once for any given PE over all `pl
     Each field name must be unique within a `place` block.
 
     *Failure to provide unique field names raises a syntax error.*
+
+### External fields
+
+An `extern` field is a field declaration inside a `place` block with the `extern` qualifier:
+
+```rust
+extern T field_name;
+extern T[S_0, ...] field_name;
+```
+
+Semantically, an `extern` field denotes storage that is part of the kernel interface rather than ordinary compiler-generated scratch storage.
+It is still placed on the same PE subgrid as any other field, and it is still in scope in `compute` blocks that overlap that placement.
+The difference is that the compiler must preserve the declaration as an externally visible binding.
+
+Typical uses are:
+
+- host-visible input or output buffers,
+- imported kernel arguments after argument lowering,
+- implementation-defined interface arrays such as benchmarking or runtime support buffers.
+
+Extern fields may be scalars or arrays.
+They participate in ordinary field reads and writes once in scope.
+From the perspective of `compute` statements, using an extern field is no different from using any other placed field.
+
+???+ example "Example: extern field declarations"
+    ```rust
+    place u16 i, u16 j in [0:I, 0:J] {
+        extern f32[K] input;
+        f32[K] tmp;
+        extern f32[K] output;
+    }
+    ```
+
+    Here `input` and `output` are PE-local fields that remain part of the external kernel interface,
+    while `tmp` is ordinary local storage.
+
+#### Operational notes
+
+- `extern` is only defined for field declarations in `place` blocks.
+- `extern` does not create a communication stream by itself; it creates storage.
+- Extern fields are preserved by optimization passes even when they appear unused, because they may represent required interface bindings.
+- Non-extern fields are available for normal compiler optimizations such as pruning when proven dead; extern fields are intentionally treated more conservatively.
+
+#### Relationship to kernel arguments
+
+The SPADA compiler lowers certain kernel stream arguments into `extern` fields.
+In particular, fixed-size stream arguments such as `stream<T, K>` are materialized as PE-local arrays of type `T[K]` with the `extern` qualifier.
+This makes the transferred payload available as ordinary local storage inside the kernel, provides explicit definition of the interface buffers (which must be materialized during code generation), and enables further optimizations to unnecessary temporary non-interface fields.
 
 ## Dataflow block
 
@@ -234,8 +283,8 @@ The subgrid of the dataflow block is given by the PEs
 that lie in the `subgrid_expression`.
 The subgrids of the dataflow blocks must be disjoint.
 
-The dataflow block can be set up to support various types of streams.
-Currently, only *relative stream* indexing is supported:
+The dataflow block can be set up to support multiple kinds of streams.
+Currently, the IR supports relative streams between PEs and external streams at the kernel boundary.
 
 ### Relative Stream Declaration
 
@@ -268,6 +317,82 @@ a stream for receiving from the PE at the relative position `(i-dx, j-dy)` at th
     ```
     describes a communication stream that sends `i32` data two PEs to the north. 
 
+### External stream declaration
+
+Inside a `dataflow` block, a host-facing streaming communication is declared as follows:
+
+```rust
+stream<T> stream_name = extern_stream(in);
+stream<T> stream_name = extern_stream(out);
+stream<T> stream_name = extern_stream(in) {
+    hops = auto,
+    channel = C
+};
+```
+
+where `T` is a scalar type, `in` denotes a stream from the external environment into the PE, and `out` denotes a stream from the PE to the external environment.
+
+In the IR this is represented by `ExternStreamDeclaration(direction, routing)` where `direction` is either `"in"` or `"out"`.
+
+An `extern_stream` is not a PE-to-PE stream.
+It represents a boundary stream between the spatial program and an external producer or consumer such as the host runtime.
+As a result, it can be used anywhere an ordinary stream can be used in `send` and `receive` statements, but its endpoint is outside the on-chip routing graph.
+
+???+ example "Example: extern_stream"
+    ```rust
+    dataflow u16 i, u16 j in [0:I, 0:J] {
+        stream<f32> in_stream = extern_stream(in);
+        stream<f32> out_stream = extern_stream(out) {
+            hops = auto,
+            channel = 3
+        };
+    }
+
+    compute u16 i, u16 j in [0:I, 0:J] {
+        f32 value;
+        await receive(value, in_stream);
+        await send(value, out_stream);
+    }
+    ```
+
+    `in_stream` receives values from outside the kernel into each participating PE.
+    `out_stream` sends values produced by each PE to the external environment.
+
+#### Routing restrictions
+
+`extern_stream` supports an optional routing declaration, but with a stricter rule than `relative_stream`:
+
+- `channel` may be specified explicitly or left as `auto`.
+- `hops` must remain `auto`.
+
+This restriction is enforced by the IR validator.
+Manual hop lists are invalid for extern streams because they do not describe on-chip point-to-point routing.
+
+#### Direction and usage
+
+- `extern_stream(in)` is intended to be consumed with `receive(...)` or `foreach ... in receive(...)`.
+- `extern_stream(out)` is intended to be produced with `send(...)`.
+- The declaration itself does not impose how many elements are transferred; the surrounding `send`/`receive` program structure must still agree on counts, exactly as for any other stream.
+
+#### Relationship to kernel arguments
+
+The current compiler uses `extern_stream` when lowering streaming kernel arguments without a fixed buffer size.
+Read-only arguments lower to `extern_stream(in)`, write-only arguments lower to `extern_stream(out)`, and arguments without an explicit direction may produce both declarations.
+`extern_stream` should be viewed as the stream-level counterpart of `extern` fields.
+
+#### Interaction with ranges
+
+In the current lowering pipeline, range-free streaming consumers such as:
+
+```rust
+await foreach f32 x in receive(in_stream) {
+    // ...
+}
+```
+
+are only valid for kernel-argument streams or `extern_stream` declarations.
+This reflects their role as external data sources whose extent is not encoded by PE-to-PE topology.
+
 !!! note
     The stream declaration does not imply that any data is ever sent over the stream.
     It merely declares the existence of a virtual communication stream.
@@ -284,6 +409,8 @@ This declaration describes how the data is routed between the PEs.
 In particular, for each stream, the configuration may specify the intermediate hops that the data takes.
 Moreover, it may specify a `channel`, which is a limited hardware resource
 (a virtual or hardware channel) that is used to route the data.
+
+For `extern_stream`, only the `channel` is configurable; `hops` must remain `auto`.
 
 The routing configuration is set up as follows:
 ```
