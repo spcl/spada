@@ -21,7 +21,7 @@ run_multicast_x() {
     python3 - <<PYEOF
 import numpy as np
 np.random.seed(0)
-a = np.random.rand(1, 1, 1).astype(np.float32)
+a = np.random.rand(1, 1, 2).astype(np.float32)
 np.save('a_in.npy', a)
 PYEOF
 

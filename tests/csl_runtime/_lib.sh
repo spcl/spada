@@ -79,15 +79,15 @@ PYEOF
 }
 
 # verify_multicast_y K
-#   Loads a_in.npy (shape 1×1×1), expects OUT_out.npy to contain K copies
-#   of the input value along the y-axis (shape 1×K×1), including the sender PE.
+#   Loads a_in.npy (shape 1×1×2), expects OUT_out.npy to contain K copies
+#   of the input value along the y-axis (shape 1×K×2), including the sender PE.
 verify_multicast_y() {
     k=$1
     python3 - <<PYEOF
 import numpy as np, sys
 K = $k
-inp = np.load('a_in.npy')               # (1, 1, 1)
-ref = np.tile(inp, (1, K, 1))           # (1, K, 1)
+inp = np.load('a_in.npy')               # (1, 1, 2)
+ref = np.tile(inp, (1, K, 1))           # (1, K, 2)
 out = np.load('OUT_out.npy')
 if not np.allclose(out, ref, atol=1e-5):
     print(f"Test failed: max abs diff = {float(np.max(np.abs(out - ref))):.3e}")
@@ -99,15 +99,15 @@ PYEOF
 }
 
 # verify_multicast_x K
-#   Loads a_in.npy (shape 1×1×1), expects OUT_out.npy to contain K copies
-#   of the input value along the x-axis (shape K×1×1), including the sender PE.
+#   Loads a_in.npy (shape 1×1×2), expects OUT_out.npy to contain K copies
+#   of the input value along the x-axis (shape K×1×2), including the sender PE.
 verify_multicast_x() {
     k=$1
     python3 - <<PYEOF
 import numpy as np, sys
 K = $k
-inp = np.load('a_in.npy')               # (1, 1, 1)
-ref = np.tile(inp, (K, 1, 1))           # (K, 1, 1)
+inp = np.load('a_in.npy')               # (1, 1, 2)
+ref = np.tile(inp, (K, 1, 1))           # (K, 1, 2)
 out = np.load('OUT_out.npy')
 if not np.allclose(out, ref, atol=1e-5):
     print(f"Test failed: max abs diff = {float(np.max(np.abs(out - ref))):.3e}")
