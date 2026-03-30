@@ -1,0 +1,41 @@
+/**
+ * 1D broadcast from PE (0,0) to all N PEs using direct multicast.
+ *
+ * The root injects its K-element array into the fabric once; hardware routing
+ * delivers it to every receiver (1,0)…(N-1,0) simultaneously.
+ * Single-channel, single-shot — no red/blue pipelining required.
+ *
+ * External interface matches broadcast_1D.sptl:
+ *   inp  : stream<f32, K>[1, 1]  – K values supplied by the host at PE (0,0)
+ *   out  : stream<f32, K>[N, 1]  – every PE writes its copy of the K values
+ *
+ * (!) Requires N >= 2 (!)
+ **/
+kernel @broadcast_1d_multicast<N, K>(
+    stream<f32, K>[1, 1] readonly  inp,
+    stream<f32, K>[N, 1] writeonly out
+) {
+    place i16 i, i16 j in [0:N, 0:1] {
+        f32[K] a
+    }
+
+    dataflow i16 i, i16 j in [0:N, 0:1] {
+        stream<f32> s = relative_stream([1:N], 0) {
+            hops    = auto,
+            channel = 0
+        }
+    }
+
+    // Root: load from host, write own output, multicast to all other PEs.
+    compute i16 i, i16 j in [0:1, 0:1] {
+        await receive(a, inp[i, j])
+        await send(a, s)
+        await send(a, out[i, j])
+    }
+
+    // Receivers: collect the multicast value and write to output.
+    compute i16 i, i16 j in [1:N, 0:1] {
+        await receive(a, s)
+        await send(a, out[i, j])
+    }
+}
