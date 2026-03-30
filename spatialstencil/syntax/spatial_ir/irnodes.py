@@ -1378,7 +1378,7 @@ class Kernel(SpatialNode):
             raise NotImplementedError('Subgrid extraction requires unrolling of metaprogramming blocks.')
 
         def _to_range3(t: tuple) -> tuple[int, int, int]:
-            """Normalise a 1-tuple (scalar point) to a 3-tuple (start, start+1, 1)."""
+            """Normalize a 1-tuple (scalar point) to a 3-tuple (start, start+1, 1)."""
             if len(t) == 1:
                 return (t[0], t[0] + 1, 1)
             return t
