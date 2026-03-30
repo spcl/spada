@@ -449,22 +449,33 @@ class _AutoHopResolver(spir.NodeTransformer):
         # Validate the range and fixed offset.
         rng = node.multicast_range
         start = rng.start.eval()
-        if start < 1:
-            raise ValueError(
-                f"Multicast stream range start must be >= 1, got {start}. "
-                "The sender is always at offset 0 and cannot be included in the receiver range."
-            )
         stop = rng.stop.eval() if rng.stop is not None else None
-        if stop is not None and stop <= start:
-            raise ValueError(
-                f"Multicast stream range [{start}:{stop}] is empty (stop must be > start)."
-            )
+
         fixed = node.fixed_offset.eval()
         if fixed != 0:
             raise ValueError(
                 f"Multicast stream has a non-zero fixed offset ({fixed}) in the non-multicast dimension. "
                 "Combined-axis multicasting is not yet supported; the fixed offset must be 0."
             )
+
+        if start == 0:
+            raise ValueError(
+                f"Multicast stream range start must be >= 1 for positive multicast or <= -1 for "
+                "negative multicast; start=0 means the sender is its own receiver."
+            )
+        if start > 0:
+            # Positive multicast: receivers at offsets start, start+1, …, stop-1.
+            if stop is not None and stop <= start:
+                raise ValueError(
+                    f"Multicast stream range [{start}:{stop}] is empty (stop must be > start)."
+                )
+        else:
+            # Negative multicast: receivers at offsets start, start-1, …, stop+1.
+            if stop is not None and stop >= start:
+                raise ValueError(
+                    f"Multicast stream range [{start}:{stop}] is empty "
+                    "(for negative multicast stop must be < start)."
+                )
         return node
 
 

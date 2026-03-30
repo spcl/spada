@@ -343,6 +343,139 @@ def test_multicast_x_sample_file_lowers():
         assert 'WEST' in layout, f'No WEST routing for K={K}'
 
 
+# ---------------------------------------------------------------------------
+# Negative multicast tests
+# ---------------------------------------------------------------------------
+
+def _neg_multicast_kernel(K: int | str = 'K', channel: int = 0) -> str:
+    """
+    Sender at j=K-1, multicasts NORTH to j=K-2 … j=0 using [-1:-(K)].
+    Receivers cover [0:K-1].
+    """
+    return f"""
+    kernel @test_neg<K>() {{
+        place u16 i, u16 j in [0:1, 0:K] {{
+            f32[1] val
+        }}
+        dataflow u16 i, u16 j in [0:1, 0:K] {{
+            stream<f32> s = relative_stream(0, [-1:-K]) {{
+                hops = auto,
+                channel = {channel}
+            }}
+        }}
+        compute u16 i, u16 j in [0:1, K-1:K] {{
+            await send(val, s)
+        }}
+        compute u16 i, u16 j in [0:1, 0:K-1] {{
+            await receive(val, s)
+        }}
+    }}
+    """
+
+
+def _lower_neg(K: int, **kwargs):
+    kernel = _parse_concretize(_neg_multicast_kernel(), K=K)
+    return lower_spatial_ir_to_csl(kernel, **kwargs)
+
+
+def test_multicast_negative_parsed():
+    """relative_stream(0, [-1:-K]) produces a MulticastRangeStreamDeclaration."""
+    kernel = parser.parse_string(_neg_multicast_kernel())
+    df = next(b for b in kernel.body if isinstance(b, spir.DataflowBlock))
+    decl = df.statements[0]
+    assert isinstance(decl.stream, spir.MulticastRangeStreamDeclaration)
+    assert decl.stream.multicast_axis == 'y'
+    assert isinstance(decl.stream.dy, spir.RangeExpression)
+
+
+def test_multicast_negative_routing_injected():
+    """Without explicit routing, _AutoHopResolver injects a default RoutingDeclaration for negative range."""
+    code = """
+    kernel @test<K>() {
+        dataflow u16 i, u16 j in [0:1, 0:K] {
+            stream<f32> s = relative_stream(0, [-1:-K])
+        }
+        compute u16 i, u16 j in [0:1, K-1:K] { await send(val, s) }
+        compute u16 i, u16 j in [0:1, 0:K-1] { await receive(val, s) }
+    }
+    """
+    kernel = _parse_concretize(code, K=4)
+    kernel = canonicalization.resolve_auto_hops(kernel)
+    df = next(b for b in kernel.body if isinstance(b, spir.DataflowBlock))
+    routing = df.statements[0].stream.routing
+    assert routing is not None
+    assert routing.hops == []
+
+
+def test_multicast_negative_K2_no_intermediate():
+    """K=2: one receiver, no intermediate forwarding — no NORTH+RAMP combination."""
+    csl_files = _lower_neg(K=2)
+    layout = _layout_code(csl_files)
+    assert 'NORTH' in layout       # sender tx
+    assert 'SOUTH' in layout       # receiver rx
+    assert 'NORTH, RAMP' not in layout  # no intermediate forwarding when K=2
+
+
+def test_multicast_negative_K3_one_intermediate():
+    """K=3: one intermediate that forwards NORTH+RAMP."""
+    csl_files = _lower_neg(K=3)
+    layout = _layout_code(csl_files)
+    assert 'NORTH, RAMP' in layout
+
+
+def test_multicast_negative_sender_routing():
+    """Sender PE gets rx=RAMP, tx=NORTH."""
+    csl_files = _lower_neg(K=4)
+    layout = _layout_code(csl_files)
+    assert '.rx = .{RAMP}, .tx = .{NORTH}' in layout
+
+
+def test_multicast_negative_last_receiver_routing():
+    """Last (farthest) receiver gets rx=SOUTH, tx=RAMP."""
+    csl_files = _lower_neg(K=4)
+    layout = _layout_code(csl_files)
+    assert '.rx = .{SOUTH}, .tx = .{RAMP}' in layout
+
+
+def test_multicast_negative_intermediate_count():
+    """Exactly K-2 intermediate multicast instructions for K receivers."""
+    for K in [3, 4, 5, 8]:
+        csl_files = _lower_neg(K=K)
+        layout = _layout_code(csl_files)
+        n_intermediate = layout.count('NORTH, RAMP')
+        assert n_intermediate == K - 2, f'K={K}: expected {K-2} intermediates, got {n_intermediate}'
+
+
+def test_multicast_negative_error_empty():
+    """[-1:0] has stop=0 >= start=-1, which is empty for negative multicast."""
+    code = """
+    kernel @test<>() {
+        dataflow u16 i, u16 j in [0:1, 0:4] {
+            stream<f32> s = relative_stream(0, [-1:0]) { hops = auto, channel = 0 }
+        }
+        compute u16 i, u16 j in [0:1, 3:4] { await send(val, s) }
+        compute u16 i, u16 j in [0:1, 0:3] { await receive(val, s) }
+    }
+    """
+    kernel = _parse_concretize(code)
+    with pytest.raises(ValueError, match='empty'):
+        canonicalization.resolve_auto_hops(kernel)
+
+
+def test_multicast_negative_sample_file_lowers():
+    """The multicast_simple_y_neg.sptl sample file lowers without error for several K values."""
+    file = os.path.join(_TESTING_DIR, 'multicast_simple_y_neg.sptl')
+    for K in [2, 3, 5, 8]:
+        kernel = parser.parse_file(file)
+        kernel = passes.concretize_parameters(kernel, K=K)
+        kernel = passes.constexpr_propagation(kernel)
+        csl_files = lower_spatial_ir_to_csl(kernel)
+        assert csl_files, f'No output files for K={K}'
+        layout = _layout_code(csl_files)
+        assert 'NORTH' in layout, f'No NORTH routing for K={K}'
+        assert 'SOUTH' in layout, f'No SOUTH routing for K={K}'
+
+
 if __name__ == '__main__':
     test_multicast_dy_parsed_as_multicast_node()
     test_multicast_dy_range_values()
@@ -365,3 +498,12 @@ if __name__ == '__main__':
     test_multicast_x_axis_routing()
     test_multicast_sample_file_lowers()
     test_multicast_x_sample_file_lowers()
+    test_multicast_negative_parsed()
+    test_multicast_negative_routing_injected()
+    test_multicast_negative_K2_no_intermediate()
+    test_multicast_negative_K3_one_intermediate()
+    test_multicast_negative_sender_routing()
+    test_multicast_negative_last_receiver_routing()
+    test_multicast_negative_intermediate_count()
+    test_multicast_negative_error_empty()
+    test_multicast_negative_sample_file_lowers()

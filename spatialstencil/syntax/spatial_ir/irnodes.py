@@ -646,11 +646,21 @@ class MulticastRangeStreamDeclaration(SpatialNode):
     """
     A stream declaration that multicasts to a contiguous range of PEs along one axis.
 
-    Exactly one of ``dx`` / ``dy`` must be a :class:`RangeExpression` whose
-    ``start`` ≥ 1; the other must be a scalar :class:`Expression`.
+    Exactly one of ``dx`` / ``dy`` must be a :class:`RangeExpression`; the other
+    must be a scalar :class:`Expression` equal to 0 (non-multicast axis).
 
-    Example: ``relative_stream(0, [1:K])`` broadcasts from the local PE to
-    PEs at y+1, y+2, …, y+K-1 using multicast
+    Two directions are supported:
+
+    * **Positive** – ``start ≥ 1``, ``stop > start`` (exclusive).  Receivers are at
+      offsets ``start, start+1, …, stop-1`` in the positive axis direction.
+      Example: ``relative_stream(0, [1:K])`` reaches y+1 … y+K-1.
+
+    * **Negative** – ``start ≤ -1``, ``stop < start`` (exclusive in the negative
+      direction).  Receivers are at offsets ``start, start-1, …, stop+1``.
+      Example: ``relative_stream(0, [-1:-K])`` reaches y-1 … y-(K-1).
+
+    If ``start < -1`` (negative) or ``start > 1`` (positive), PEs between the sender
+    and the first receiver are configured as relay-only nodes.
     """
     dx: Union['Expression', 'RangeExpression']
     dy: Union['Expression', 'RangeExpression']

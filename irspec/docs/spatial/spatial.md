@@ -277,6 +277,77 @@ a stream for receiving from the PE at the relative position `(i-dx, j-dy)` at th
 
     *Failure to provide unique stream names raises a syntax error.*
 
+### Multicast Relative Stream Declaration
+
+A *multicast* relative stream is a one-to-many variant of the relative stream:
+one sender PE transmits to a contiguous range of PEs along a single axis.
+It is declared by replacing exactly one of `dx` or `dy` with a *range expression*:
+
+```
+stream<T> stream_name = relative_stream(dx_or_range, dy_or_range);
+```
+
+Exactly one of the two arguments must be a range expression `[start:stop]`;
+the other must be a parameter expression equal to `0`.
+
+**Positive direction** (`start ≥ 1`, `stop > start`): the stream reaches the PEs
+at offsets `start, start+1, …, stop-1` along the multicast axis.
+If `start > 1`, the PEs between the sender and offset `start` are configured as
+relay-only nodes that forward the data but do not participate in computation.
+
+**Negative direction** (`start ≤ -1`, `stop < start`): the stream reaches the PEs
+at offsets `start, start-1, …, stop+1` along the multicast axis (i.e. toward more
+negative coordinates).
+If `start < -1`, the PEs between the sender and offset `start` are relay-only.
+
+The range bounds `start` and `stop` must be non-zero and have the same sign
+(i.e. a range may not cross the sender's own position).
+
+???+ example "Example: y-axis positive multicast"
+    ```rust
+    dataflow u16 i, u16 j in [0:1, 0:K] {
+        stream<f32> broadcast_south = relative_stream(0, [1:K])
+    }
+    ```
+    PE `(i, j)` sends to PEs `(i, j+1), (i, j+2), …, (i, j+K-1)`.
+    The sender is typically placed in the subgrid `[0:1, 0:1]` and the
+    receivers in `[0:1, 1:K]`.
+
+???+ example "Example: y-axis negative multicast"
+    ```rust
+    dataflow u16 i, u16 j in [0:1, 0:K] {
+        stream<f32> broadcast_north = relative_stream(0, [-1:-(K)]) {
+            hops = auto,
+            channel = 0
+        }
+    }
+    ```
+    PE `(i, j)` sends northward to PEs `(i, j-1), (i, j-2), …, (i, j-K+1)`.
+    The sender is typically the last row (`[0:1, K-1:K]`) and the receivers
+    occupy `[0:1, 0:K-1]`.
+
+???+ example "Example: x-axis multicast"
+    ```rust
+    dataflow u16 i, u16 j in [0:K, 0:1] {
+        stream<f32> broadcast_east = relative_stream([1:K], 0)
+    }
+    ```
+    PE `(i, j)` sends eastward to PEs `(i+1, j), (i+2, j), …, (i+K-1, j)`.
+
+!!! note
+    For a multicast stream, a `send` at the sender PE is matched by one `receive`
+    per receiver PE.  Each receiver must independently issue a `receive` (or
+    `foreach … receive`) call.
+
+!!! danger "Error: Invalid Range"
+    `start` must be non-zero.  If `start == 0`, the sender would be its own
+    receiver, which is not permitted.
+
+    `stop` must satisfy `stop > start` (positive direction) or `stop < start`
+    (negative direction); an empty or zero-length range is rejected.
+
+    *Violations raise a compilation error during canonicalization.*
+
 ### Routing Declarations
 
 Optionally, a routing declaration may be set up for each stream.
