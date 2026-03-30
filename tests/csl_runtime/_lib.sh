@@ -78,111 +78,101 @@ print("Test passed: 2D broadcast output matches expected.")
 PYEOF
 }
 
-# verify_multicast_y_range START STOP
-#   Loads a_in.npy (shape 1×1×2).  Checks sender (j=0) and receivers (j=START..STOP-1)
-#   in OUT_out.npy (shape 1×STOP×2) all equal the input value.
+# verify_multicast_y_range START N
+#   Loads a_in.npy (shape 1×1×2).  Checks OUT_out.npy (shape 1×(N-START)×2):
+#   only receivers are in out, so every position must equal inp[0,0,:].
 verify_multicast_y_range() {
     start=$1
-    stop=$2
+    n=$2
     python3 - <<PYEOF
 import numpy as np, sys
 START = $start
-STOP  = $stop
+N     = $n
 inp = np.load('a_in.npy')
 out = np.load('OUT_out.npy')
 val = inp[0, 0, :]
 failed = False
-if not np.allclose(out[0, 0, :], val, atol=1e-5):
-    print(f"FAIL: sender j=0: expected {val}, got {out[0,0,:]}")
-    failed = True
-for k in range(START, STOP):
+for k in range(N - START):
     if not np.allclose(out[0, k, :], val, atol=1e-5):
-        print(f"FAIL: receiver j={k}: expected {val}, got {out[0,k,:]}")
+        print(f"FAIL: receiver j={k+START}: out[0,{k}]={out[0,k,:]} != {val}")
         failed = True
 if failed:
     sys.exit(1)
-print(f"Test passed: generalized y-multicast [{START}:{STOP}], {STOP-START} receivers.")
+print(f"Test passed: y-multicast [START={START}:N={N}], {N-START} receivers.")
 PYEOF
 }
 
-# verify_multicast_x_range START STOP
-#   Loads a_in.npy (shape 1×1×2).  Checks sender (i=0) and receivers (i=START..STOP-1)
-#   in OUT_out.npy (shape STOP×1×2) all equal the input value.
+# verify_multicast_x_range START N
+#   Loads a_in.npy (shape 1×1×2).  Checks OUT_out.npy (shape (N-START)×1×2):
+#   only receivers are in out, so every position must equal inp[0,0,:].
 verify_multicast_x_range() {
     start=$1
-    stop=$2
+    n=$2
     python3 - <<PYEOF
 import numpy as np, sys
 START = $start
-STOP  = $stop
+N     = $n
 inp = np.load('a_in.npy')
 out = np.load('OUT_out.npy')
 val = inp[0, 0, :]
 failed = False
-if not np.allclose(out[0, 0, :], val, atol=1e-5):
-    print(f"FAIL: sender i=0: expected {val}, got {out[0,0,:]}")
-    failed = True
-for k in range(START, STOP):
+for k in range(N - START):
     if not np.allclose(out[k, 0, :], val, atol=1e-5):
-        print(f"FAIL: receiver i={k}: expected {val}, got {out[k,0,:]}")
+        print(f"FAIL: receiver i={k+START}: out[{k},0]={out[k,0,:]} != {val}")
         failed = True
 if failed:
     sys.exit(1)
-print(f"Test passed: generalized x-multicast [{START}:{STOP}], {STOP-START} receivers.")
+print(f"Test passed: x-multicast [START={START}:N={N}], {N-START} receivers.")
 PYEOF
 }
 
-# verify_multicast_y_neg RS RE
-#   Loads a_in.npy (shape 1×1×2).  Checks sender (j=RE-1) and receivers (j=0..RE-RS-1)
-#   in OUT_out.npy (shape 1×RE×2) all equal the input value.
+# verify_multicast_y_neg START N
+#   inp  : shape 1×N×2  (all positions tiled to same value)
+#   out  : shape 1×(N-START)×2  (receivers only; sender excluded)
+#   Every position in out must equal inp[0,0,:].
 verify_multicast_y_neg() {
-    rs=$1
-    re=$2
+    start=$1
+    n=$2
     python3 - <<PYEOF
 import numpy as np, sys
-RS = $rs
-RE = $re
+START = $start
+N     = $n
 inp = np.load('a_in.npy')
 out = np.load('OUT_out.npy')
 val = inp[0, 0, :]
 failed = False
-if not np.allclose(out[0, RE-1, :], val, atol=1e-5):
-    print(f"FAIL: sender j={RE-1}: expected {val}, got {out[0,RE-1,:]}")
-    failed = True
-for k in range(RE-RS):
+for k in range(N - START):
     if not np.allclose(out[0, k, :], val, atol=1e-5):
-        print(f"FAIL: receiver j={k}: expected {val}, got {out[0,k,:]}")
+        print(f"FAIL: receiver j={k}: out[0,{k}]={out[0,k,:]} != {val}")
         failed = True
 if failed:
     sys.exit(1)
-print(f"Test passed: generalized y-neg-multicast [-{RS}:-{RE}], {RE-RS} receivers.")
+print(f"Test passed: y-neg-multicast [-{START}:-{N}], {N-START} receivers.")
 PYEOF
 }
 
-# verify_multicast_x_neg RS RE
-#   Loads a_in.npy (shape 1×1×2).  Checks sender (i=RE-1) and receivers (i=0..RE-RS-1)
-#   in OUT_out.npy (shape RE×1×2) all equal the input value.
+# verify_multicast_x_neg START N
+#   inp  : shape N×1×2  (all positions tiled to same value)
+#   out  : shape (N-START)×1×2  (receivers only; sender excluded)
+#   Every position in out must equal inp[0,0,:].
 verify_multicast_x_neg() {
-    rs=$1
-    re=$2
+    start=$1
+    n=$2
     python3 - <<PYEOF
 import numpy as np, sys
-RS = $rs
-RE = $re
+START = $start
+N     = $n
 inp = np.load('a_in.npy')
 out = np.load('OUT_out.npy')
 val = inp[0, 0, :]
 failed = False
-if not np.allclose(out[RE-1, 0, :], val, atol=1e-5):
-    print(f"FAIL: sender i={RE-1}: expected {val}, got {out[RE-1,0,:]}")
-    failed = True
-for k in range(RE-RS):
+for k in range(N - START):
     if not np.allclose(out[k, 0, :], val, atol=1e-5):
-        print(f"FAIL: receiver i={k}: expected {val}, got {out[k,0,:]}")
+        print(f"FAIL: receiver i={k}: out[{k},0]={out[k,0,:]} != {val}")
         failed = True
 if failed:
     sys.exit(1)
-print(f"Test passed: generalized x-neg-multicast [-{RS}:-{RE}], {RE-RS} receivers.")
+print(f"Test passed: x-neg-multicast [-{START}:-{N}], {N-START} receivers.")
 PYEOF
 }
 

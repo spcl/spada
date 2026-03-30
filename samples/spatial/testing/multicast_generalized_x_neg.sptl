@@ -1,41 +1,39 @@
 /**
  * Generalized x-axis negative-direction multicast.
- * Sender at PE (RE-1, 0) receives values from the host, writes its copy to
- * out[RE-1, 0], and multicasts WEST via range [-RS:-RE] to PEs (0,0)…(RE-RS-1,0).
- * PEs (RE-RS,0)…(RE-2,0) are relay-only when RS > 1.
+ * Sender at PE (N-1, 0) multicasts WEST via range [-START:-N]
+ * to PEs (0,0)…(N-START-1,0).
+ * PEs (N-START,0)…(N-2,0) are relay-only when START > 1.
+ * Only receivers write to out; the sender is excluded from the output.
  *
  * Parameters:
- *   RS – positive magnitude of range start  (offset of first receiver = -RS)
- *   RE – positive magnitude of range end    (exclusive; RE > RS)
+ *   N     – total number of PEs in x (grid 0..N-1)
+ *   START – magnitude of offset to first receiver (≥ 1)
  *
- * Expected: OUT_out[RE-1, 0, 0] == inp[0, 0, 0]  (sender)
- *           OUT_out[k, 0, 0]    == inp[0, 0, 0]  for k in 0..RE-RS-1 (receivers)
- *           OUT_out[k, 0, 0]    unwritten         for k in RE-RS..RE-2 (relay PEs)
+ * Expected: OUT_out[k, 0, 0] == inp[N-1, 0, 0]  for k in 0..N-START-1
  **/
-kernel @multicast_generalized_x_neg<RS, RE>(
-    stream<f32, 2>[1, 1]   readonly  inp,
-    stream<f32, 2>[RE, 1] writeonly out
+kernel @multicast_generalized_x_neg<N, START>(
+    stream<f32, 2>[N, 1]       readonly  inp,
+    stream<f32, 2>[N-START, 1] writeonly out
 ) {
-    place u16 i, u16 j in [0:RE, 0:1] {
+    place u16 i, u16 j in [0:N, 0:1] {
         f32[2] val
     }
 
-    dataflow u16 i, u16 j in [0:RE, 0:1] {
-        stream<f32> s = relative_stream([-RS:-RE], 0) {
-            hops = auto,
+    dataflow u16 i, u16 j in [0:N, 0:1] {
+        stream<f32> s = relative_stream([-START:-N], 0) {
+            hops    = auto,
             channel = 0
         }
     }
 
-    // Sender: last PE in x; load from host, write own output, multicast westward.
-    compute u16 i, u16 j in [RE-1:RE, 0:1] {
+    // Sender: last PE in x; loads from inp[i,j] and multicasts westward (does not write to out).
+    compute u16 i, u16 j in [N-1:N, 0:1] {
         await receive(val, inp[i-(RE-1), j])
-        await send(val, out[i, j])
         await send(val, s)
     }
 
-    // Receivers: first RE-RS PEs in x.
-    compute u16 i, u16 j in [0:RE-RS, 0:1] {
+    // Receivers: PEs 0..N-START-1; write to contiguous output.
+    compute u16 i, u16 j in [0:N-START, 0:1] {
         await receive(val, s)
         await send(val, out[i, j])
     }

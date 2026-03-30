@@ -6,7 +6,7 @@
  * Expected: OUT_out[0, k, 0] == inp[0, 0, 0]  for k in 0..K-1.
  **/
 kernel @multicast_simple_y_neg<K>(
-    stream<f32, 2>[1, 1] readonly  inp,
+    stream<f32, 2>[1, K] readonly  inp,
     stream<f32, 2>[1, K] writeonly out
 ) {
     place u16 i, u16 j in [0:1, 0:K] {
@@ -22,7 +22,7 @@ kernel @multicast_simple_y_neg<K>(
 
     // Sender (last row): load from host, write to output, then multicast northward.
     compute u16 i, u16 j in [0:1, K-1:K] {
-        await receive(val, inp[i, j-(K-1)])
+        await receive(val, inp[i, j])
         await send(val, out[i, j])
         await send(val, s)
     }
