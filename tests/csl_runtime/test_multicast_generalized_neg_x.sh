@@ -22,7 +22,7 @@ run_multicast_x_neg() {
     RE=$2
     echo "--- multicast_generalized_x_neg RS=$RS RE=$RE ---"
 
-    sptlc "$TESTING_DIR/multicast_generalized_x_neg.sptl" "$FOLDER" -p RS=$RS RE=$RE
+    sptlc "$TESTING_DIR/multicast_generalized_x_neg.sptl" "$FOLDER" -p RS=$RS -p RE=$RE
 
     python3 - <<PYEOF
 import numpy as np

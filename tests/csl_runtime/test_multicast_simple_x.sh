@@ -18,7 +18,7 @@ run_multicast_x_range() {
     STOP=$2
     echo "--- multicast_generalized_x START=$START STOP=$STOP ---"
 
-    sptlc "$TESTING_DIR/multicast_generalized_x.sptl" "$FOLDER" -p START=$START STOP=$STOP
+    sptlc "$TESTING_DIR/multicast_generalized_x.sptl" "$FOLDER" -p START=$START -p STOP=$STOP
 
     python3 - <<PYEOF
 import numpy as np
