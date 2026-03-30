@@ -15,7 +15,7 @@
 
     // Phase 1: Read argument stream
     phase {
-        compute i16 i, i16 j in [0:N, 0] {  // East corner
+        compute i16 i, i16 j in [0:N, 0] {  // All PEs
             await receive(a, a_in[i, j])
         }
     }
@@ -23,7 +23,7 @@
     // Phase 2: Perform reduction
     phase {
         // Declare dataflow
-        dataflow i16 i, i16 j in [0:N, 0] {  // East corner
+        dataflow i16 i, i16 j in [0:N, 0] {  // All PEs
             stream<f32> red = relative_stream(-1, 0) {
                 hops = [(-1, 0)],
                 channel = 0
