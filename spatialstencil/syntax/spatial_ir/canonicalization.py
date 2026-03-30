@@ -436,7 +436,7 @@ class _AutoHopResolver(spir.NodeTransformer):
         node.routing = new_routing
         return node
 
-    def visit_MulticastStreamDeclaration(self, node: spir.MulticastStreamDeclaration):
+    def visit_MulticastStreamDeclaration(self, node: spir.MulticastRangeStreamDeclaration):
         node = self.generic_visit(node)
         # Inject default routing if none provided.
         if node.routing is None:

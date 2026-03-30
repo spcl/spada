@@ -198,7 +198,7 @@ class TreeToSpatialIR(lark.Transformer):
         dx, dy, *rest = args
         routing = rest[0] if rest else None
         if isinstance(dx, irnodes.RangeExpression) or isinstance(dy, irnodes.RangeExpression):
-            return irnodes.MulticastStreamDeclaration(dx, dy, routing)
+            return irnodes.MulticastRangeStreamDeclaration(dx, dy, routing)
         return irnodes.RelativeStreamDeclaration(dx, dy, routing)
 
     def extern_stream_declaration(self, args):

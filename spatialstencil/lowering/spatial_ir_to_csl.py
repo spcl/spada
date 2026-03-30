@@ -1119,7 +1119,7 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
             if isinstance(stream.stream, spir.ExternStreamDeclaration):
                 continue  # Extern streams do not have on-chip routing
 
-            if isinstance(stream.stream, spir.MulticastStreamDeclaration):
+            if isinstance(stream.stream, spir.MulticastRangeStreamDeclaration):
                 if sent and received:
                     raise ValueError(
                         f"Multicast stream '{stream.stream_name.as_ir()}' is both sent and received "

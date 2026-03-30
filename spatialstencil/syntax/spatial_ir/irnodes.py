@@ -642,7 +642,7 @@ class RelativeStreamDeclaration(SpatialNode):
 
 
 @dataclass
-class MulticastStreamDeclaration(SpatialNode):
+class MulticastRangeStreamDeclaration(SpatialNode):
     """
     A stream declaration that multicasts to a contiguous range of PEs along one axis.
 
@@ -721,12 +721,12 @@ class StreamDeclaration(SpatialNode):
     """
     dtype: StreamType
     stream_name: Identifier
-    stream: RelativeStreamDeclaration | MulticastStreamDeclaration | ExternStreamDeclaration
+    stream: RelativeStreamDeclaration | MulticastRangeStreamDeclaration | ExternStreamDeclaration
 
     def validate(self) -> None:
         assert isinstance(self.dtype, StreamType)
         assert isinstance(self.stream_name, Identifier)
-        assert isinstance(self.stream, (RelativeStreamDeclaration, MulticastStreamDeclaration, ExternStreamDeclaration))
+        assert isinstance(self.stream, (RelativeStreamDeclaration, MulticastRangeStreamDeclaration, ExternStreamDeclaration))
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent

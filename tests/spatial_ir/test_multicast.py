@@ -66,7 +66,7 @@ def test_multicast_dy_parsed_as_multicast_node():
     kernel = parser.parse_string(_multicast_kernel())
     df = next(b for b in kernel.body if isinstance(b, spir.DataflowBlock))
     decl = df.statements[0]
-    assert isinstance(decl.stream, spir.MulticastStreamDeclaration)
+    assert isinstance(decl.stream, spir.MulticastRangeStreamDeclaration)
 
 
 def test_multicast_dy_range_values():
@@ -98,7 +98,7 @@ def test_multicast_dx_range():
     kernel = parser.parse_string(code)
     df = next(b for b in kernel.body if isinstance(b, spir.DataflowBlock))
     decl = df.statements[0]
-    assert isinstance(decl.stream, spir.MulticastStreamDeclaration)
+    assert isinstance(decl.stream, spir.MulticastRangeStreamDeclaration)
     assert decl.stream.multicast_axis == 'x'
     assert isinstance(decl.stream.dx, spir.RangeExpression)
     assert isinstance(decl.stream.dy, spir.Expression)
