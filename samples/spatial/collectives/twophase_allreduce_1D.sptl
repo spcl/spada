@@ -1,0 +1,143 @@
+/**
+ * 1D Allreduce over G*S PEs with K elements per PE.
+ * Reduce = two-phase chain (within-group then cross-group); broadcast = direct multicast.
+ * Root is at (0,0).
+ *
+ * Communication Pattern (S=4, G=3, P=12):
+ *
+ *   Phase 1 — within-group chain reduces (channels 0,1):
+ *   [0,0] <--1-- [1,0] <--0-- [2,0] <--1-- [3,0]   [4,0] <--...   [8,0] <--...
+ *
+ *   Phase 2 — cross-group chain reduce over {0,4,8} (channels 2,3):
+ *   [0,0] <--3---- [4,0] <--2---- [8,0]
+ *
+ *   Phase 3 — multicast from root to all PEs (channel 0 reused):
+ *   [0,0] ----multicast----> {[1,0], [2,0], ..., [G*S-1,0]}
+ *
+ * (!) Assumes S is even (!)
+ **/
+kernel @twophase_allreduce_1d<G, S, K>(
+    stream<f32, K>[G*S, 1] readonly  a_in,
+    stream<f32, K>[G*S, 1] writeonly out
+) {
+
+    place i16 i, i16 j in [0:G*S, 0] {
+        f32[K] a
+    }
+
+    // Phase 1: All PEs load input
+    phase {
+        compute i16 i, i16 j in [0:G*S, 0] {
+            await receive(a, a_in[i, j])
+        }
+    }
+
+    // Phase 2: Within-group reduce — each group [g*S .. (g+1)*S-1] reduces westward.
+    // SX even → east corner of every group is always at an odd local index → sends blue.
+    phase {
+        dataflow i16 i, i16 j in [0:S*G, 0] {
+            stream<f32> red = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 1
+            }
+        }
+
+        for i16 group in [0:G] {
+            // West corner of group: accumulate, no send
+            compute i16 i, i16 j in [group * S, 0] {
+                await foreach i16 k, f32 x in [0:K], receive(blue) {
+                    a[k] = a[k] + x
+                }
+            }
+            // Middle odd
+            compute i16 i, i16 j in [group * S + 1 : (group+1) * S - 1 : 2, 0] {
+                await foreach i16 k, f32 x in [0:K], receive(red) {
+                    a[k] = a[k] + x
+                    await send(a[k], blue)
+                }
+            }
+            // Middle even
+            compute i16 i, i16 j in [group * S + 2 : (group+1) * S - 1 : 2, 0] {
+                await foreach i16 k, f32 x in [0:K], receive(blue) {
+                    a[k] = a[k] + x
+                    await send(a[k], red)
+                }
+            }
+            // East corner: S even → local index S-1 is odd → send blue
+            compute i16 i, i16 j in [(group+1) * S - 1, 0] {
+                await send(a, blue)
+            }
+        }
+    }
+
+    // Phase 3: Cross-group reduce — G representatives at {0, S, 2S, ...} reduce westward.
+    // Multi-hop streams span S hops each. Channels 2,3 avoid conflict with Phase 2.
+    phase {
+        dataflow i16 i, i16 j in [0:S*G:S, 0] {
+            stream<f32> green = relative_stream(-S, 0) {
+                hops = auto,
+                channel = 2
+            }
+            stream<f32> yellow = relative_stream(-S, 0) {
+                hops = auto,
+                channel = 3
+            }
+        }
+
+        // West corner (root): accumulate final sum
+        compute i16 i, i16 j in [0, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(green) {
+                a[k] = a[k] + x
+            }
+        }
+        // Middle odd group representatives
+        compute i16 i, i16 j in [S:(G-1)*S:2*S, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(yellow) {
+                a[k] = a[k] + x
+                await send(a[k], green)
+            }
+        }
+        // Middle even group representatives
+        compute i16 i, i16 j in [2*S:(G-1)*S:2*S, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(green) {
+                a[k] = a[k] + x
+                await send(a[k], yellow)
+            }
+        }
+        // East corner: group-level index G-1; even → red (green), odd → blue (yellow)
+        compute i16 i, i16 j in [(G-1)*S, 0] {
+            await send(a, yellow if (G-1) % 2 == 0 else green)
+        }
+    }
+
+    // Phase 4: Multicast from root (0,0) to all other PEs simultaneously
+    phase {
+        dataflow i16 i, i16 j in [0:G*S, 0] {
+            stream<f32> s = relative_stream([1:G*S], 0) {
+                hops    = auto,
+                channel = 0
+            }
+        }
+
+        // Root: multicast the reduced value
+        compute i16 i, i16 j in [0, 0] {
+            await send(a, s)
+        }
+
+        // All other PEs: receive the broadcast value
+        compute i16 i, i16 j in [1:G*S, 0] {
+            await receive(a, s)
+        }
+    }
+
+    // Phase 5: All PEs write output
+    phase {
+        compute i16 i, i16 j in [0:G*S, 0] {
+            await send(a, out[i, j])
+        }
+    }
+}

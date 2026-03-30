@@ -176,6 +176,44 @@ print(f"Test passed: x-neg-multicast [-{START}:-{N}], {N-START} receivers.")
 PYEOF
 }
 
+# verify_allreduce
+#   Loads a_in.npy (shape N×1×K), expects OUT_out.npy (shape N×1×K)
+#   where every PE holds the global sum: OUT_out[i,0,:] == sum(a_in[:,0,:]).
+verify_allreduce() {
+    python3 - <<'PYEOF'
+import numpy as np, sys
+a   = np.load('a_in.npy')
+ref = np.sum(a, axis=0, keepdims=True)       # (1, 1, K)
+out = np.load('OUT_out.npy')                 # (N, 1, K)
+rep = np.broadcast_to(ref, out.shape)
+if not np.allclose(out, rep, atol=1e-5):
+    print(f"Test failed: max abs diff = {float(np.max(np.abs(out - rep))):.3e}")
+    print(f"  expected: {rep.flatten()[:8]}")
+    print(f"  got:      {out.flatten()[:8]}")
+    sys.exit(1)
+print("Test passed: allreduce output matches expected sum at every PE.")
+PYEOF
+}
+
+# verify_allreduce_2d
+#   Loads a_in.npy (shape NX×NY×K), expects OUT_out.npy (shape NX×NY×K)
+#   where every PE holds the global sum: OUT_out[i,j,:] == sum(a_in[:,:,:]).
+verify_allreduce_2d() {
+    python3 - <<'PYEOF'
+import numpy as np, sys
+a   = np.load('a_in.npy')
+ref = np.sum(a, axis=(0, 1), keepdims=True)  # (1, 1, K)
+out = np.load('OUT_out.npy')                 # (NX, NY, K)
+rep = np.broadcast_to(ref, out.shape)
+if not np.allclose(out, rep, atol=1e-5):
+    print(f"Test failed: max abs diff = {float(np.max(np.abs(out - rep))):.3e}")
+    print(f"  expected: {rep.flatten()[:8]}")
+    print(f"  got:      {out.flatten()[:8]}")
+    sys.exit(1)
+print("Test passed: 2D allreduce output matches expected sum at every PE.")
+PYEOF
+}
+
 # cleanup FOLDER
 #   Removes compiled folder and temporary npy files.
 cleanup() {
