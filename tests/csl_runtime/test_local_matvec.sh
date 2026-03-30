@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 K=4
 FOLDER="local_matvec_sptl"
-TESTING_DIR="$(cd "$SCRIPT_DIR/../../samples/spatial/testing" && pwd)"
+TESTING_DIR="$(cd "$SCRIPT_DIR/../spatial_ir/samples" && pwd)"
 
 sptlc "$TESTING_DIR/local_matvec.sptl" "$FOLDER" -p K=$K
 

@@ -75,7 +75,7 @@ def test_collective_2d(filename, params):
         print('='*13)
 
 def test_two_phase_split():
-    file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'testing', 'two_phase_split.sptl')
+    file = os.path.join(os.path.dirname(__file__), 'samples', 'two_phase_split.sptl')
     kernel = parser.parse_file(file)
     kernel = passes.concretize_parameters(kernel, K=32)
     kernel = passes.constexpr_propagation(kernel)

@@ -11,7 +11,7 @@ NX=3
 NY=4
 K=2
 FOLDER="identity_2d_full_sptl"
-TESTING_DIR="$(cd "$SCRIPT_DIR/../../samples/spatial/testing" && pwd)"
+TESTING_DIR="$(cd "$SCRIPT_DIR/../spatial_ir/samples" && pwd)"
 
 sptlc "$TESTING_DIR/identity_2d_full.sptl" "$FOLDER" -p NX=$NX -p NY=$NY -p K=$K
 

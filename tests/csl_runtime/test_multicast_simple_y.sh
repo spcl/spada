@@ -11,7 +11,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/_lib.sh"
 
-TESTING_DIR="$(cd "$(dirname "$0")/../../samples/spatial/testing" && pwd)"
+TESTING_DIR="$(cd "$(dirname "$0")/../spatial_ir/samples" && pwd)"
 FOLDER="multicast_simple_y_sptl"
 
 run_multicast_y_range() {

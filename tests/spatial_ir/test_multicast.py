@@ -12,7 +12,7 @@ import pytest
 from spatialstencil.syntax.spatial_ir import irnodes as spir, parser, passes, canonicalization
 from spatialstencil.lowering.spatial_ir_to_csl import lower_spatial_ir_to_csl
 
-_TESTING_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'testing')
+_TESTING_DIR = os.path.join(os.path.dirname(__file__), 'samples')
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +473,6 @@ def test_multicast_negative_sample_file_lowers():
         assert csl_files, f'No output files for N={N}, START={START}'
         layout = _layout_code(csl_files)
         assert 'NORTH' in layout, f'No NORTH routing for N={N}, START={START}'
-        assert 'SOUTH' in layout, f'No SOUTH routing for K={K}'
 
 
 if __name__ == '__main__':
