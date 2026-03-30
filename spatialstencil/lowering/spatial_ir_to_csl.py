@@ -74,7 +74,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     #        * There is no "orphan" block that does not have all matching place/dataflow/compute (pass)
     #     * There are no phases in the code, there may be local phases for each rectangle (pass)
 
-    # Run the shared canonicalization pipeline (single source of truth: canonicalize_kernel).
+    # Run the shared canonicalization pipeline
     kernel = canonicalize_kernel(kernel)
 
     # Check if we are streaming or using memcpy mode
@@ -207,7 +207,7 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
 
     # First pass: @set_tile_code for every PE.
     # All tile codes must be established before any @set_color_config call,
-    # because multi-hop routing config may reference neighbouring PEs that
+    # because multi-hop routing config may reference neighboring PEs that
     # belong to a different rectangle (e.g. pass-through relays).
     for rect in rectangles:
         xb_pre, xe_pre, xs, yb_pre, ye_pre, ys = *rect.x_range, *rect.y_range
