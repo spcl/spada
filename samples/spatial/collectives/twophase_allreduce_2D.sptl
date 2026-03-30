@@ -217,7 +217,7 @@ kernel @twophase_allreduce_2d<GX, SX, GY, SY, K>(
         dataflow i16 i, i16 j in [0:GX*SX, 0:1] {
             stream<f32> sx = relative_stream([1:GX*SX], 0) {
                 hops    = auto,
-                channel = 0
+                channel = 8
             }
         }
 
@@ -240,7 +240,7 @@ kernel @twophase_allreduce_2d<GX, SX, GY, SY, K>(
         dataflow i16 i, i16 j in [0:GX*SX, 0:GY*SY] {
             stream<f32> sy = relative_stream(0, [1:GY*SY]) {
                 hops    = auto,
-                channel = 1
+                channel = 9
             }
         }
 

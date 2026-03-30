@@ -119,7 +119,7 @@ kernel @twophase_allreduce_1d<G, S, K>(
         dataflow i16 i, i16 j in [0:G*S, 0] {
             stream<f32> s = relative_stream([1:G*S], 0) {
                 hops    = auto,
-                channel = 0
+                channel = 4
             }
         }
 
