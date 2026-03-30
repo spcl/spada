@@ -22,7 +22,7 @@ kernel @multicast_simple_y_neg<K>(
 
     // Sender (last row): load from host, write to output, then multicast northward.
     compute u16 i, u16 j in [0:1, K-1:K] {
-        await receive(val, inp[i, 0])
+        await receive(val, inp[i, j-(K-1)])
         await send(val, out[i, j])
         await send(val, s)
     }
