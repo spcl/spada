@@ -122,7 +122,7 @@ def test_regular_relative_stream_unchanged():
 
 def test_multicast_roundtrip():
     """as_ir() output re-parses to the same as_ir() (roundtrip stability)."""
-    file = os.path.join(_TESTING_DIR, 'multicast_simple_y.sptl')
+    file = os.path.join(_TESTING_DIR, 'multicast_generalized_y.sptl')
     kernel = parser.parse_file(file)
     ir1 = kernel.as_ir()
     kernel2 = parser.parse_string(ir1)
@@ -319,28 +319,28 @@ def test_multicast_x_axis_routing():
 
 
 def test_multicast_sample_file_lowers():
-    """The multicast_simple_y.sptl sample file lowers without error for several K values."""
-    file = os.path.join(_TESTING_DIR, 'multicast_simple_y.sptl')
-    for K in [2, 3, 5, 8]:
+    """The multicast_generalized_y.sptl sample file lowers without error for several N/START values."""
+    file = os.path.join(_TESTING_DIR, 'multicast_generalized_y.sptl')
+    for N, START in [(2, 1), (3, 1), (5, 1), (8, 1), (5, 2)]:
         kernel = parser.parse_file(file)
-        kernel = passes.concretize_parameters(kernel, K=K)
+        kernel = passes.concretize_parameters(kernel, N=N, START=START)
         kernel = passes.constexpr_propagation(kernel)
         csl_files = lower_spatial_ir_to_csl(kernel)
-        assert csl_files, f'No output files for K={K}'
+        assert csl_files, f'No output files for N={N}, START={START}'
 
 
 def test_multicast_x_sample_file_lowers():
-    """The multicast_simple_x.sptl sample file lowers without error for several K values."""
-    file = os.path.join(_TESTING_DIR, 'multicast_simple_x.sptl')
-    for K in [2, 3, 5, 8]:
+    """The multicast_generalized_x.sptl sample file lowers without error for several N/START values."""
+    file = os.path.join(_TESTING_DIR, 'multicast_generalized_x.sptl')
+    for N, START in [(2, 1), (3, 1), (5, 1), (8, 1), (5, 2)]:
         kernel = parser.parse_file(file)
-        kernel = passes.concretize_parameters(kernel, K=K)
+        kernel = passes.concretize_parameters(kernel, N=N, START=START)
         kernel = passes.constexpr_propagation(kernel)
         csl_files = lower_spatial_ir_to_csl(kernel)
-        assert csl_files, f'No output files for K={K}'
+        assert csl_files, f'No output files for N={N}, START={START}'
         layout = _layout_code(csl_files)
-        assert 'EAST' in layout, f'No EAST routing for K={K}'
-        assert 'WEST' in layout, f'No WEST routing for K={K}'
+        assert 'EAST' in layout, f'No EAST routing for N={N}, START={START}'
+        assert 'WEST' in layout, f'No WEST routing for N={N}, START={START}'
 
 
 # ---------------------------------------------------------------------------
@@ -463,16 +463,16 @@ def test_multicast_negative_error_empty():
 
 
 def test_multicast_negative_sample_file_lowers():
-    """The multicast_simple_y_neg.sptl sample file lowers without error for several K values."""
-    file = os.path.join(_TESTING_DIR, 'multicast_simple_y_neg.sptl')
-    for K in [2, 3, 5, 8]:
+    """The multicast_generalized_y_neg.sptl sample file lowers without error for several N/START values."""
+    file = os.path.join(_TESTING_DIR, 'multicast_generalized_y_neg.sptl')
+    for N, START in [(2, 1), (3, 1), (5, 1), (8, 1), (5, 2)]:
         kernel = parser.parse_file(file)
-        kernel = passes.concretize_parameters(kernel, K=K)
+        kernel = passes.concretize_parameters(kernel, N=N, START=START)
         kernel = passes.constexpr_propagation(kernel)
         csl_files = lower_spatial_ir_to_csl(kernel)
-        assert csl_files, f'No output files for K={K}'
+        assert csl_files, f'No output files for N={N}, START={START}'
         layout = _layout_code(csl_files)
-        assert 'NORTH' in layout, f'No NORTH routing for K={K}'
+        assert 'NORTH' in layout, f'No NORTH routing for N={N}, START={START}'
         assert 'SOUTH' in layout, f'No SOUTH routing for K={K}'
 
 
