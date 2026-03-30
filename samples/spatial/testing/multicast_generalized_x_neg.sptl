@@ -9,10 +9,10 @@
  *   N     – total number of PEs in x (grid 0..N-1)
  *   START – magnitude of offset to first receiver (≥ 1)
  *
- * Expected: OUT_out[k, 0, 0] == inp[N-1, 0, 0]  for k in 0..N-START-1
+ * Expected: OUT_out[k, 0, 0] == inp[0, 0, 0]  for k in 0..N-START-1
  **/
 kernel @multicast_generalized_x_neg<N, START>(
-    stream<f32, 2>[N, 1]       readonly  inp,
+    stream<f32, 2>[1, 1]       readonly  inp,
     stream<f32, 2>[N-START, 1] writeonly out
 ) {
     place u16 i, u16 j in [0:N, 0:1] {
@@ -28,7 +28,7 @@ kernel @multicast_generalized_x_neg<N, START>(
 
     // Sender: last PE in x; loads from inp[i,j] and multicasts westward (does not write to out).
     compute u16 i, u16 j in [N-1:N, 0:1] {
-        await receive(val, inp[i-(START-1), j])
+        await receive(val, inp[i-(N-1), j])
         await send(val, s)
     }
 

@@ -127,7 +127,7 @@ PYEOF
 }
 
 # verify_multicast_y_neg START N
-#   inp  : shape 1×N×2  (all positions tiled to same value)
+#   inp  : shape 1×1×2
 #   out  : shape 1×(N-START)×2  (receivers only; sender excluded)
 #   Every position in out must equal inp[0,0,:].
 verify_multicast_y_neg() {
@@ -152,7 +152,7 @@ PYEOF
 }
 
 # verify_multicast_x_neg START N
-#   inp  : shape N×1×2  (all positions tiled to same value)
+#   inp  : shape 1×1×2
 #   out  : shape (N-START)×1×2  (receivers only; sender excluded)
 #   Every position in out must equal inp[0,0,:].
 verify_multicast_x_neg() {

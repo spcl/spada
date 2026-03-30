@@ -9,10 +9,10 @@
  *   N     – total number of PEs in y (grid 0..N-1)
  *   START – magnitude of offset to first receiver (≥ 1)
  *
- * Expected: OUT_out[0, k, 0] == inp[0, N-1, 0]  for k in 0..N-START-1
+ * Expected: OUT_out[0, k, 0] == inp[0, 0, 0]  for k in 0..N-START-1
  **/
 kernel @multicast_generalized_y_neg<N, START>(
-    stream<f32, 2>[1, N]       readonly  inp,
+    stream<f32, 2>[1, 1]       readonly  inp,
     stream<f32, 2>[1, N-START] writeonly out
 ) {
     place u16 i, u16 j in [0:1, 0:N] {

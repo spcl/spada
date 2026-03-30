@@ -25,8 +25,7 @@ run_multicast_x_neg() {
     python3 - <<PYEOF
 import numpy as np
 np.random.seed(0)
-# inp has shape (N, 1, 2); tile a single value so inp[N-1,0,:] == inp[0,0,:]
-a = np.tile(np.random.rand(1, 1, 2).astype(np.float32), ($N, 1, 1))
+a = np.random.rand(1, 1, 2).astype(np.float32)
 np.save('a_in.npy', a)
 PYEOF
 
