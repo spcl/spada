@@ -12,8 +12,10 @@ class Rectangle(Generic[T]):
     metadata: T
 
     def __post_init__(self):
-        assert self.x_range[0] <= self.x_range[1]
-        assert self.y_range[0] <= self.y_range[1]
+        assert self.x_range[2] >= 1, "Strides must be positive"
+        assert self.y_range[2] >= 1, "Strides must be positive"
+        assert self.x_range[0] <= self.x_range[1], "Rectangle x Range is invalid"
+        assert self.y_range[0] <= self.y_range[1], "Rectangle y Range is invalid"
         assert isinstance(self.x_range[0], int)
         assert isinstance(self.x_range[1], int)
         assert isinstance(self.x_range[2], int)
