@@ -1,0 +1,153 @@
+/**
+ * 2D Allreduce over NX*NY PEs with K elements per PE.
+ * Root is at (0,0). Reduce = pipelined chain (X then Y); broadcast = direct multicast (X then Y).
+ *
+ * Communication Pattern:
+ *   Reduce Phase X:    each row reduces westward  → (0, j) for all j
+ *   Reduce Phase Y:    column 0 reduces northward → root (0,0)
+ *   Broadcast Phase X: root (0,0) multicasts to {(1,0)…(NX-1,0)}
+ *   Broadcast Phase Y: every (i,0) multicasts southward to {(i,1)…(i,NY-1)}
+ *
+ * (!) Assumes NX >= 2 and NY >= 2 (!)
+ **/
+kernel @allreduce_2d<NX, NY, K>(stream<f32, K>[NX,NY] readonly a_in, stream<f32, K>[NX,NY] writeonly out) {
+
+    place i16 i, i16 j in [0:NX, 0:NY] {
+        f32[K] a
+    }
+
+    // Phase 1: All PEs load their input
+    phase {
+        compute i16 i, i16 j in [0:NX, 0:NY] {
+            await receive(a, a_in[i, j])
+        }
+    }
+
+    // Reduce Phase X: every row reduces westward into its (i=0, j) PE.
+    // All NY rows execute in parallel. Mirrors chain_reduce_2D Phase X.
+    phase {
+        dataflow i16 i, i16 j in [0:NX, 0:NY] {
+            stream<f32> red = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 1
+            }
+        }
+
+        // East corners (i=NX-1): only send
+        compute i16 i, i16 j in [NX-1, 0:NY] {
+            await send(a, red if (NX-1) % 2 == 0 else blue)
+        }
+        // Odd i (middle): receive red, accumulate, forward blue
+        compute i16 i, i16 j in [1:NX-1:2, 0:NY] {
+            await foreach i16 k, f32 x in [0:K], receive(red) {
+                a[k] = a[k] + x
+                await send(a[k], blue)
+            }
+        }
+        // Even i (middle): receive blue, accumulate, forward red
+        compute i16 i, i16 j in [2:NX-1:2, 0:NY] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+                await send(a[k], red)
+            }
+        }
+        // West corners (i=0): accumulate row sum; always receive blue
+        compute i16 i, i16 j in [0, 0:NY] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+            }
+        }
+    }
+
+    // Reduce Phase Y: column 0 reduces northward into root (0,0).
+    // Mirrors chain_reduce_2D Phase Y.
+    phase {
+        dataflow i16 i, i16 j in [0, 0:NY] {
+            stream<f32> red = relative_stream(0, -1) {
+                hops = [(0, -1)],
+                channel = 2
+            }
+            stream<f32> blue = relative_stream(0, -1) {
+                hops = [(0, -1)],
+                channel = 3
+            }
+        }
+
+        // South corner (j=NY-1): only send
+        compute i16 i, i16 j in [0, NY-1] {
+            await send(a, red if (NY-1) % 2 == 0 else blue)
+        }
+        // Odd j (middle): receive red, accumulate, forward blue
+        compute i16 i, i16 j in [0, 1:NY-1:2] {
+            await foreach i16 k, f32 x in [0:K], receive(red) {
+                a[k] = a[k] + x
+                await send(a[k], blue)
+            }
+        }
+        // Even j (middle): receive blue, accumulate, forward red
+        compute i16 i, i16 j in [0, 2:NY-1:2] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+                await send(a[k], red)
+            }
+        }
+        // Root (j=0): accumulate final column sum; always receives blue
+        compute i16 i, i16 j in [0, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+            }
+        }
+    }
+
+    // Broadcast Phase X: root (0,0) multicasts eastward to all PEs in row j=0.
+    phase {
+        dataflow i16 i, i16 j in [0:NX, 0:1] {
+            stream<f32> sx = relative_stream([1:NX], 0) {
+                hops    = auto,
+                channel = 4
+            }
+        }
+
+        // Root: multicast to all other row-0 PEs
+        compute i16 i, i16 j in [0:1, 0:1] {
+            await send(a, sx)
+        }
+
+        // Row-0 receivers: collect from root
+        compute i16 i, i16 j in [1:NX, 0:1] {
+            await receive(a, sx)
+        }
+    }
+
+    // Broadcast Phase Y: every (i,0) PE multicasts southward through its column.
+    // All NX columns execute in parallel.
+    phase {
+        dataflow i16 i, i16 j in [0:NX, 0:NY] {
+            stream<f32> sy = relative_stream(0, [1:NY]) {
+                hops    = auto,
+                channel = 5
+            }
+        }
+
+        // Column roots (j=0): multicast southward
+        compute i16 i, i16 j in [0:NX, 0:1] {
+            await send(a, sy)
+        }
+
+        // Column receivers (j>0): collect from their column root
+        compute i16 i, i16 j in [0:NX, 1:NY] {
+            await receive(a, sy)
+        }
+    }
+
+    // Phase 6: All PEs write output
+    phase {
+        compute i16 i, i16 j in [0:NX, 0:NY] {
+            await send(a, out[i, j])
+        }
+    }
+}

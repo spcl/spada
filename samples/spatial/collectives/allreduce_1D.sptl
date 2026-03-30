@@ -1,0 +1,89 @@
+/**
+ * 1D Allreduce over N PEs with K elements per PE.
+ * Root is at (0,0). Reduce = pipelined chain westward; broadcast = direct multicast.
+ *
+ * Communication Pattern (N=4):
+ *   Reduce:    [0,0] <--1-- [1,0] <--0-- [2,0] <--1-- [3,0]
+ *   Broadcast: [0,0] ----multicast----> {[1,0], [2,0], [3,0]}
+ *
+ * (!) Assumes N >= 2 (!)
+ **/
+kernel @allreduce_1d<N, K>(stream<f32, K>[N,1] readonly a_in, stream<f32, K>[N,1] writeonly out) {
+
+    place i16 i, i16 j in [0:N, 0] {
+        f32[K] a
+    }
+
+    // Phase 1: All PEs load their input
+    phase {
+        compute i16 i, i16 j in [0:N, 0] {
+            await receive(a, a_in[i, j])
+        }
+    }
+
+    // Phase 2: Chain reduce westward into root (0,0)
+    phase {
+        dataflow i16 i, i16 j in [0:N, 0] {
+            stream<f32> red = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 0
+            }
+            stream<f32> blue = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 1
+            }
+        }
+
+        // East corner: only send
+        compute i16 i, i16 j in [N-1, 0] {
+            await send(a, red if (N-1) % 2 == 0 else blue)
+        }
+        // Odd PEs: receive red, accumulate, forward blue
+        compute i16 i, i16 j in [1:N-1:2, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(red) {
+                a[k] = a[k] + x
+                await send(a[k], blue)
+            }
+        }
+        // Even PEs (middle): receive blue, accumulate, forward red
+        compute i16 i, i16 j in [2:N-1:2, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+                await send(a[k], red)
+            }
+        }
+        // West corner (root): accumulate final sum; always receives blue
+        compute i16 i, i16 j in [0, 0] {
+            await foreach i16 k, f32 x in [0:K], receive(blue) {
+                a[k] = a[k] + x
+            }
+        }
+    }
+
+    // Phase 3: Multicast from root (0,0) to all other PEs simultaneously
+    phase {
+        dataflow i16 i, i16 j in [0:N, 0] {
+            stream<f32> s = relative_stream([1:N], 0) {
+                hops    = auto,
+                channel = 2
+            }
+        }
+
+        // Root: multicast the reduced value
+        compute i16 i, i16 j in [0, 0] {
+            await send(a, s)
+        }
+
+        // All other PEs: receive the broadcast value
+        compute i16 i, i16 j in [1:N, 0] {
+            await receive(a, s)
+        }
+    }
+
+    // Phase 4: All PEs write output
+    phase {
+        compute i16 i, i16 j in [0:N, 0] {
+            await send(a, out[i, j])
+        }
+    }
+}
