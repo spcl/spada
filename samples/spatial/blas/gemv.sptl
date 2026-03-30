@@ -11,7 +11,7 @@
  * Algorithm:
  *   Phase 1: All PEs load their K×K block of A from the host.
  *   Phase 2: The j=0 column loads x; the i=0 column loads y from the host.
- *   Phase 3: Multicast x in the Y direction (j=0 → j=PY-1) using native CSL multicast.
+ *   Phase 3: Multicast x in the Y direction (j=0 → j=PY-1) using native hardware multicast.
  *   Phase 4: Each PE computes its local contribution z = A_block @ x using
  *            nested for loops.
  *   Phase 5: Pipelined chain reduction of z in the X direction (i=PX-1 → i=0).

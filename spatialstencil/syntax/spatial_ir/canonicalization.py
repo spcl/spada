@@ -442,7 +442,7 @@ class _AutoHopResolver(spir.NodeTransformer):
         if node.routing is None:
             node.routing = spir.RoutingDeclaration(hops=[], channel="auto")
             return node
-        # Normalise hops: multicast does not use point-to-point hops.
+        # Normalize hops: multicast does not use point-to-point hops.
         new_routing = copy.copy(node.routing)
         new_routing.hops = []
         node.routing = new_routing
