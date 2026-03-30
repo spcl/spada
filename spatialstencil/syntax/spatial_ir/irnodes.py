@@ -660,7 +660,7 @@ class MulticastRangeStreamDeclaration(SpatialNode):
         dx_is_range = isinstance(self.dx, RangeExpression)
         dy_is_range = isinstance(self.dy, RangeExpression)
         assert dx_is_range != dy_is_range, \
-            "Exactly one of dx/dy must be a RangeExpression in MulticastStreamDeclaration."
+            "Exactly one of dx/dy must be a RangeExpression in MulticastRangeStreamDeclaration."
         if not dx_is_range:
             assert isinstance(self.dx, Expression)
         if not dy_is_range:

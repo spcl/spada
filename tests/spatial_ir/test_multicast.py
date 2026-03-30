@@ -62,7 +62,7 @@ def _multicast_kernel(K: int | str = 'K', channel: int = 0) -> str:
 # ---------------------------------------------------------------------------
 
 def test_multicast_dy_parsed_as_multicast_node():
-    """relative_stream(0, [1:K]) produces a MulticastStreamDeclaration."""
+    """relative_stream(0, [1:K]) produces a MulticastRangeStreamDeclaration."""
     kernel = parser.parse_string(_multicast_kernel())
     df = next(b for b in kernel.body if isinstance(b, spir.DataflowBlock))
     decl = df.statements[0]
@@ -83,7 +83,7 @@ def test_multicast_dy_range_values():
 
 
 def test_multicast_dx_range():
-    """relative_stream([1:K], 0) also produces a MulticastStreamDeclaration (x-axis)."""
+    """relative_stream([1:K], 0) also produces a MulticastRangeStreamDeclaration (x-axis)."""
     code = """
     kernel @test<K>() {
         dataflow u16 i, u16 j in [0:K, 0:1] {
@@ -131,7 +131,7 @@ def test_multicast_roundtrip():
 
 
 def test_multicast_properties():
-    """MulticastStreamDeclaration properties return correct axis / range / fixed_offset."""
+    """MulticastRangeStreamDeclaration properties return correct axis / range / fixed_offset."""
     kernel = _parse_concretize(_multicast_kernel(), K=4)
     df = next(b for b in kernel.body if isinstance(b, spir.DataflowBlock))
     s = df.statements[0].stream
