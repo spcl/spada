@@ -29,7 +29,7 @@ kernel @multicast_generalized_x_neg<RS, RE>(
 
     // Sender: last PE in x; load from host, write own output, multicast westward.
     compute u16 i, u16 j in [RE-1:RE, 0:1] {
-        await receive(val, inp[0, j])
+        await receive(val, inp[i-(RE-1), j])
         await send(val, out[i, j])
         await send(val, s)
     }
