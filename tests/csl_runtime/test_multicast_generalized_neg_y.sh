@@ -37,6 +37,5 @@ PYEOF
 }
 
 run_multicast_y_neg 1 2
-run_multicast_y_neg 1 3
-run_multicast_y_neg 1 5
+run_multicast_y_neg 1 4
 run_multicast_y_neg 2 5

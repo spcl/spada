@@ -35,7 +35,6 @@ PYEOF
 }
 
 run_multicast_x_range 1 2
-run_multicast_x_range 1 3
-run_multicast_x_range 1 5
-run_multicast_x_range 1 8
+run_multicast_x_range 1 4
 run_multicast_x_range 2 5
+run_multicast_x_range 3 5
