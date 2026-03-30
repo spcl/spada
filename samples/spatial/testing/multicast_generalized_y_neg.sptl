@@ -1,0 +1,40 @@
+/**
+ * Generalized y-axis negative-direction multicast.
+ * Sender at PE (0, N-1) multicasts NORTH via range [-START:-N]
+ * to PEs (0,0)…(0,N-START-1).
+ * PEs (0,N-START)…(0,N-2) are relay-only when START > 1.
+ * Only receivers write to out; the sender is excluded from the output.
+ *
+ * Parameters:
+ *   N     – total number of PEs in y (grid 0..N-1)
+ *   START – magnitude of offset to first receiver (≥ 1)
+ *
+ * Expected: OUT_out[0, k, 0] == inp[0, 0, 0]  for k in 0..N-START-1
+ **/
+kernel @multicast_generalized_y_neg<N, START>(
+    stream<f32, 2>[1, 1]       readonly  inp,
+    stream<f32, 2>[1, N-START] writeonly out
+) {
+    place u16 i, u16 j in [0:1, 0:N] {
+        f32[2] val
+    }
+
+    dataflow u16 i, u16 j in [0:1, 0:N] {
+        stream<f32> s = relative_stream(0, [-START:-N]) {
+            hops    = auto,
+            channel = 0
+        }
+    }
+
+    // Sender: last PE in y; loads from inp[i,j] and multicasts northward (does not write to out).
+    compute u16 i, u16 j in [0:1, N-1:N] {
+        await receive(val, inp[i, j-(N-1)])
+        await send(val, s)
+    }
+
+    // Receivers: PEs 0..N-START-1; write to contiguous output.
+    compute u16 i, u16 j in [0:1, 0:N-START] {
+        await receive(val, s)
+        await send(val, out[i, j])
+    }
+}

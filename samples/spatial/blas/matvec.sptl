@@ -11,8 +11,7 @@
  * Algorithm:
  *   Phase 1: All PEs load their K×K block of A from the host.
  *   Phase 2: The j=0 column loads x from the host (K elements per PE).
- *   Phase 3: Broadcast x in the Y direction (j=0 → j=PY-1) using a pipelined
- *            red/blue checkerboard — mirrors broadcast_1D.sptl on the j axis.
+ *   Phase 3: Multicast x in the Y direction (j=0 → j=PY-1) using native CSL multicast.
  *   Phase 4: Each PE computes its local contribution z = A_block @ x using
  *            nested for loops.
  *   Phase 5: Pipelined chain reduction of z in the X direction (i=PX-1 → i=0)
@@ -28,7 +27,7 @@ kernel @matvec<PX, PY, K>(
 ) {
     place i16 i, i16 j in [0:PX, 0:PY] {
         f32[K*K] A_flat  // row-major K×K matrix block
-        f32[K]   x       // x chunk for this PE column (populated by broadcast)
+        f32[K]   x       // x chunk for this PE column (populated by multicast)
         f32[K]   z       // local partial result; accumulated during reduction
     }
 
@@ -46,45 +45,23 @@ kernel @matvec<PX, PY, K>(
         }
     }
 
-    // Phase 3: Broadcast x in the Y direction (j=0 → j=PY-1).
-    // Mirrors broadcast_1D.sptl: relative_stream(0,1) replaces relative_stream(1,0),
-    // and j-based parity replaces i-based parity.
+    // Phase 3: Multicast x in the Y direction (j=0 → j=PY-1).
+    // Uses CSL native multicast: each intermediate PE forwards to both RAMP and
+    // the next PE southward, so all PY-1 receivers are served in a single phase.
     phase {
         dataflow i16 i, i16 j in [0:PX, 0:PY] {
-            stream<f32> red = relative_stream(0, 1) {
-                hops = [(0, 1)],
+            stream<f32> bcast = relative_stream(0, [1:PY]) {
+                hops = auto,
                 channel = 0
             }
-            stream<f32> blue = relative_stream(0, 1) {
-                hops = [(0, 1)],
-                channel = 1
-            }
         }
 
-        // Root j=0 (even): send the loaded x on blue.
-        compute i16 i, i16 j in [0:PX, 0] {
-            await send(x, blue)
+        compute i16 i, i16 j in [0:PX, 0:1] {
+            await send(x, bcast)
         }
 
-        // Odd j: receive blue element-by-element, store, forward on red.
-        compute i16 i, i16 j in [0:PX, 1:PY-1:2] {
-            await foreach i16 k, f32 v in [0:K], receive(blue) {
-                x[k] = v
-                await send(v, red)
-            }
-        }
-
-        // Even j (middle): receive red element-by-element, store, forward on blue.
-        compute i16 i, i16 j in [0:PX, 2:PY-1:2] {
-            await foreach i16 k, f32 v in [0:K], receive(red) {
-                x[k] = v
-                await send(v, blue)
-            }
-        }
-
-        // Last j=PY-1: receive the complete x array; channel matches position parity.
-        compute i16 i, i16 j in [0:PX, PY-1] {
-            await receive(x, red if (PY-1) % 2 == 0 else blue)
+        compute i16 i, i16 j in [0:PX, 1:PY] {
+            await receive(x, bcast)
         }
     }
 
@@ -108,11 +85,11 @@ kernel @matvec<PX, PY, K>(
         dataflow i16 i, i16 j in [0:PX, 0:PY] {
             stream<f32> yellow = relative_stream(-1, 0) {
                 hops = [(-1, 0)],
-                channel = 2
+                channel = 1
             }
             stream<f32> green = relative_stream(-1, 0) {
                 hops = [(-1, 0)],
-                channel = 3
+                channel = 2
             }
         }
 

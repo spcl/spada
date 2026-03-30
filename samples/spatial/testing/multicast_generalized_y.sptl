@@ -1,0 +1,39 @@
+/**
+ * Generalized y-axis multicast: PE (0,0) multicasts to PEs (0,START)…(0,N-1).
+ * PEs (0,1)…(0,START-1) are relay-only when START > 1.
+ * Only receivers write to out; the sender is excluded from the output.
+ *
+ * Parameters:
+ *   N     – total number of PEs in y (grid 0..N-1)
+ *   START – offset of first receiver (≥ 1)
+ *
+ * Expected: OUT_out[0, k, 0] == inp[0, 0, 0]  for k in 0..N-START-1
+ *           (out[k] corresponds to absolute PE y = k+START)
+ **/
+kernel @multicast_generalized_y<N, START>(
+    stream<f32, 2>[1, 1]       readonly  inp,
+    stream<f32, 2>[1, N-START] writeonly out
+) {
+    place u16 i, u16 j in [0:1, 0:N] {
+        f32[2] val
+    }
+
+    dataflow u16 i, u16 j in [0:1, 0:N] {
+        stream<f32> s = relative_stream(0, [START:N]) {
+            hops    = auto,
+            channel = 0
+        }
+    }
+
+    // Sender: load from host and multicast southward (does not write to out).
+    compute u16 i, u16 j in [0:1, 0:1] {
+        await receive(val, inp[i, j])
+        await send(val, s)
+    }
+
+    // Receivers: collect value and write to contiguous output.
+    compute u16 i, u16 j in [0:1, START:N] {
+        await receive(val, s)
+        await send(val, out[i, j-START])
+    }
+}

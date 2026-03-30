@@ -1,0 +1,77 @@
+/**
+ * 2D broadcast from PE (0,0) to all NX*NY PEs using direct multicast.
+ *
+ * Two-phase X-then-Y pattern, each phase driven by a single multicast stream:
+ *
+ *   Phase X  – root (0,0) multicasts eastward to (1,0)…(NX-1,0) via [1:NX] on x.
+ *              After this phase every PE at j=0 holds the broadcast value.
+ *
+ *   Phase Y  – all NX column-roots at j=0 simultaneously multicast southward
+ *              to (i,1)…(i,NY-1) via [1:NY] on y.
+ *              Because each column has its own independent set of PEs the NX
+ *              multicast trees share a channel number without conflict.
+ *
+ *   Phase 3  – all NX*NY PEs write their copy to the output.
+ *
+ * External interface matches broadcast_2D.sptl:
+ *   inp  : stream<f32, K>[1, 1]    – K values supplied by the host at PE (0,0)
+ *   out  : stream<f32, K>[NX, NY]  – every PE writes its copy
+ *
+ * (!) Requires NX >= 2 and NY >= 2 (!)
+ **/
+kernel @broadcast_2d_multicast<NX, NY, K>(
+    stream<f32, K>[1, 1]   readonly  inp,
+    stream<f32, K>[NX, NY] writeonly out
+) {
+    place i16 i, i16 j in [0:NX, 0:NY] {
+        f32[K] a
+    }
+
+    // Phase X: multicast along the x-axis (row j=0 only).
+    phase {
+        dataflow i16 i, i16 j in [0:NX, 0:1] {
+            stream<f32> sx = relative_stream([1:NX], 0) {
+                hops    = auto,
+                channel = 0
+            }
+        }
+
+        // Root: load from host and multicast eastward.
+        compute i16 i, i16 j in [0:1, 0:1] {
+            await receive(a, inp[i, j])
+            await send(a, sx)
+        }
+
+        // Row-0 receivers: collect value from root.
+        compute i16 i, i16 j in [1:NX, 0:1] {
+            await receive(a, sx)
+        }
+    }
+
+    // Phase Y: every row-0 PE multicasts southward through its column.
+    phase {
+        dataflow i16 i, i16 j in [0:NX, 0:NY] {
+            stream<f32> sy = relative_stream(0, [1:NY]) {
+                hops    = auto,
+                channel = 1
+            }
+        }
+
+        // All column roots (j=0): send the broadcast value southward.
+        compute i16 i, i16 j in [0:NX, 0:1] {
+            await send(a, sy)
+        }
+
+        // Column receivers (j>0): collect from their column root.
+        compute i16 i, i16 j in [0:NX, 1:NY] {
+            await receive(a, sy)
+        }
+    }
+
+    // Phase 3: all PEs write their copy to the output.
+    phase {
+        compute i16 i, i16 j in [0:NX, 0:NY] {
+            await send(a, out[i, j])
+        }
+    }
+}

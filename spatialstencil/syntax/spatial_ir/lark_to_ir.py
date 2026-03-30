@@ -187,8 +187,19 @@ class TreeToSpatialIR(lark.Transformer):
     def stream_declaration(self, args):
         return irnodes.StreamDeclaration(*args)
 
+    def multicast_range(self, args):
+        # Unwrap the bracketed range_expression: just return the inner RangeExpression.
+        return args[0]
+
     def relative_stream_declaration(self, args):
-        return irnodes.RelativeStreamDeclaration(*args)
+        # args[0] = dx (Expression or RangeExpression)
+        # args[1] = dy (Expression or RangeExpression)
+        # args[2] = routing (optional RoutingDeclaration)
+        dx, dy, *rest = args
+        routing = rest[0] if rest else None
+        if isinstance(dx, irnodes.RangeExpression) or isinstance(dy, irnodes.RangeExpression):
+            return irnodes.MulticastRangeStreamDeclaration(dx, dy, routing)
+        return irnodes.RelativeStreamDeclaration(dx, dy, routing)
 
     def extern_stream_declaration(self, args):
         return irnodes.ExternStreamDeclaration(*args)

@@ -12,7 +12,7 @@
  * Algorithm:
  *   Phase 1: All PEs load their K×K block of A.
  *   Phase 2: The j=0 column loads x; the i=0 column loads y.
- *   Phase 3: Broadcast x in the Y direction (j=0 → j=PY-1), red/blue checkerboard.
+ *   Phase 3: Multicast x in the Y direction (j=0 → j=PY-1) using native CSL multicast.
  *   Phase 4: Local matmul z = A_block @ x.
  *   Phase 5 (X1): Within-group chain reduce in X.
  *            Each group gx ∈ [0:G] reduces z westward into its root PE(gx*S, j).
@@ -34,7 +34,7 @@ kernel @gemv_twophase<G, S, PY, K>(
 ) {
     place i16 i, i16 j in [0:G*S, 0:PY] {
         f32[K*K] A_flat   // row-major K×K matrix block
-        f32[K]   x        // x chunk for this PE column (populated by broadcast)
+        f32[K]   x        // x chunk for this PE column (populated by multicast)
         f32[K]   z        // local partial result; accumulated during reduction
         f32[K]   y_block  // y chunk; read from host, used only at i=0
     }
@@ -56,37 +56,23 @@ kernel @gemv_twophase<G, S, PY, K>(
         }
     }
 
-    // Phase 3: Broadcast x in the Y direction (j=0 → j=PY-1).
-    // Mirrors gemv.sptl: relative_stream(0,1), j-based parity.
+    // Phase 3: Multicast x in the Y direction (j=0 → j=PY-1).
+    // Uses CSL native multicast: each intermediate PE forwards to both RAMP and
+    // the next PE southward, so all PY-1 receivers are served in a single phase.
     phase {
         dataflow i16 i, i16 j in [0:G*S, 0:PY] {
-            stream<f32> red = relative_stream(0, 1) {
-                hops = [(0, 1)],
+            stream<f32> bcast = relative_stream(0, [1:PY]) {
+                hops = auto,
                 channel = 0
-            }
-            stream<f32> blue = relative_stream(0, 1) {
-                hops = [(0, 1)],
-                channel = 1
             }
         }
 
-        compute i16 i, i16 j in [0:G*S, 0] {
-            await send(x, blue)
+        compute i16 i, i16 j in [0:G*S, 0:1] {
+            await send(x, bcast)
         }
-        compute i16 i, i16 j in [0:G*S, 1:PY-1:2] {
-            await foreach i16 k, f32 v in [0:K], receive(blue) {
-                x[k] = v
-                await send(v, red)
-            }
-        }
-        compute i16 i, i16 j in [0:G*S, 2:PY-1:2] {
-            await foreach i16 k, f32 v in [0:K], receive(red) {
-                x[k] = v
-                await send(v, blue)
-            }
-        }
-        compute i16 i, i16 j in [0:G*S, PY-1] {
-            await receive(x, red if (PY-1) % 2 == 0 else blue)
+
+        compute i16 i, i16 j in [0:G*S, 1:PY] {
+            await receive(x, bcast)
         }
     }
 
@@ -104,16 +90,16 @@ kernel @gemv_twophase<G, S, PY, K>(
 
     // Phase 5 (X1): Within-group chain reduce in X.
     // S is even, so the east corner of each group (at (gx+1)*S-1) is always at an odd
-    // global index → it sends blue. Single-hop westward streams on channels 2, 3.
+    // global index → it sends blue. Single-hop westward streams on channels 1, 2.
     phase {
         dataflow i16 i, i16 j in [0:G*S, 0:PY] {
             stream<f32> red = relative_stream(-1, 0) {
                 hops = [(-1, 0)],
-                channel = 2
+                channel = 1
             }
             stream<f32> blue = relative_stream(-1, 0) {
                 hops = [(-1, 0)],
-                channel = 3
+                channel = 2
             }
         }
 
@@ -147,17 +133,17 @@ kernel @gemv_twophase<G, S, PY, K>(
 
     // Phase 6 (X2): Cross-group chain reduce in X.
     // G group roots at i=0, S, 2S, ..., (G-1)*S reduce into i=0.
-    // Multi-hop auto-routed westward streams on channels 4, 5.
+    // Multi-hop auto-routed westward streams on channels 3, 4.
     // Root PE(0,j) applies alpha*z + beta*y_block and writes output.
     phase {
         dataflow i16 i, i16 j in [0:G*S:S, 0:PY] {
             stream<f32> green = relative_stream(-S, 0) {
                 hops = auto,
-                channel = 4
+                channel = 3
             }
             stream<f32> yellow = relative_stream(-S, 0) {
                 hops = auto,
-                channel = 5
+                channel = 4
             }
         }
 

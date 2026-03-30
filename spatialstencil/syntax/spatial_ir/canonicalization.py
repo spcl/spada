@@ -436,6 +436,48 @@ class _AutoHopResolver(spir.NodeTransformer):
         node.routing = new_routing
         return node
 
+    def visit_MulticastRangeStreamDeclaration(self, node: spir.MulticastRangeStreamDeclaration):
+        node = self.generic_visit(node)
+        # Inject default routing if none provided.
+        if node.routing is None:
+            node.routing = spir.RoutingDeclaration(hops=[], channel="auto")
+            return node
+        # Normalize hops: multicast does not use point-to-point hops.
+        new_routing = copy.copy(node.routing)
+        new_routing.hops = []
+        node.routing = new_routing
+        # Validate the range and fixed offset.
+        rng = node.multicast_range
+        start = rng.start.eval()
+        stop = rng.stop.eval() if rng.stop is not None else None
+
+        fixed = node.fixed_offset.eval()
+        if fixed != 0:
+            raise ValueError(
+                f"Multicast stream has a non-zero fixed offset ({fixed}) in the non-multicast dimension. "
+                "Combined-axis multicasting is not yet supported; the fixed offset must be 0."
+            )
+
+        if start == 0:
+            raise ValueError(
+                f"Multicast stream range start must be >= 1 for positive multicast or <= -1 for "
+                "negative multicast; start=0 means the sender is its own receiver."
+            )
+        if start > 0:
+            # Positive multicast: receivers at offsets start, start+1, …, stop-1.
+            if stop is not None and stop <= start:
+                raise ValueError(
+                    f"Multicast stream range [{start}:{stop}] is empty (stop must be > start)."
+                )
+        else:
+            # Negative multicast: receivers at offsets start, start-1, …, stop+1.
+            if stop is not None and stop >= start:
+                raise ValueError(
+                    f"Multicast stream range [{start}:{stop}] is empty "
+                    "(for negative multicast stop must be < start)."
+                )
+        return node
+
 
 def resolve_auto_hops(kernel: spir.Kernel) -> spir.Kernel:
     """
