@@ -6,12 +6,14 @@ from collections import defaultdict
 import copy
 import functools
 from io import StringIO
+import textwrap
 from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, analysis, passes
 from spatialstencil.syntax.spatial_ir import copy_elimination
 from spatialstencil.syntax.spatial_ir import canonical_subgrids
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
 from spatialstencil.syntax.csl import constants as csl, preprocessing, tasks as tdag, statements as cslstmt, dsd_ops
 from spatialstencil.syntax.csl import structures as cslstruct
+from spatialstencil.syntax.csl import task_recycling
 from spatialstencil.syntax.csl.codefile import CodeFile
 from spatialstencil.syntax.csl.statements import name_to_csl, dtype_as_csl, expr_to_csl
 
@@ -47,7 +49,9 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
                             disable_dsd: bool = False,
                             task_fusion: bool = True,
                             copy_elision: bool = True,
-                            prune_memory: bool = True) -> list[CodeFile]:
+                            prune_memory: bool = True,
+                            task_id_recycling: bool = True,
+                            recycle_overflow_only: bool = True) -> list[CodeFile]:
     """
     Lowers a routed Spatial IR kernel into Cerebras CSL code.
 
@@ -60,6 +64,10 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     :param task_fusion: If True, enables task fusion to reduce number of tasks.
     :param copy_elision: If True, enables copy elision optimization pass.
     :param prune_memory: If True, enables unused field pruning optimization pass.
+    :param task_id_recycling: If True, enables task ID recycling pass.
+    :param recycle_overflow_only: If True, keeps the initial local tasks on
+                                  dedicated hardware IDs and recycles only the
+                                  overflow tail.
     :return: List of code-file objects that can be written to files. See ``write_code_to_files``.
     """
     # PRECONDITION: Rectangles of dataflow/compute/place do not intersect (comes from Spatial IR)
@@ -129,7 +137,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
         csl_name = f'code_{rect.x_range[0]}_{rect.y_range[0]}.csl'
         rect_code, color_map = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode,
                                                   stream_rects, channel_to_color, disable_benchmarking,
-                                                  disable_asynchronous, disable_dsd, task_fusion)
+                                                  disable_asynchronous, disable_dsd, task_fusion,
+                                                  task_id_recycling, recycle_overflow_only)
         color_maps.append(color_map)
         csl_codes.append(CodeFile(csl_name, rect_code))
 
@@ -288,7 +297,9 @@ def generate_rectangle(kernel: spir.Kernel,
                        disable_benchmarking: bool = False,
                        disable_asynchronous: bool = False,
                        disable_dsd: bool = False,
-                       task_fusion: bool = True) -> tuple[str, dict[str, int]]:
+                       task_fusion: bool = True,
+                       task_id_recycling: bool = True,
+                       recycle_overflow_only: bool = True) -> tuple[str, dict[str, int]]:
     # Code generation carets
     header = StringIO()
     current_code = StringIO()
@@ -338,8 +349,12 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     #    * (re)cycle task IDs based on ``csl.{DATA,LOCAL,CONTROL}_TASK_IDS``: becomes switch-case on the variable that
     #      maintains the current state
     completion_dag = analysis.to_completion_dag(rect.metadata.compute)
-    task_creation_behavior = (
-        tdag.TaskCreationBehavior.NO_TASKS if disable_asynchronous else tdag.TaskCreationBehavior.FAIL_ON_OVERRUN)
+    if disable_asynchronous:
+        task_creation_behavior = tdag.TaskCreationBehavior.NO_TASKS
+    elif not task_id_recycling:
+        task_creation_behavior = tdag.TaskCreationBehavior.FAIL_ON_OVERRUN
+    else:
+        task_creation_behavior = tdag.TaskCreationBehavior.STATE_MACHINE_ON_OVERRUN
     tasks = tdag.create_csl_tasks(completion_dag, rect.metadata.compute, dtypes, task_creation_behavior)
     try:
         dsds = _collect_unique_dsds(tasks, rect.metadata, header, dtypes, kernel, use_memcpy_mode)
@@ -359,21 +374,31 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         if len(tasks) != len_for_reporting:
             print(f'P{rect.x_range[0]},{rect.y_range[0]}: Reduced from {len_for_reporting} to {len(tasks)} tasks.')
 
-    # Map task IDs to CSL task IDs
-    tdag.renumber_tasks(tasks, task_creation_behavior)
-
-    print(
-        f'Stats: Using {sum(1 if t.task_type == "local" else 0 for t in tasks)} local tasks, {sum(1 if t.task_type == "data" else 0 for t in tasks)} data tasks, {len(set(color_map.values()))} colors'
+    task_bindings = task_recycling.plan_task_bindings(
+        tasks,
+        task_creation_behavior,
+        recycle_overflow_only=recycle_overflow_only,
     )
 
-    # Generate each task
-    max_task_id = csl.LOCAL_TASK_IDS[0] - 1
-    for i, task in enumerate(tasks):
-        prefix = "d" if task.task_type == 'data' else ""
+    print(f'Stats: Using {sum(1 if t.task_type == "local" else 0 for t in tasks)} local tasks across '
+          f'{len(task_bindings.local_slots)} local task IDs, '
+          f'{sum(1 if t.task_type == "data" else 0 for t in tasks)} data tasks, '
+          f'{len(set(color_map.values()))} colors')
 
-        if task.task_type == "local":
-            current_code.write(f'const {prefix}task_{i}_id = @get_local_task_id({task.task_id});\n')
-        elif task.task_type == "data":
+    # Declare each logical local task ID alias.
+    for slot in task_bindings.local_slots:
+        for task_index in slot.task_indices:
+            current_code.write(f'const task_{task_index}_id = @get_local_task_id({slot.hardware_task_id});\n')
+        if slot.recycled:
+            representative = slot.representative_task_index
+            current_code.write(f'var {task_bindings.state_var(representative)}: u16 = '
+                               f'{task_bindings.invalid_state_literal(representative)};\n')
+
+    # Declare each data task ID.
+    for i, task in enumerate(tasks):
+        if task.task_type != "data":
+            continue
+
             stmt = rect.metadata.compute.statements[task.statements[0]]
             assert isinstance(stmt, spir.ForeachStatement)
             sname = stmt.receive_stream.stream_name
@@ -386,16 +411,61 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
             else:
                 print(color_map)
                 raise ValueError(f'Cannot find color for stream "{name_to_csl(sname)}" in data task {i}')
-            current_code.write(f'const {prefix}task_{i}_id = @get_data_task_id(@get_color({color}));\n')
+            current_code.write(f'const dtask_{i}_id = @get_data_task_id(@get_color({color}));\n')
 
-        max_task_id = max(max_task_id, task.task_id)
-        if task.task_type == 'local':
-            current_code.write(f'task task_{task.task_id}() void {{\n')
+    # Generate each local slot as one hardware task.
+    for slot in task_bindings.local_slots:
+        current_code.write(f'task {task_bindings.local_function_name(slot)}() void {{\n')
+        if slot.recycled:
+            for branch_index, task_index in enumerate(slot.task_indices):
+                branch_kw = 'if' if branch_index == 0 else 'else if'
+                current_code.write(f'    {branch_kw} ({task_bindings.state_var(task_index)} == '
+                                   f'{task_bindings.local_state(task_index)}) {{\n')
+                try:
+                    _generate_task_code(
+                        rect.metadata,
+                        task_index,
+                        tasks[task_index],
+                        current_code,
+                        header,
+                        footer,
+                        dsds,
+                        dtypes,
+                        color_map,
+                        tasks,
+                        task_bindings,
+                        benchmark_postamble,
+                        indent='        ',
+                    )
+                except KeyError as e:
+                    identifier = e.args[0]
+                    if isinstance(identifier, spir.Identifier):
+                        if identifier.lineinfo:
+                            raise SyntaxError(
+                                f'Undefined identifier "{identifier.as_ir()}" in {identifier.lineinfo}') from e
+                        raise SyntaxError(
+                            f'Undefined identifier "{identifier.as_ir()}" in local task {task_index}') from e
+                    raise
+                current_code.write('    }\n')
+        else:
+            task_index = slot.task_indices[0]
             try:
-                _generate_task_code(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map, tasks,
-                                    benchmark_postamble)
+                _generate_task_code(
+                    rect.metadata,
+                    task_index,
+                    tasks[task_index],
+                    current_code,
+                    header,
+                    footer,
+                    dsds,
+                    dtypes,
+                    color_map,
+                    tasks,
+                    task_bindings,
+                    benchmark_postamble,
+                    indent='    ',
+                )
             except KeyError as e:
-                # If a KeyError occurs with an identifier, it means that it is not defined in the current scope
                 identifier = e.args[0]
                 if isinstance(identifier, spir.Identifier):
                     if identifier.lineinfo:
@@ -403,18 +473,25 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
                             f'Undefined identifier "{identifier.as_ir()}" in {identifier.lineinfo}') from e
                     else:
                         raise SyntaxError(
-                            f'Undefined identifier "{identifier.as_ir()}" in task "task_{task.task_id}"') from e
+                            f'Undefined identifier "{identifier.as_ir()}" in local task {task_index}') from e
                 else:
                     raise
-            current_code.write(f'}}\n')
-        elif task.task_type == 'data':
-            _generate_data_task(rect.metadata, task, current_code, header, footer, dsds, dtypes, color_map, tasks)
+        current_code.write('}\n')
+        footer.write(f'    @bind_local_task({task_bindings.local_function_name(slot)}, '
+                     f'task_{slot.representative_task_index}_id);\n')
+        if not slot.recycled and tasks[slot.representative_task_index].blocked:
+            footer.write(f'    @block(task_{slot.representative_task_index}_id);\n')
 
-        footer.write(f'    @bind_{task.task_type}_task({prefix}task_{task.task_id}, {prefix}task_{i}_id);\n')
-
-        # Make sure to block tasks
+    # Generate each data task.
+    for i, task in enumerate(tasks):
+        if task.task_type != 'data':
+            continue
+        _generate_data_task(rect.metadata, i, task, current_code, header, footer, dsds, dtypes, color_map, tasks)
+        footer.write(f'    @bind_data_task(dtask_{i}, dtask_{i}_id);\n')
         if task.blocked:
-            footer.write(f'    @block({prefix}task_{i}_id);\n')
+            footer.write(f'    @block(dtask_{i}_id);\n')
+
+    max_task_id = max((slot.hardware_task_id for slot in task_bindings.local_slots), default=csl.LOCAL_TASK_IDS[0] - 1)
 
     # Create exit task that unblocks command stream
     exit_task_sequential = all(typ == tdag.InterTaskEdge.SEQUENCE for t in tasks for n, typ in t.outgoing if n == -1)
@@ -442,7 +519,15 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         arg_name = argument.split(':')[0].strip().removeprefix('__arg_')
         current_code.write(f'    {arg_name} = __arg_{arg_name};\n')
 
-    # Reset data task counters
+    # Reset recycled local-slot state.
+    for slot in task_bindings.local_slots:
+        if not slot.recycled:
+            continue
+        representative = slot.representative_task_index
+        current_code.write(f'    {task_bindings.state_var(representative)} = '
+                           f'{task_bindings.invalid_state_literal(representative)};\n')
+
+    # Reset data task counters and re-block dedicated tasks.
     for i, task in enumerate(tasks):
         if task.task_type == "data":
             # Obtain initial parameter value
@@ -451,11 +536,11 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
             assert isinstance(stmt, spir.ForeachStatement)
             if stmt.parameter_range:
                 param_range = stmt.parameter_range[0]
-                current_code.write(f'    __num_dtask_{task.task_id} = {param_range.start.as_ir()};\n')
-        # Also re-block tasks that were unblocked in the previous run
-        if task.blocked:
-            prefix = "d" if task.task_type == 'data' else ""
-            current_code.write(f'    @block({prefix}task_{i}_id);\n')
+                current_code.write(f'    __num_dtask_{i} = {param_range.start.as_ir()};\n')
+        if task.task_type == 'data' and task.blocked:
+            current_code.write(f'    @block(dtask_{i}_id);\n')
+        if task.task_type == 'local' and task.blocked and not task_bindings.is_recycled_local_task(i):
+            current_code.write(f'    @block(task_{i}_id);\n')
 
     # Activate/unblock all source tasks.
     # Local tasks are started with @activate;
@@ -464,13 +549,13 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     source_tasks = [t for i, t in enumerate(tasks) if i not in non_source_tasks]
     for task in source_tasks:
         i = next(i for i, t in enumerate(tasks) if task is t)
-        prefix = "d" if task.task_type == 'data' else ""
         if task.task_type == 'data':
             # Data tasks are activated by data
             # And start as unblocked - noop
             pass
         else:
-            current_code.write(f'    @activate({prefix}task_{i}_id);\n')
+            current_code.write(task_bindings.emit_local_transition_preamble(i, task.blocked, indent='    '))
+            current_code.write(f'    @activate(task_{i}_id);\n')
     if not source_tasks:
         current_code.write(benchmark_postamble)
         # Unblock command stream if function is empty
@@ -1127,8 +1212,7 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
                         f"Multicast stream '{stream.stream_name.as_ir()}' is both sent and received "
                         f"within the same compute rectangle [{rect.x_range[0]}:{rect.x_range[1]}, "
                         f"{rect.y_range[0]}:{rect.y_range[1]}]. "
-                        "Sender and receiver compute blocks must be in separate rectangles for multicast streams."
-                    )
+                        "Sender and receiver compute blocks must be in separate rectangles for multicast streams.")
                 if not sent:
                     # All multicast routing is emitted by the rectangle that sends this stream.
                     continue
@@ -1276,8 +1360,17 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
     return result
 
 
+def _write_indented_block(current_code: StringIO, block: str, indent: str) -> None:
+    block = textwrap.dedent(block).strip('\n')
+    if not block:
+        return
+    for line in block.splitlines():
+        current_code.write(f'{indent}{line}\n')
+
+
 def _generate_data_task(
     rect: PEBlock,
+    task_index: int,
     task: tdag.CSLTask,
     current_code: StringIO,
     header: StringIO,
@@ -1307,7 +1400,8 @@ def _generate_data_task(
 
     stmt_id = task.statements[0]
     if isinstance(stmt_id, int) and stmt_id >= 0:
-        stmt: spir.ForeachStatement = rect.compute.statements[stmt_id]
+        stmt = rect.compute.statements[stmt_id]
+        assert isinstance(stmt, spir.ForeachStatement)
     else:
         return
     next_task, itedge = task.outgoing[0]
@@ -1325,11 +1419,11 @@ def _generate_data_task(
 
         var_dtype_csl = dtype_as_csl(stmt.variables[0].dtype)
         param_range = stmt.parameter_range[0]
-        current_code.write(f"var __num_dtask_{task.task_id}: {var_dtype_csl} = {param_range.start.as_ir()};\n")
+        current_code.write(f"var __num_dtask_{task_index}: {var_dtype_csl} = {param_range.start.as_ir()};\n")
 
         next_task_code = f"""
-    __num_dtask_{task.task_id} += {1 if param_range.step is None else param_range.step.as_ir()};
-    if (__num_dtask_{task.task_id} == {param_range.stop.as_ir()}) {{
+    __num_dtask_{task_index} += {1 if param_range.step is None else param_range.step.as_ir()};
+    if (__num_dtask_{task_index} == {param_range.stop.as_ir()}) {{
         {next_task_code}
     }}"""
     else:
@@ -1338,10 +1432,10 @@ def _generate_data_task(
     # Write frame for data task
     argtype_csl = dtype_as_csl(stmt.stream_variable.dtype)
     argname = name_to_csl(stmt.stream_variable.identifier)
-    current_code.write(f"task dtask_{task.task_id}({argname}: {argtype_csl}) void {{\n")
+    current_code.write(f"task dtask_{task_index}({argname}: {argtype_csl}) void {{\n")
     if stmt.variables:
         current_code.write(
-            f'    var {name_to_csl(stmt.variables[0].identifier)}: {var_dtype_csl} = __num_dtask_{task.task_id};\n')
+            f'    var {name_to_csl(stmt.variables[0].identifier)}: {var_dtype_csl} = __num_dtask_{task_index};\n')
 
     # Write op contents
     for substmt in stmt.body:
@@ -1355,10 +1449,19 @@ def _generate_data_task(
     current_code.write(f"\n}}\n")
 
 
-def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringIO, header: StringIO, footer: StringIO,
-                        dsds: list[tuple[str, cslstruct.DataStructureDescriptor]], dtypes: dict[spir.Identifier,
-                                                                                                spir.IRType],
-                        color_map: dict[str, int], tasks: list[tdag.CSLTask], postamble: str):
+def _generate_task_code(rect: PEBlock,
+                        task_index: int,
+                        task: tdag.CSLTask,
+                        current_code: StringIO,
+                        header: StringIO,
+                        footer: StringIO,
+                        dsds: UniqueDSDDict,
+                        dtypes: dict[spir.Identifier, spir.IRType],
+                        color_map: dict[str, int],
+                        tasks: list[tdag.CSLTask],
+                        task_bindings: task_recycling.TaskBindingPlan,
+                        postamble: str,
+                        indent: str = '    '):
     """
     Generates a local task from a CSL task.
     This function converts statements to DSD operations or generates appropriate code.
@@ -1385,6 +1488,8 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
 
     for stmt_id, (next_task, itedge) in zip(task.statements, task.outgoing):
         skip_activation = False
+        task_id = None
+        transition_preamble = ''
 
         if isinstance(stmt_id, int) and stmt_id >= 0:
             # Write op contents
@@ -1395,12 +1500,19 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
                 if next_task == -1:
                     task_id = 'exit_task_id'
                 else:
-                    prefix = "d" if tasks[next_task].task_type == 'data' else ""
-                    task_id = f'{prefix}task_{next_task}_id'
+                    if tasks[next_task].task_type == 'local':
+                        transition_preamble = task_bindings.emit_local_transition_preamble(
+                            next_task, tasks[next_task].blocked, indent=indent)
+                        task_id = f'task_{next_task}_id'
+                    else:
+                        task_id = f'dtask_{next_task}_id'
 
                 async_target = dsd_ops.AsyncTarget(task_id, itedge.name.lower())
             else:
                 async_target = None
+
+            if transition_preamble:
+                current_code.write(transition_preamble)
 
             code = cslstmt.generate_csl_statement(stmt, dsds, dtypes, async_target, header)
             lines = code.splitlines()
@@ -1411,12 +1523,12 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
                 skip_activation = True
 
             for line in lines:
-                current_code.write(f'    {line}\n')
+                current_code.write(f'{indent}{line}\n')
 
         if next_task == -1 and itedge == tdag.InterTaskEdge.SEQUENCE:
             # Run exit task directly
-            current_code.write(postamble)
-            current_code.write(f'    sys_mod.unblock_cmd_stream();\n')
+            _write_indented_block(current_code, postamble, indent)
+            current_code.write(f'{indent}sys_mod.unblock_cmd_stream();\n')
             continue
 
         if skip_activation:
@@ -1428,12 +1540,18 @@ def _generate_task_code(rect: PEBlock, task: tdag.CSLTask, current_code: StringI
             if next_task == -1:
                 task_id = 'exit_task_id'
             else:
-                prefix = "d" if tasks[next_task].task_type == 'data' else ""
-                task_id = f'{prefix}task_{next_task}_id'
+                if tasks[next_task].task_type == 'local':
+                    if not transition_preamble:
+                        current_code.write(
+                            task_bindings.emit_local_transition_preamble(
+                                next_task, tasks[next_task].blocked, indent=indent))
+                    task_id = f'task_{next_task}_id'
+                else:
+                    task_id = f'dtask_{next_task}_id'
             if itedge == tdag.InterTaskEdge.ACTIVATE:
-                current_code.write(f'    @activate({task_id});\n')
+                current_code.write(f'{indent}@activate({task_id});\n')
             elif itedge == tdag.InterTaskEdge.UNBLOCK:
-                current_code.write(f'    @unblock({task_id});\n')
+                current_code.write(f'{indent}@unblock({task_id});\n')
 
 
 def _generate_benchmarking_code(header: StringIO):

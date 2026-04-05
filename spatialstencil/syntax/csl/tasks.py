@@ -103,9 +103,6 @@ def create_csl_tasks(
     num_local_tasks = 0
     num_data_tasks = 0
 
-    if task_creation_behavior == TaskCreationBehavior.STATE_MACHINE_ON_OVERRUN:
-        raise NotImplementedError("State machine task recycling is not implemented yet.")
-
     completion_dag = _canonicalize_dag(completion_dag)
     # global _DEBUG_i
     # nx.nx_pydot.write_dot(completion_dag, f'canon{_DEBUG_i}.dot')
@@ -354,7 +351,9 @@ def create_csl_tasks(
             result[i] = new_task
             # Make one of the predecessors into an ACTIVATE edge
             tpred = next(iter(predecessors))
-            result[tpred].outgoing = [(o, InterTaskEdge.ACTIVATE) if o == i else (o, e) for o, e in result[tpred].outgoing]
+            result[tpred].outgoing = [
+                (o, InterTaskEdge.ACTIVATE) if o == i else (o, e) for o, e in result[tpred].outgoing
+            ]
 
     result.extend(to_append)
 

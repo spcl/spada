@@ -1,0 +1,80 @@
+kernel @task_recycling_merge<>(stream<f32, 14>[1, 1] readonly input, stream<f32, 1>[1, 1] writeonly output) {
+    place u16 i, u16 j in [0:1, 0:1] {
+        f32[14] buf
+        f32 v0
+        f32 v1
+        f32 v2
+        f32 v3
+        f32 v4
+        f32 v5
+        f32 v6
+        f32 v7
+        f32 v8
+        f32 v9
+        f32 v10
+        f32 v11
+        f32 left_val
+        f32 right_val
+        f32 output_val
+        f32[1] out_buf
+    }
+
+    dataflow u16 i, u16 j in [0:1, 0:1] {
+    }
+
+    compute u16 i, u16 j in [0:1, 0:1] {
+        await receive(buf, input[i, j])
+
+        completion s0 = async {
+            v0 = buf[0]
+        }
+        completion s1 = async {
+            v1 = v0 * 0.0 + buf[1]
+        }
+        completion s2 = async {
+            v2 = v1 * 0.0 + buf[2]
+        }
+        completion s3 = async {
+            v3 = v2 * 0.0 + buf[3]
+        }
+        completion s4 = async {
+            v4 = v3 * 0.0 + buf[4]
+        }
+        completion s5 = async {
+            v5 = v4 * 0.0 + buf[5]
+        }
+        completion s6 = async {
+            v6 = v5 * 0.0 + buf[6]
+        }
+        completion s7 = async {
+            v7 = v6 * 0.0 + buf[7]
+        }
+        completion s8 = async {
+            v8 = v7 * 0.0 + buf[8]
+        }
+        completion s9 = async {
+            v9 = v8 * 0.0 + buf[9]
+        }
+        completion s10 = async {
+            v10 = v9 * 0.0 + buf[10]
+        }
+        completion s11 = async {
+            v11 = v10 * 0.0 + buf[11]
+        }
+        completion left = async {
+            left_val = v11 * 0.0 + buf[12]
+        }
+        completion right = async {
+            right_val = v11 * 0.0 + buf[13]
+        }
+
+        awaitall
+
+        output_val = v0 + v1 + v2 + v3 + v4 + v5 + v6
+        output_val = output_val + v7 + v8 + v9 + v10 + v11
+        output_val = output_val + left_val + right_val
+        out_buf[0] = output_val
+
+        await send(out_buf, output[i, j])
+    }
+}
