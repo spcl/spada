@@ -40,8 +40,7 @@ def _create_linear_local_tasks(length: int):
                 statements=[task_index],
                 outgoing=outgoing,
                 blocked=False,
-            )
-        )
+            ))
     return tasks
 
 

@@ -399,19 +399,19 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         if task.task_type != "data":
             continue
 
-            stmt = rect.metadata.compute.statements[task.statements[0]]
-            assert isinstance(stmt, spir.ForeachStatement)
-            sname = stmt.receive_stream.stream_name
-            if isinstance(sname, spir.ArraySlice):
-                sname = sname.array
-            if name_to_csl(sname) + "_H2D" in color_map:
-                color = color_map[name_to_csl(sname) + "_H2D"]
-            elif name_to_csl(sname) + "_IN" in color_map:
-                color = color_map[name_to_csl(sname) + "_IN"]
-            else:
-                print(color_map)
-                raise ValueError(f'Cannot find color for stream "{name_to_csl(sname)}" in data task {i}')
-            current_code.write(f'const dtask_{i}_id = @get_data_task_id(@get_color({color}));\n')
+        stmt = rect.metadata.compute.statements[task.statements[0]]
+        assert isinstance(stmt, spir.ForeachStatement)
+        sname = stmt.receive_stream.stream_name
+        if isinstance(sname, spir.ArraySlice):
+            sname = sname.array
+        if name_to_csl(sname) + "_H2D" in color_map:
+            color = color_map[name_to_csl(sname) + "_H2D"]
+        elif name_to_csl(sname) + "_IN" in color_map:
+            color = color_map[name_to_csl(sname) + "_IN"]
+        else:
+            print(color_map)
+            raise ValueError(f'Cannot find color for stream "{name_to_csl(sname)}" in data task {i}')
+        current_code.write(f'const dtask_{i}_id = @get_data_task_id(@get_color({color}));\n')
 
     # Generate each local slot as one hardware task.
     for slot in task_bindings.local_slots:
