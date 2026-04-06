@@ -1,0 +1,59 @@
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/22.04/release-20231130/ubuntu-22.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+    digest: "sha256:7edc2eccf1e34df23d9561b721b6fed381c3b6e8c916c91c71bbce7b8488b496"
+
+arch: "x86_64"
+
+vmOpts:
+  qemu:
+    cpuType:
+      x86_64: "max"
+
+ssh:
+  loadDotSSHPubKeys: false
+
+mounts:
+  - location: "~"
+    writable: true
+  - location: "/tmp/lima"
+    writable: true
+
+containerd:
+  system: false
+  user: false
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -y
+      apt-get install -y squashfs-tools-ng wget python3 python3-pip make
+      update-alternatives --install /usr/bin/python python /usr/bin/python3 1
+      wget https://github.com/sylabs/singularity/releases/download/v4.0.2/singularity-ce_4.0.2-jammy_amd64.deb
+      apt-get install -y ./singularity-ce_4.0.2-jammy_amd64.deb
+
+probes:
+  - script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      if ! timeout 30s bash -c "until command -v singularity >/dev/null 2>&1; do sleep 3; done"; then
+        echo >&2 "singularity is not installed yet"
+        exit 1
+      fi
+    hint: See "/var/log/cloud-init-output.log" in the guest
+
+message: |
+  Start a shell inside the VM:
+    limactl shell {{.Name}}
+
+  Then add your extracted Cerebras SDK directory to PATH:
+    export PATH=/absolute/path/to/cs_sdk:$PATH
+
+  Verify the SDK:
+    make -C /absolute/path/to/spatialStencil/tests/csl_runtime check-sdk
+
+  Run the full CSL runtime suite:
+    make -C /absolute/path/to/spatialStencil/tests/csl_runtime test

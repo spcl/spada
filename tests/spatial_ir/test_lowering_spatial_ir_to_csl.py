@@ -60,6 +60,18 @@ def test_collective_1d(filename, params):
         print('='*13)
 
 
+def test_tree_reduce_1d_compiles_512_pes():
+    """Lowering succeeds for a 512-wide (L=9) 1-D tree reduce; guards large-PE regressions."""
+    file = os.path.join(_COLLECTIVES_DIR, 'tree_reduce_1D.sptl')
+    kernel = parser.parse_file(file)
+    # K must be >= 2: K=1 breaks foreach/receive lowering (empty DSD slot for __x).
+    kernel = passes.concretize_parameters(kernel, L=9, K=2)
+    kernel = passes.constexpr_propagation(kernel)
+    csl_files = lower_spatial_ir_to_csl(kernel, copy_elision=True, prune_memory=True)
+    assert csl_files, 'expected at least one generated CSL file'
+    assert all(f.code.strip() for f in csl_files), 'expected non-empty CSL bodies'
+
+
 @pytest.mark.parametrize('filename,params', _COLLECTIVES_2D, ids=[c[0] for c in _COLLECTIVES_2D])
 def test_collective_2d(filename, params):
     file = os.path.join(_COLLECTIVES_DIR, filename)

@@ -50,8 +50,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
                             task_fusion: bool = True,
                             copy_elision: bool = True,
                             prune_memory: bool = True,
-                            task_id_recycling: bool = True,
-                            recycle_overflow_only: bool = True) -> list[CodeFile]:
+                            task_id_recycling: bool = True) -> list[CodeFile]:
     """
     Lowers a routed Spatial IR kernel into Cerebras CSL code.
 
@@ -65,9 +64,6 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     :param copy_elision: If True, enables copy elision optimization pass.
     :param prune_memory: If True, enables unused field pruning optimization pass.
     :param task_id_recycling: If True, enables task ID recycling pass.
-    :param recycle_overflow_only: If True, keeps the initial local tasks on
-                                  dedicated hardware IDs and recycles only the
-                                  overflow tail.
     :return: List of code-file objects that can be written to files. See ``write_code_to_files``.
     """
     # PRECONDITION: Rectangles of dataflow/compute/place do not intersect (comes from Spatial IR)
@@ -138,7 +134,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
         rect_code, color_map = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode,
                                                   stream_rects, channel_to_color, disable_benchmarking,
                                                   disable_asynchronous, disable_dsd, task_fusion,
-                                                  task_id_recycling, recycle_overflow_only)
+                                                  task_id_recycling)
         color_maps.append(color_map)
         csl_codes.append(CodeFile(csl_name, rect_code))
 
@@ -298,8 +294,7 @@ def generate_rectangle(kernel: spir.Kernel,
                        disable_asynchronous: bool = False,
                        disable_dsd: bool = False,
                        task_fusion: bool = True,
-                       task_id_recycling: bool = True,
-                       recycle_overflow_only: bool = True) -> tuple[str, dict[str, int]]:
+                       task_id_recycling: bool = True) -> tuple[str, dict[str, int]]:
     # Code generation carets
     header = StringIO()
     current_code = StringIO()
@@ -374,11 +369,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         if len(tasks) != len_for_reporting:
             print(f'P{rect.x_range[0]},{rect.y_range[0]}: Reduced from {len_for_reporting} to {len(tasks)} tasks.')
 
-    task_bindings = task_recycling.plan_task_bindings(
-        tasks,
-        task_creation_behavior,
-        recycle_overflow_only=recycle_overflow_only,
-    )
+    task_bindings = task_recycling.plan_task_bindings(tasks, task_creation_behavior)
 
     print(f'Stats: Using {sum(1 if t.task_type == "local" else 0 for t in tasks)} local tasks across '
           f'{len(task_bindings.local_slots)} local task IDs, '

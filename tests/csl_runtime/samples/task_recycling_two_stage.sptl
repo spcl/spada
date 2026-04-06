@@ -1,0 +1,75 @@
+// Two sequential awaitall groups of 8 completions each.
+//
+// Key coloring property:
+//   Each awaitall with N completions creates N-1 blocked join tasks that form
+//   a clique in the conflict graph (they all have the main task as a common
+//   predecessor).  With 8 completions per group that is a 7-clique per group.
+//   However, the two groups are fully sequential — every task in group 2 has
+//   every task in group 1 as an ancestor — so the two 7-cliques share no edges
+//   and can reuse the same 7 hardware slots.
+//
+//   Total local tasks: ~15  (7 blocked in group 1, 7 blocked in group 2, T0,
+//   T_final, ...).  Chromatic number: 7.  Average slot depth: ~2 tasks/slot.
+//
+// The multiplication-by-zero trick (v * 0.0 + buf[k]) introduces a code-order
+// dependency on v while keeping the mathematical value equal to buf[k], so the
+// final result is simply sum(buf[0:16]).
+kernel @task_recycling_two_stage<>(stream<f32, 16>[1, 1] readonly input,
+                                    stream<f32, 1>[1, 1]  writeonly output) {
+    place u16 i, u16 j in [0:1, 0:1] {
+        f32[16] buf
+        f32 a0
+        f32 a1
+        f32 a2
+        f32 a3
+        f32 a4
+        f32 a5
+        f32 a6
+        f32 a7
+        f32 b0
+        f32 b1
+        f32 b2
+        f32 b3
+        f32 b4
+        f32 b5
+        f32 b6
+        f32 b7
+        f32 output_val
+        f32[1] out_buf
+    }
+
+    dataflow u16 i, u16 j in [0:1, 0:1] {
+    }
+
+    compute u16 i, u16 j in [0:1, 0:1] {
+        await receive(buf, input[i, j])
+
+        // Stage 1: 8 completions
+        completion s1_0 = async { a0 = buf[0] }
+        completion s1_1 = async { a1 = a0 * 0.0 + buf[1] }
+        completion s1_2 = async { a2 = a1 * 0.0 + buf[2] }
+        completion s1_3 = async { a3 = a2 * 0.0 + buf[3] }
+        completion s1_4 = async { a4 = a3 * 0.0 + buf[4] }
+        completion s1_5 = async { a5 = a4 * 0.0 + buf[5] }
+        completion s1_6 = async { a6 = a5 * 0.0 + buf[6] }
+        completion s1_7 = async { a7 = a6 * 0.0 + buf[7] }
+        awaitall
+
+        // Stage 2: 8 completions (independent of stage 1's values)
+        completion s2_0 = async { b0 = buf[8] }
+        completion s2_1 = async { b1 = b0 * 0.0 + buf[9] }
+        completion s2_2 = async { b2 = b1 * 0.0 + buf[10] }
+        completion s2_3 = async { b3 = b2 * 0.0 + buf[11] }
+        completion s2_4 = async { b4 = b3 * 0.0 + buf[12] }
+        completion s2_5 = async { b5 = b4 * 0.0 + buf[13] }
+        completion s2_6 = async { b6 = b5 * 0.0 + buf[14] }
+        completion s2_7 = async { b7 = b6 * 0.0 + buf[15] }
+        awaitall
+
+        output_val = a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7
+        output_val = output_val + b0 + b1 + b2 + b3 + b4 + b5 + b6 + b7
+        out_buf[0] = output_val
+
+        await send(out_buf, output[i, j])
+    }
+}

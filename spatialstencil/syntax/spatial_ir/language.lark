@@ -205,7 +205,8 @@ phase_body : "{" (place_block | dataflow_block | compute_block | metafor_block_i
 %import common.NEWLINE
 
 // Things to ignore: whitespace, single-line comments, multi-line comments
-COMMENT : "//" /(.)+/ NEWLINE
+// Allow empty // lines (common in doc blocks); (.)+ rejected bare "//\n".
+COMMENT : "//" /[^\n]*/ NEWLINE
 MULTILINE_COMMENT: /\/\*(\*(?!\/)|[^*])*\*\//
 %ignore WS
 %ignore COMMENT

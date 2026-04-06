@@ -47,14 +47,11 @@ The planner works in three phases.
     Each logical local task becomes a vertex in a conflict graph.  An edge means
     two tasks must not share a slot.
 
-    By default the planner keeps the first ``len(constants.LOCAL_TASK_IDS)`` local
-    tasks on distinct hardware slots and only recycles the overflow tail.  That
-    preserves the early task structure and keeps each dispatcher as small as the
-    conflict constraints allow.  For comparison or experimentation, callers can
-    opt back into the older whole-graph coloring mode that recolors every local
-    task together.
-
-The important part is how the conflict graph is built.
+    Slot assignment is solved by load-balanced greedy graph coloring in
+    degeneracy (smallest-last) order.  All tasks are colored together without
+    any fixed prefix; among eligible colors the least-loaded one is chosen so
+    that tasks are spread evenly across hardware slots, keeping dispatcher
+    state machines small.  The algorithm runs in O((V+E) log V) time.
 
 Safety criterion
 ----------------
@@ -72,22 +69,25 @@ and those trigger points are what matter for recycling safety.
 This module therefore computes two auxiliary relations on the task DAG:
 
 ``reachable[A]``
-        The set of tasks reachable from ``A`` through outgoing inter-task edges.
-        If a trigger source is in ``reachable[A]``, then ``A`` must happen before
-        that source.
+        The set of tasks reachable from ``A`` in the task graph. If ``C`` is in ``reachable[A]`` we say ``A`` is an _ancestor_ of ``C``. Note that every task is its own ancestor.
 
 ``trigger_sources[B]``
         The set of tasks that can directly trigger ``B``.  These are the immediate
         predecessors of ``B`` in the task graph after DAG construction.
 
-With those relations, ``A`` is considered to safely precede ``B`` iff ``A``
-precedes every direct trigger source of ``B``.  In code this is the predicate
+With those relations, ``A`` is considered to _safely precede_ ``B`` iff ``A`` is an ancestor of every trigger source of ``B``.  
+In code this is the predicate
 implemented by :func:`_precedes_all_trigger_sources`.
+
+Note that we must consider the trigger sources of ``B``, because a trigger source must be able to activate/unblock ``B``: For this, the task id of ``B`` must not be concurrently used by ``A``.
 
 Two tasks conflict if neither direction holds:
 
-* ``A`` does not precede all trigger sources of ``B``, and
-* ``B`` does not precede all trigger sources of ``A``.
+* ``A`` does not safely precede all trigger sources of ``B``, and
+* ``B`` does not safely precede all trigger sources of ``A``.
+
+When that happens, the tasks may be simultaneously live from the point of view
+of slot reuse and therefore need distinct hardware IDs.
 
 When that happens, the tasks may be simultaneously live from the point of view
 of slot reuse and therefore need distinct hardware IDs.
@@ -137,13 +137,11 @@ stable across runs.
 * Colors are turned into slots in sorted color order.
 * Tasks within one slot are stored in sorted logical-task order.
 * State numbers are assigned by that sorted order.
-
-This does not try to optimize for minimal state numbers or minimal branching
-depth; it optimizes for correctness first and reproducibility second.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+import heapq
 from typing import Iterable
 
 from spatialstencil.syntax.csl import constants
@@ -269,46 +267,29 @@ class TaskBindingPlan:
 def plan_task_bindings(
     tasks: list[tdag.CSLTask],
     task_creation_behavior: tdag.TaskCreationBehavior,
-    recycle_overflow_only: bool = True,
 ) -> TaskBindingPlan:
-    """
-    Compute a local-task binding plan for the generated CSL.
+    """Compute a local-task binding plan for the generated CSL.
 
-    The function returns either:
+    Returns either a trivial one-task-per-slot mapping when recycling is not
+    required or not allowed, or a state-machine-compatible sharing plan when
+    local-task overrun occurs.
 
-    * a trivial one-task-per-slot mapping when recycling is not required or not
-      allowed, or
-    * a state-machine-compatible sharing plan when local-task overrun occurs.
+    ``STATE_MACHINE_ON_OVERRUN`` is the only mode that attempts recycling.
+    Other modes either keep a unique mapping or raise when the local task count
+    exceeds the hardware limit.
 
-    The planning process is:
-
-    1. collect all logical local tasks,
-    2. fast-path to unique slots when possible,
-     3. otherwise either preserve a unique prefix and color only the overflow
-         tail, or recolor the full local-task set,
-     4. solve the resulting coloring problem, and
-    5. convert colors into stable ``LocalTaskSlot`` objects and per-task state
-       assignments.
-
-    ``STATE_MACHINE_ON_OVERRUN`` is the only mode that actually attempts
-    recycling.  Other modes either keep a unique mapping or raise when the local
-    task count exceeds the hardware limit.
-
-     When ``recycle_overflow_only`` is true, the planner keeps the earliest local
-     tasks on dedicated hardware slots and only searches for placements for the
-     overflow tail.  The search minimizes the largest number of logical tasks per
-     hardware slot so generated state machines stay small.
+    When recycling is needed, all tasks are colored together using
+    load-balanced greedy coloring in degeneracy order, distributing tasks
+    evenly across hardware slots to minimise dispatcher state machine size.
     """
     local_task_indices = [i for i, task in enumerate(tasks) if task.task_type == 'local']
     if not local_task_indices:
         return TaskBindingPlan((), {}, {})
 
-    if task_creation_behavior == tdag.TaskCreationBehavior.FAIL_ON_OVERRUN:
-        if len(local_task_indices) > len(constants.LOCAL_TASK_IDS):
-            raise ValueError('Too many local tasks')
-        return _plan_unique_slots(local_task_indices)
-
-    if task_creation_behavior == tdag.TaskCreationBehavior.SYNCHRONOUS_ON_OVERRUN:
+    if task_creation_behavior in (
+        tdag.TaskCreationBehavior.FAIL_ON_OVERRUN,
+        tdag.TaskCreationBehavior.SYNCHRONOUS_ON_OVERRUN,
+    ):
         if len(local_task_indices) > len(constants.LOCAL_TASK_IDS):
             raise ValueError('Too many local tasks')
         return _plan_unique_slots(local_task_indices)
@@ -319,79 +300,19 @@ def plan_task_bindings(
     if len(local_task_indices) <= len(constants.LOCAL_TASK_IDS):
         return _plan_unique_slots(local_task_indices)
 
-    if recycle_overflow_only:
-        overflow_coloring = _overflow_only_coloring(tasks, local_task_indices, len(constants.LOCAL_TASK_IDS))
-        if overflow_coloring is None:
-            raise ValueError(
-                'Too many concurrently-live local tasks for overflow-only state-machine recycling; '
-                'disable recycle_overflow_only to allow full recoloring'
-            )
-        return _build_plan_from_coloring(overflow_coloring)
-
+    max_colors = len(constants.LOCAL_TASK_IDS)
     conflict_graph = _build_conflict_graph(tasks, local_task_indices)
-    topological_local_order = list(local_task_indices)
-    initial_coloring = _first_fit_coloring(conflict_graph, list(reversed(topological_local_order)))
-    num_colors = 1 + max(initial_coloring.values(), default=-1)
+    coloring = greedy_coloring(conflict_graph, local_task_indices, max_colors=max_colors, load_balance=True)
+    if coloring is None:
+        raise ValueError('Too many concurrently-live local tasks for state-machine recycling')
 
-    if num_colors > len(constants.LOCAL_TASK_IDS):
-        exact_coloring = _bounded_coloring(conflict_graph, topological_local_order, len(constants.LOCAL_TASK_IDS))
-        if exact_coloring is None:
-            raise ValueError('Too many concurrently-live local tasks for state-machine recycling')
-        initial_coloring = exact_coloring
-
-    return _build_plan_from_coloring(initial_coloring)
+    return _build_plan_from_coloring(coloring)
 
 
 def _plan_unique_slots(local_task_indices: list[int]) -> TaskBindingPlan:
     """Build the trivial plan where each local task receives its own slot."""
     coloring = {task_index: color for color, task_index in enumerate(local_task_indices)}
     return _build_plan_from_coloring(coloring)
-
-
-def _overflow_only_coloring(
-    tasks: list[tdag.CSLTask],
-    topological_local_order: list[int],
-    max_colors: int,
-) -> dict[int, int] | None:
-    """Color only the overflow tail while keeping the initial prefix fixed.
-
-    The first ``max_colors`` local tasks are pinned to distinct colors in their
-    original order.  Remaining tasks are then placed onto those existing colors
-    subject to the same slot-sharing conflict graph used by the legacy global
-    recoloring mode.
-
-    To keep recycled state machines small, the search finds the smallest
-    possible upper bound on the number of logical tasks assigned to any one
-    hardware slot.
-    """
-    fixed_prefix = topological_local_order[:max_colors]
-    fixed_coloring = {task_index: color for color, task_index in enumerate(fixed_prefix)}
-    if len(topological_local_order) <= max_colors:
-        return fixed_coloring
-
-    conflict_graph = _build_conflict_graph(tasks, topological_local_order)
-    min_slot_size = (len(topological_local_order) + max_colors - 1) // max_colors
-    max_slot_size = len(topological_local_order) - max_colors + 1
-    best_coloring: dict[int, int] | None = None
-    lower_bound = min_slot_size
-    upper_bound = max_slot_size
-
-    while lower_bound <= upper_bound:
-        trial_slot_size = (lower_bound + upper_bound) // 2
-        candidate = _bounded_coloring_with_fixed_prefix(
-            conflict_graph,
-            topological_local_order,
-            max_colors,
-            fixed_coloring,
-            trial_slot_size,
-        )
-        if candidate is None:
-            lower_bound = trial_slot_size + 1
-            continue
-        best_coloring = candidate
-        upper_bound = trial_slot_size - 1
-
-    return best_coloring
 
 
 def _build_conflict_graph(tasks: list[tdag.CSLTask], local_task_indices: Iterable[int]) -> dict[int, set[int]]:
@@ -490,128 +411,124 @@ def _conflicts(
                 _precedes_all_trigger_sources(right, left, trigger_sources, reachable))
 
 
-def _first_fit_coloring(conflict_graph: dict[int, set[int]], order: list[int]) -> dict[int, int]:
-    """Greedily color the conflict graph.
+def _degeneracy_order(conflict_graph: dict[int, set[int]], vertices: list[int]) -> list[int]:
+    """Compute the degeneracy (smallest-last) ordering for ``vertices``.
 
-    This is a cheap first pass used both as the final answer when it fits within
-    the hardware limit and as a quick estimate of how many colors are likely to
-    be needed before attempting the exact bounded search.
+    Iteratively removes the vertex with minimum current degree in the subgraph
+    induced by ``vertices``, building an elimination sequence.  The coloring
+    order returned is the reverse of that sequence, so each vertex has at most
+    *d* already-colored neighbors when it is processed (where *d* is the
+    degeneracy of the induced subgraph).  Ties are broken by vertex index for
+    reproducibility.
+
+    Time complexity: O((|V| + |E|) log |V|).
     """
-    coloring: dict[int, int] = {}
-    for vertex in order:
-        used = {coloring[neighbor] for neighbor in conflict_graph[vertex] if neighbor in coloring}
-        color = 0
-        while color in used:
-            color += 1
-        coloring[vertex] = color
-    return coloring
+    remaining: set[int] = set(vertices)
+    degree: dict[int, int] = {
+        v: sum(1 for u in conflict_graph[v] if u in remaining) for v in vertices
+    }
+
+    heap: list[tuple[int, int]] = [(degree[v], v) for v in vertices]
+    heapq.heapify(heap)
+
+    elimination: list[int] = []
+    done: set[int] = set()
+
+    while heap:
+        _, v = heapq.heappop(heap)
+        if v in done:
+            continue
+        done.add(v)
+        remaining.discard(v)
+        elimination.append(v)
+        for u in conflict_graph[v]:
+            if u in remaining:
+                degree[u] -= 1
+                heapq.heappush(heap, (degree[u], u))
+
+    return list(reversed(elimination))
 
 
-def _bounded_coloring(
+def greedy_coloring(
     conflict_graph: dict[int, set[int]],
-    topological_local_order: list[int],
-    max_colors: int,
+    vertices: list[int],
+    fixed_coloring: dict[int, int] | None = None,
+    max_colors: int | None = None,
+    load_balance: bool = False,
 ) -> dict[int, int] | None:
-    """Search for a coloring that uses at most ``max_colors`` colors.
+    """Greedy graph coloring using the degeneracy (smallest-last) vertex order.
 
-    The planner first tries greedy coloring.  If the greedy result exceeds the
-    hardware slot budget, this function performs a backtracking search.  The
-    search order prioritizes high-degree vertices first and uses the original
-    local-task order as a tie-breaker for reproducibility.
+    Parameters
+    ----------
+    conflict_graph:
+        Adjacency dictionary for the full conflict graph.  Keys are vertex
+        identifiers; values are sets of conflicting vertices.
+    vertices:
+        All vertices to include in the coloring (both fixed and free).
+    fixed_coloring:
+        Optional pre-assigned colors for a subset of vertices.  These vertices
+        keep their colors and are excluded from the degeneracy ordering.  Their
+        colors are respected when assigning colors to free vertices.
+    max_colors:
+        If given, the function returns ``None`` as soon as any free vertex
+        would require a color index ``>= max_colors``, allowing the caller to
+        detect infeasibility cheaply without backtracking.
+    load_balance:
+        When ``True``, among all eligible colors the one with the fewest
+        current assignments is chosen (ties broken by color index).  This
+        spreads free vertices across existing colors rather than collapsing
+        them onto color 0, which is desirable when a fixed prefix already
+        occupies every color and the overflow tasks should be distributed
+        evenly across hardware slots.  When ``False`` (the default), the
+        standard first-fit rule is used (smallest eligible color index),
+        which minimises the total number of colors.
 
-    Returning ``None`` means the conflict graph cannot be colored within the
-    available number of hardware local-task IDs, so recycling is fundamentally
-    impossible for this task graph.
+    Returns
+    -------
+    A complete coloring dictionary (fixed + newly assigned), or ``None`` if
+    ``max_colors`` is set and the greedy assignment would exceed it.
+
+    Notes
+    -----
+    The degeneracy order guarantees that the number of colors used is at most
+    *d* + 1, where *d* is the degeneracy of the subgraph induced by the free
+    vertices.  This is optimal for chordal graphs and a good heuristic in
+    general — in practice task conflict graphs are sparse and the bound is
+    tight.  Unlike the backtracking solvers this function runs in
+    O((|V| + |E|) log |V|) time.
     """
-    vertices = sorted(
-        conflict_graph,
-        key=lambda vertex: (len(conflict_graph[vertex]), topological_local_order.index(vertex)),
-        reverse=True,
-    )
-    coloring: dict[int, int] = {}
+    if fixed_coloring is None:
+        fixed_coloring = {}
 
-    def backtrack(position: int) -> bool:
-        if position == len(vertices):
-            return True
+    free_vertices = [v for v in vertices if v not in fixed_coloring]
+    ordering = _degeneracy_order(conflict_graph, free_vertices)
 
-        vertex = vertices[position]
-        used = {coloring[neighbor] for neighbor in conflict_graph[vertex] if neighbor in coloring}
-        for color in range(max_colors):
-            if color in used:
-                continue
-            coloring[vertex] = color
-            if backtrack(position + 1):
-                return True
-            del coloring[vertex]
-        return False
+    coloring: dict[int, int] = dict(fixed_coloring)
 
-    if not backtrack(0):
-        return None
+    color_load: dict[int, int] = {}
+    if load_balance:
+        for c in fixed_coloring.values():
+            color_load[c] = color_load.get(c, 0) + 1
+
+    for v in ordering:
+        used = {coloring[u] for u in conflict_graph[v] if u in coloring}
+        if load_balance and max_colors is not None:
+            eligible = [c for c in range(max_colors) if c not in used]
+            if not eligible:
+                return None
+            color = min(eligible, key=lambda c: (color_load.get(c, 0), c))
+        else:
+            color = 0
+            while color in used:
+                color += 1
+            if max_colors is not None and color >= max_colors:
+                return None
+        coloring[v] = color
+        if load_balance:
+            color_load[color] = color_load.get(color, 0) + 1
+
     return coloring
 
-
-def _bounded_coloring_with_fixed_prefix(
-    conflict_graph: dict[int, set[int]],
-    topological_local_order: list[int],
-    max_colors: int,
-    fixed_coloring: dict[int, int],
-    max_slot_size: int,
-) -> dict[int, int] | None:
-    """Color the overflow tail with a fixed prefix and bounded slot occupancy.
-
-    This is an exact search.  ``fixed_coloring`` pins the unique non-recycled
-    prefix to predetermined colors, and the backtracking search assigns colors
-    only to the remaining tasks.  A candidate is accepted only if no slot ends
-    up hosting more than ``max_slot_size`` logical tasks.
-    """
-    vertices = [vertex for vertex in topological_local_order if vertex not in fixed_coloring]
-    coloring = dict(fixed_coloring)
-    color_loads = [0] * max_colors
-    for color in fixed_coloring.values():
-        color_loads[color] += 1
-
-    if any(load > max_slot_size for load in color_loads):
-        return None
-
-    local_order = {vertex: index for index, vertex in enumerate(topological_local_order)}
-
-    def candidate_colors(vertex: int) -> list[int]:
-        used = {coloring[neighbor] for neighbor in conflict_graph[vertex] if neighbor in coloring}
-        return [
-            color for color in range(max_colors)
-            if color not in used and color_loads[color] < max_slot_size
-        ]
-
-    def backtrack(uncolored: tuple[int, ...]) -> bool:
-        if not uncolored:
-            return True
-
-        remaining_capacity = sum(max_slot_size - load for load in color_loads)
-        if len(uncolored) > remaining_capacity:
-            return False
-
-        candidates_by_vertex = {vertex: candidate_colors(vertex) for vertex in uncolored}
-        vertex = min(
-            uncolored,
-            key=lambda item: (len(candidates_by_vertex[item]), -len(conflict_graph[item]), local_order[item]),
-        )
-        candidates = candidates_by_vertex[vertex]
-        if not candidates:
-            return False
-
-        next_uncolored = tuple(item for item in uncolored if item != vertex)
-        for color in sorted(candidates, key=lambda item: (color_loads[item], item)):
-            coloring[vertex] = color
-            color_loads[color] += 1
-            if backtrack(next_uncolored):
-                return True
-            color_loads[color] -= 1
-            del coloring[vertex]
-        return False
-
-    if not backtrack(tuple(vertices)):
-        return None
-    return coloring
 
 
 def _build_plan_from_coloring(coloring: dict[int, int]) -> TaskBindingPlan:

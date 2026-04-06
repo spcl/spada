@@ -109,6 +109,107 @@ Sample SPADA programs are in `samples/`:
 
 ---
 
+## SDK Version and WSE compatibility
+
+The code has been tested for CSL SDK 1.4 and WSE-2.
+
+## Testing
+
+### Python Unit Tests
+
+Python unit tests (no Cerebras SDK required) live under `tests/` and can be run with:
+
+```bash
+pytest tests/ --ignore=tests/csl_runtime
+```
+
+### CSL Runtime Tests (Singularity / Cerebras SDK)
+
+End-to-end tests in `tests/csl_runtime/` compile and simulate SPADA programs using the Cerebras SDK and simulator. The Cerebras SDK ships as a Singularity Image File (`.sif`) and requires Singularity/Apptainer and an x86_64 Linux environment. Follow the Cerebras installation guide for full details: [Installation and Setup](https://sdk.cerebras.net/installation-guide).
+
+**Linux or x86_64 VM setup**
+
+1. Install Singularity/Apptainer as described in the SDK guide.
+2. Download and extract the SDK in one step:
+
+```bash
+make -C tests/csl_runtime setup-sdk CSL_SDK_URL=<url>
+```
+
+This saves the tarball to `tests/csl_runtime/cerebras-sdk.tar.gz` and extracts it to `tests/csl_runtime/cerebras-sdk/`. Both paths are gitignored. The extracted directory is used automatically by all subsequent `make` targets.
+
+3. Install Python dependencies for the compiler:
+
+```bash
+python3 -m pip install -r requirements-ci.txt
+```
+
+4. Verify the toolchain:
+
+```bash
+make -C tests/csl_runtime check-sdk
+```
+
+5. Run the full CSL test suite:
+
+```bash
+make -C tests/csl_runtime test
+```
+
+**Run a single test:**
+
+```bash
+make -C tests/csl_runtime test-one TEST=test_add.sh
+```
+
+**Optional: run the SDK smoke test** against the `csl-extras-*` examples bundle:
+
+```bash
+make -C tests/csl_runtime smoke-sdk SDK_EXAMPLES_DIR=/path/to/csl-extras-*
+```
+
+If you have an SDK installed at a custom location, pass `CSL_SDK_DIR` to any target:
+
+```bash
+make -C tests/csl_runtime test CSL_SDK_DIR=/absolute/path/to/cs_sdk
+```
+
+**Apple Silicon macOS**
+
+The Cerebras SDK documentation recommends running on Apple Silicon via an x86_64 Lima VM. A helper script handles everything — VM creation, SDK download, extraction, and test execution — in one command:
+
+```bash
+brew install lima qemu lima-additional-guestagents   # one-time
+tests/csl_runtime/run-in-lima.sh --sdk-url <url>
+```
+
+This creates the Lima VM on first use (~5–10 min), downloads and extracts the SDK to `tests/csl_runtime/cerebras-sdk/`, installs Python dependencies inside the VM, and runs the full test suite. Other modes:
+
+```bash
+# Run a single test
+tests/csl_runtime/run-in-lima.sh --sdk-url <url> --test test_add.sh
+
+# Verify the SDK toolchain only
+tests/csl_runtime/run-in-lima.sh --sdk-url <url> --check
+
+# Run the Cerebras SDK smoke test
+tests/csl_runtime/run-in-lima.sh --sdk-url <url> --smoke /path/to/csl-extras-*
+
+# Drop into an interactive shell inside the VM
+tests/csl_runtime/run-in-lima.sh --sdk-url <url> --shell
+```
+
+If the SDK tarball is already downloaded or extracted, use `--sdk /path/to/cs_sdk` instead of `--sdk-url`. The repository must reside under `$HOME` (Lima mounts the Mac home directory by default). The Lima configuration is in `tests/csl_runtime/lima-ubuntu-x86_64.yaml`.
+
+**Cleanup** generated test artifacts:
+
+```bash
+make -C tests/csl_runtime clean      # remove compiled output and .npy files
+make -C tests/csl_runtime clean-sdk  # also remove the downloaded SDK
+```
+
+---
+
 ## Getting Involved
 
 Questions, discussions, and feedback are welcome via GitHub Issues:
@@ -130,7 +231,7 @@ Contributions are welcome. Please follow these steps:
    isort spatialstencil tests
    flake8 spatialstencil tests
    ```
-5. **Run tests**: `pytest`
+5. **Run tests**: see the [Testing](#testing) section for Python unit tests and CSL runtime tests.
 6. **Open a pull request** against `main` with a clear description of the change and its motivation.
 
 For significant changes (new language constructs, compiler passes, or architecture support), please open an issue first to discuss the design.
