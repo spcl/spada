@@ -97,6 +97,41 @@ kernel @tester<K> () {{
     assert dsd_ops.get_dsd_op(dtypes, compute.statements[0]) == "@fmuls"
 
 
+def test_dsd_op_detection_receive_op_send():
+    kernel = parser.parse_string(code="""
+kernel @tester<K>() {
+
+    place i16 i, i16 j in [0, 0] {
+        f32[K] a32
+    }
+    dataflow i16 i, i16 j in [0, 0] {
+        stream<f32> red = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 0
+        }
+        stream<f32> blue = relative_stream(1, 0) {
+            hops = [(1, 0)],
+            channel = 1
+        }
+    }
+    compute i16 i, i16 j in [0, 0] {
+        await foreach i16 k, f32 x in [0:K], receive(red) {
+            a32[k] = a32[k] + x
+            await send(a32[k], blue)
+        }
+    }
+}""")
+    kernel = passes.concretize_parameters(kernel, K=8)
+    place, dataflow, compute = kernel.body
+    dtypes = s2c._collect_identifier_types(PEBlock(place, dataflow, compute), [])
+
+    assert dsd_ops.get_dsd_op(dtypes, compute.statements[0]) == "@fadds"
+    dsd_stmt = dsd_ops.get_dsd_statement(dtypes, compute.statements[0])
+    assert dsd_stmt is not None
+    assert dsd_stmt.destination.as_ir() == 'blue'
+
+
 if __name__ == '__main__':
     test_dsd_op_detection()
     test_dsd_op_detection_constant_folding()
+    test_dsd_op_detection_receive_op_send()

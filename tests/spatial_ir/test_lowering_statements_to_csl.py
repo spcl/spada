@@ -1025,6 +1025,50 @@ def test_foreach_lifting_to_dsd_op(with_binop):
     assert dsd_found, "Expected DSD operations not found in generated CSL"
 
 
+def test_foreach_receive_op_send_lifting_to_dsd_op():
+    spatial_ir_code = '''
+    kernel @test_foreach_relay<>() {
+        place u16 i, u16 j in [0:1, 0:1] {
+            f32[8] local_val;
+        }
+        dataflow u16 i, u16 j in [0:1, 0:1] {
+            stream<f32> input = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 0
+            }
+            stream<f32> output = relative_stream(1, 0) {
+                hops = [(1, 0)],
+                channel = 1
+            }
+        }
+        compute u16 i, u16 j in [0:1, 0:1] {
+            await foreach u16 k, f32 inp in [0:8], receive(input) {
+                local_val[k] = local_val[k] + inp;
+                await send(local_val[k], output);
+            };
+        }
+    }
+    '''
+
+    kernel = create_inline_spatial_ir(spatial_ir_code)
+    kernel = passes.constexpr_propagation(kernel)
+
+    csl_files = lower_spatial_ir_to_csl(kernel, copy_elision=False)
+
+    assert len(csl_files) > 0
+
+    dsd_found = False
+    data_task_found = False
+    for f in csl_files:
+        if '@fadds' in f.code:
+            dsd_found = True
+        if 'data_task' in f.code and 'local_val[k] = local_val[k] + inp' in f.code:
+            data_task_found = True
+
+    assert dsd_found, "Expected relay DSD operation not found in generated CSL"
+    assert not data_task_found, "Relay foreach should not be lowered as a data task"
+
+
 if __name__ == '__main__':
     test_receive_statement_scalar()
     test_receive_statement_array()

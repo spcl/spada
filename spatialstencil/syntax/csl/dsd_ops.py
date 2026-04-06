@@ -40,11 +40,15 @@ class DSDOp:
             dsds = copy.copy(dsds)
             dsds[statement.stream_variable.identifier.as_ir()] = dsds[_ident(
                 statement.receive_stream.stream_name).as_ir()]
-            statement = statement.body[0]
-        elif hasattr(statement, 'body'):
-            statement = statement.body[0]
-        dsd_objects = self.used_dsd_objects(statement, dsds)
-        return self._append_async_suffix(self._as_csl(statement, dtypes, dsds), dsd_objects, async_target)
+        normalized_statement: Optional[spir.AssignmentStatement | spir.SendStatement]
+        if isinstance(statement, (spir.AssignmentStatement, spir.SendStatement)):
+            normalized_statement = statement
+        else:
+            normalized_statement = get_dsd_statement(dtypes, statement)
+        if normalized_statement is None:
+            raise ValueError('Expected a statement that can be lowered to a DSD operation')
+        dsd_objects = self.used_dsd_objects(normalized_statement, dsds)
+        return self._append_async_suffix(self._as_csl(normalized_statement, dtypes, dsds), dsd_objects, async_target)
 
     def _as_csl(self, statement: spir.Statement, dtypes: dict[spir.Identifier, spir.IRType],
                 dsds: UniqueDSDDict) -> str:
@@ -263,6 +267,7 @@ class FMADSDOp(DSDOp):
 
 
 class CopyDSDOp(DSDOp):
+
     def __init__(self, scalar_input: bool = False):
         super().__init__()
         self.scalar_input = scalar_input
@@ -398,7 +403,55 @@ def _get_base_dtype(dtypes: dict[str, spir.IRType],
         dtype = dtype.element_type
     return dtype
 
+
+def _is_stream_backed_dtype(dtype: spir.IRType) -> bool:
+    if isinstance(dtype, spir.StreamType):
+        return True
+    if isinstance(dtype, spir.ArrayType):
+        return _is_stream_backed_dtype(dtype.base_type)
+    return False
+
+
+def _make_relay_dsd_statement(dtypes: dict[spir.Identifier, spir.IRType],
+                              stmt: spir.ForeachStatement) -> Optional[spir.AssignmentStatement]:
+    if len(stmt.body) != 2:
+        return None
+
+    first_stmt, second_stmt = stmt.body
+    if not isinstance(first_stmt, spir.AssignmentStatement) or not isinstance(second_stmt, spir.SendStatement):
+        return None
+
+    receive_dtype = _get_dtype(dtypes, stmt.receive_stream.stream_name)
+    if not _is_stream_backed_dtype(receive_dtype):
+        return None
+
+    if first_stmt.destination.as_ir() != second_stmt.local_array.as_ir():
+        return None
+
+    relay_stmt = spir.AssignmentStatement(copy.deepcopy(second_stmt.stream_name), copy.deepcopy(first_stmt.source))
+    return relay_stmt
+
+
+def get_dsd_statement(dtypes: dict[spir.Identifier, spir.IRType],
+                      stmt: spir.Statement) -> Optional[spir.AssignmentStatement]:
+    if isinstance(stmt, spir.AssignmentStatement):
+        return stmt
+
+    if not hasattr(stmt, 'body'):
+        return None
+
+    if len(stmt.body) == 0:
+        return None
+    if len(stmt.body) == 1 and isinstance(stmt.body[0], spir.AssignmentStatement):
+        return stmt.body[0]
+    if isinstance(stmt, spir.ForeachStatement):
+        return _make_relay_dsd_statement(dtypes, stmt)
+    return None
+
+
 DISABLE_DSD = False
+
+
 def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
                stmt: spir.ForeachStatement | spir.MapStatement | spir.AssignmentStatement) -> Optional[str]:
     """
@@ -409,17 +462,13 @@ def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
     """
     if DISABLE_DSD:
         return None
-    if isinstance(stmt, spir.AssignmentStatement):
-        inner_stmt = stmt
-    else:
-        if len(stmt.body) == 0:
-            # No-op
-            return ''
-        if len(stmt.body) > 1:
-            return None
-        inner_stmt = stmt.body[0]
-        if not isinstance(inner_stmt, spir.AssignmentStatement):
-            return None
+    if not isinstance(stmt, spir.AssignmentStatement) and len(stmt.body) == 0:
+        # No-op
+        return ''
+
+    inner_stmt = get_dsd_statement(dtypes, stmt)
+    if inner_stmt is None:
+        return None
 
     dst = _get_id(inner_stmt.destination)
     if dst not in dtypes:

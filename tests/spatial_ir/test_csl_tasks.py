@@ -1,6 +1,6 @@
 import pytest
 from spatialstencil.lowering import spatial_ir_to_csl as s2c
-from spatialstencil.syntax.spatial_ir import analysis, parser, irnodes
+from spatialstencil.syntax.spatial_ir import analysis, parser
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock
 from spatialstencil.syntax.csl import tasks as tdag
 
@@ -90,6 +90,38 @@ kernel @reduce<N>(stream<f32>[N] readonly inp, stream<f32> writeonly out) {
     assert len(tasks) in (5, 6)
     assert len(tasks[0].statements) == 5
     assert len(tasks[-1].statements) == 1
+
+
+def test_tasks_with_relay_dsd_op():
+    kernel = parser.parse_string(code="""
+kernel @relay<>() {
+
+    place i16 i, i16 j in [0, 0] {
+        f32[8] a
+    }
+    dataflow i16 i, i16 j in [0, 0] {
+        stream<f32> red = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 0
+        }
+        stream<f32> blue = relative_stream(1, 0) {
+            hops = [(1, 0)],
+            channel = 1
+        }
+    }
+    compute i16 i, i16 j in [0, 0] {
+        await foreach i16 k, f32 x in [0:8], receive(red) {
+            a[k] = a[k] + x
+            await send(a[k], blue)
+        }
+    }
+}""")
+    place, dataflow, compute = kernel.body
+    block = PEBlock(place, dataflow, compute)
+    tasks = _create_tasks(block)
+
+    assert len(tasks) == 1
+    assert tasks[0].task_type == 'local'
 
 
 @pytest.mark.parametrize('async_first_task', (False, True))

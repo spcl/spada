@@ -461,8 +461,10 @@ def fuse_tasks(tasks: list[CSLTask], dsds: UniqueDSDDict, dtypes: dict[spir.Iden
             if dsd_op is None:
                 continue
             # Pure memory DSD operations are synchronous and can be fused
-            assert len(stmt.body) == 1
-            dsd_objects = dsd_op().used_dsd_objects(stmt.body[0], dsds)
+            dsd_stmt = dsd_ops.get_dsd_statement(dtypes, stmt)
+            if dsd_stmt is None:
+                continue
+            dsd_objects = dsd_op().used_dsd_objects(dsd_stmt, dsds)
             if any(isinstance(dsd, cslstruct.FabricDSD) for dsd in dsd_objects):
                 continue
             # Also check the foreach receive generator
