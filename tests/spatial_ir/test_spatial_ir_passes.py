@@ -304,6 +304,7 @@ def test_lower_to_for(should_lower: bool):
           compute i16 i, i16 j in [0:4, 0:4] {{
               await foreach i16 k, f32 x in [0:8], receive({stream}) {{
                   a[k] = a[k] + x
+                  a[k] = a[k] + x
                   await send(a[k], blue)
               }}
           }}
