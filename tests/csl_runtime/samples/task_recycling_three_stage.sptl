@@ -1,0 +1,81 @@
+// Three sequential awaitall groups of 6 completions each.
+//
+// Key coloring property:
+//   Each awaitall group with 6 completions produces a 5-clique of blocked join
+//   tasks in the conflict graph.  Tasks from different stages do not conflict
+//   (each stage is fully downstream of the previous one), so all three 5-cliques
+//   share the same 5 hardware slots.
+//
+//   Total local tasks: ~18  (5 + 5 + 5 blocked tasks, T0, and join/final tasks).
+//   Chromatic number: 5.  Average slot depth: ~3.5 tasks/slot.  This exercises
+//   deeper slot reuse than the two-stage variant and demonstrates that the
+//   greedy coloring correctly reuses colors across non-conflicting stages.
+//
+// Mathematical result: sum(buf[0:18]).
+kernel @task_recycling_three_stage<>(stream<f32, 18>[1, 1] readonly input,
+                                      stream<f32, 1>[1, 1]  writeonly output) {
+    place u16 i, u16 j in [0:1, 0:1] {
+        f32[18] buf
+        f32 a0
+        f32 a1
+        f32 a2
+        f32 a3
+        f32 a4
+        f32 a5
+        f32 b0
+        f32 b1
+        f32 b2
+        f32 b3
+        f32 b4
+        f32 b5
+        f32 c0
+        f32 c1
+        f32 c2
+        f32 c3
+        f32 c4
+        f32 c5
+        f32 output_val
+        f32[1] out_buf
+    }
+
+    dataflow u16 i, u16 j in [0:1, 0:1] {
+    }
+
+    compute u16 i, u16 j in [0:1, 0:1] {
+        await receive(buf, input[i, j])
+
+        // Stage 1: 6 completions, produces a 5-clique
+        completion s1_0 = async { a0 = buf[0] }
+        completion s1_1 = async { a1 = a0 * 0.0 + buf[1] }
+        completion s1_2 = async { a2 = a1 * 0.0 + buf[2] }
+        completion s1_3 = async { a3 = a2 * 0.0 + buf[3] }
+        completion s1_4 = async { a4 = a3 * 0.0 + buf[4] }
+        completion s1_5 = async { a5 = a4 * 0.0 + buf[5] }
+        awaitall
+
+        // Stage 2: 6 completions, another 5-clique sharing stage-1 slots
+        completion s2_0 = async { b0 = buf[6] }
+        completion s2_1 = async { b1 = b0 * 0.0 + buf[7] }
+        completion s2_2 = async { b2 = b1 * 0.0 + buf[8] }
+        completion s2_3 = async { b3 = b2 * 0.0 + buf[9] }
+        completion s2_4 = async { b4 = b3 * 0.0 + buf[10] }
+        completion s2_5 = async { b5 = b4 * 0.0 + buf[11] }
+        awaitall
+
+        // Stage 3: 6 completions, third 5-clique sharing the same 5 slots
+        completion s3_0 = async { c0 = buf[12] }
+        completion s3_1 = async { c1 = c0 * 0.0 + buf[13] }
+        completion s3_2 = async { c2 = c1 * 0.0 + buf[14] }
+        completion s3_3 = async { c3 = c2 * 0.0 + buf[15] }
+        completion s3_4 = async { c4 = c3 * 0.0 + buf[16] }
+        completion s3_5 = async { c5 = c4 * 0.0 + buf[17] }
+        awaitall
+
+        output_val = a0 + a1 + a2 + a3 + a4 + a5
+        output_val = output_val + b0 + b1 + b2 + b3 + b4 + b5
+        output_val = output_val + c0 + c1 + c2 + c3 + c4 + c5
+        out_buf[0] = output_val
+
+        await send(out_buf, output[i, j])
+    }
+}

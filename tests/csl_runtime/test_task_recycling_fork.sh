@@ -1,22 +1,27 @@
 #!/bin/sh
-# E2E test: greedy-coloring recycler — chain with 4-way fork/join.
-# A 12-step sequential chain feeds 4 concurrent fork arms, all joined by
-# awaitall.  The fork arms conflict in the coloring graph (they may be live
-# simultaneously) so the recycler must place them in distinct hardware slots.
-# Together with the chain the total local-task count exceeds 13 slots on WSE2.
-# Expected output: scalar sum of all 16 input elements.
+# E2E test: greedy-coloring recycler — three sequential awaitall groups.
+#
+# Three groups of 6 completions each (18 total), each separated by an awaitall.
+# Each group creates a 5-clique of blocked join tasks in the conflict graph.
+# All three cliques are mutually non-conflicting (fully sequential), so they
+# reuse the same 5 hardware slots, yielding ~18 local tasks in 5 slots
+# (~3.5 tasks/slot).
+#
+# This stress-tests deeper slot reuse: 3 independent cliques of size 5 are each
+# assigned one color class and recycled across three pipeline stages.
+# Expected output: scalar sum of all 18 input elements.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-FOLDER="task_recycling_fork_sptl"
+FOLDER="task_recycling_three_stage_sptl"
 RUNTIME_PY="$(cd "$SCRIPT_DIR/../.." && pwd)/spatialstencil/runtime/runtime.py"
 
-sptlc "$SCRIPT_DIR/samples/task_recycling_fork.sptl" "$FOLDER" --disable-task-fusion
+sptlc "$SCRIPT_DIR/samples/task_recycling_three_stage.sptl" "$FOLDER" --disable-task-fusion
 
 python3 - <<'PYEOF'
 import numpy as np
-data = np.arange(1.0, 17.0, dtype=np.float32).reshape(1, 1, 16)
+data = np.arange(1.0, 19.0, dtype=np.float32).reshape(1, 1, 18)
 np.save('input.npy', data)
 PYEOF
 
@@ -30,7 +35,7 @@ out  = np.load('OUT_output.npy')
 if not np.allclose(out, ref, atol=1e-4):
     print(f"Test failed: expected {ref.flatten()}, got {out.flatten()}")
     sys.exit(1)
-print("Test passed: fork recycling output matches expected sum.")
+print("Test passed: three-stage recycling output matches expected sum.")
 PYEOF
 
 rm -rf "$FOLDER"
