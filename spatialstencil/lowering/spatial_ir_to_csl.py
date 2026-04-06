@@ -13,7 +13,7 @@ from spatialstencil.syntax.spatial_ir import canonical_subgrids
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
 from spatialstencil.syntax.csl import constants as csl, preprocessing, tasks as tdag, statements as cslstmt, dsd_ops
 from spatialstencil.syntax.csl import structures as cslstruct
-from spatialstencil.syntax.csl import task_recycling
+from spatialstencil.syntax.csl import task_recycling, prune_unused_fields as csl_pruning
 from spatialstencil.syntax.csl.codefile import CodeFile
 from spatialstencil.syntax.csl.statements import name_to_csl, dtype_as_csl, expr_to_csl
 
@@ -352,7 +352,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         task_creation_behavior = tdag.TaskCreationBehavior.STATE_MACHINE_ON_OVERRUN
     tasks = tdag.create_csl_tasks(completion_dag, rect.metadata.compute, dtypes, task_creation_behavior)
 
-    copy_elimination.prune_unused_place_fields_for_csl_codegen(rect.metadata, dtypes)
+    csl_pruning.prune_unused_place_fields_for_csl_codegen(rect.metadata, dtypes)
     _collect_and_generate_fields(rect.metadata.place, header, footer, kernel, use_memcpy_mode)
     dtypes = _collect_identifier_types(rect.metadata, kernel.arguments)
 
@@ -746,7 +746,6 @@ def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, foote
         header.write(f'var {name}: {dtype_as_csl(argument.dtype)};\n')
 
     header.write('\n')
-
 
 
 def _dsd_from_array(array_candidates: dict[str, tuple[spir.FieldDeclaration, list[int | spir.Expression]]],
