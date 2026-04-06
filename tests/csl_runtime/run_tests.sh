@@ -31,12 +31,22 @@ if [ ${#TEST_FILES[@]} -eq 0 ]; then
     exit 0
 fi
 
+# Scripts that are not test cases and should be excluded from the run.
+NON_TEST_SCRIPTS=("run_tests.sh" "run-in-lima.sh" "sptlc" "_lib.sh")
+
+is_non_test() {
+    local name="$1"
+    for skip in "${NON_TEST_SCRIPTS[@]}"; do
+        [ "$name" = "$skip" ] && return 0
+    done
+    return 1
+}
+
 # Run each test
 for test_file in "${TEST_FILES[@]}"; do
     test_path=$test_file
     test_file=$(basename "$test_file")
-    # Skip this script itself if it's named run-tests.sh
-    if [ "$test_file" == "$(basename "$0")" ]; then
+    if is_non_test "$test_file"; then
         continue
     fi
     
