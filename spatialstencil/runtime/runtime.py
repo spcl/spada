@@ -23,8 +23,9 @@ else:
     try:
         from cerebras.sdk.runtime import sdkruntimepybind as crt
     except (ImportError, ModuleNotFoundError):
-        raise ImportError("Cerebras SDK not found. Please install the Cerebras SDK or use `cs_python` to "
-                          "execute this script.")
+        raise ImportError(
+            "Cerebras SDK not found. Please install the Cerebras SDK or use `cs_python` to " "execute this script."
+        )
 
 ########################################################
 # Serialization and Type Definitions
@@ -34,6 +35,7 @@ else:
 @dataclass
 class ArrayType:
     """Type for array arguments."""
+
     shape: List[int]
     dtype: str  # One of f32, f16, i32, u32, etc.
     buffer_size: Union[int, None] = None  # Optional buffer size for streams
@@ -60,6 +62,7 @@ dtype_to_numpy = {
 @dataclass
 class ProgramMetadata:
     """Metadata for a compiled program."""
+
     kernel_name: str
     inputs: Dict[str, ArrayType]
     outputs: Dict[str, ArrayType]
@@ -70,10 +73,10 @@ class ProgramMetadata:
     fabric_offsets: List[int]  # Offsets in the fabric for the kernel
 
     @classmethod
-    def from_json(cls, json_data: Union[str, Dict[str, Any]]) -> 'ProgramMetadata':
+    def from_json(cls, json_data: Union[str, Dict[str, Any]]) -> "ProgramMetadata":
         """
         Create a ProgramMetadata instance from JSON data.
-        
+
         :param json_data: JSON string or dictionary containing metadata
         :return: ProgramMetadata instance
         """
@@ -85,17 +88,14 @@ class ProgramMetadata:
 
         return cls(
             kernel_name=json_data.get("kernel_name", ""),
-            inputs={
-                k: ArrayType(**v) for k, v in json_data.get("inputs", {}).items()
-            },
-            outputs={
-                k: ArrayType(**v) for k, v in json_data.get("outputs", {}).items()
-            },
+            inputs={k: ArrayType(**v) for k, v in json_data.get("inputs", {}).items()},
+            outputs={k: ArrayType(**v) for k, v in json_data.get("outputs", {}).items()},
             argument_order=json_data.get("argument_order", []),
             memcpy_mode=json_data.get("memcpy_mode", False),
             kernel_dims=json_data.get("kernel_dims", []),
             fabric_dims=json_data.get("fabric_dims", []),
-            fabric_offsets=json_data.get("fabric_offsets", []))
+            fabric_offsets=json_data.get("fabric_offsets", []),
+        )
 
 
 ########################################################
@@ -103,7 +103,9 @@ class ProgramMetadata:
 ########################################################
 
 
-def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.SdkRuntime, metadata: ProgramMetadata, benchmark: bool):
+def flatten_copy(
+    name: str, data: np.ndarray, shape: List[int], runtime: crt.SdkRuntime, metadata: ProgramMetadata, benchmark: bool
+):
     """
     Copy data to the device, flattening it if necessary.
     This function assumes that the runtime has a method `memcpy_h2d` for copying.
@@ -291,7 +293,14 @@ def print_cycle_counts(label: str, cycle_counts: np.ndarray) -> None:
 class Program:
     """A program that can be run on a device."""
 
-    def __init__(self, folder: str, benchmark: bool = False, repetitions: int = 1, output_dir: str = '', cm_addr: Optional[str] = None):
+    def __init__(
+        self,
+        folder: str,
+        benchmark: bool = False,
+        repetitions: int = 1,
+        output_dir: str = "",
+        cm_addr: Optional[str] = None,
+    ):
         """
         Initialize the Program with a folder containing the compiled program.
 
@@ -311,7 +320,7 @@ class Program:
         if not metadata_path.exists():
             raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
 
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
         self.metadata = ProgramMetadata.from_json(metadata)
@@ -320,7 +329,7 @@ class Program:
             os.makedirs(self.output_dir, exist_ok=True)
 
         # Initialize SDK runtime
-        cmaddr = cm_addr or os.environ.get('CM_ADDR', None)
+        cmaddr = cm_addr or os.environ.get("CM_ADDR", None)
         self.simulator = cmaddr is None
         print("SIMULATOR?", self.simulator)
         self.runtime = crt.SdkRuntime(str(self.out_folder), suppress_simfab_trace=True, cmaddr=cmaddr)
@@ -343,7 +352,7 @@ class Program:
     def __call__(self, *args, **kwargs) -> Dict[str, np.ndarray]:
         """
         Run the program with the provided arguments.
-        
+
         :param args: Positional arguments for the program
         :param kwargs: Keyword arguments for the program
         :return: Dictionary of output tensors
@@ -369,7 +378,7 @@ class Program:
         scalar_args = [scalar_kwargs[name] for name in self.metadata.argument_order if name in scalar_kwargs]
 
         try:
-            print("Loading program...", flush=True, end='')
+            print("Loading program...", flush=True, end="")
             self.runtime.load()
             self.runtime.run()
             print("done.", flush=True)
@@ -406,7 +415,7 @@ class Program:
                 if self.metadata.memcpy_mode:
                     if self.benchmark and not self.simulator and i == 0:
                         time.sleep(5.0)
-                    print("Launching kernel...", flush=True, end='')
+                    print("Launching kernel...", flush=True, end="")
                     if self.benchmark and sync_benchmarking:
                         self.runtime.launch("f_sync", nonblock=False)
                         self.runtime.launch("f_tic", nonblock=False)
@@ -418,7 +427,9 @@ class Program:
                     if self.benchmark:
                         cycle_counts = (
                             copy_back_sync_benchmark_data(self.runtime, self.metadata)
-                            if sync_benchmarking else copy_back_benchmark_data(self.runtime, self.metadata))
+                            if sync_benchmarking
+                            else copy_back_benchmark_data(self.runtime, self.metadata)
+                        )
                         num_digits = len(str(self.repetitions))
                         np.save(self.output_dir / f"perf_cycles_{i:0{num_digits}d}.npy", cycle_counts)
                         print_cycle_counts(f"Iteration {i} cycle count", cycle_counts)
@@ -448,11 +459,13 @@ class Program:
             if self.benchmark and not self.metadata.memcpy_mode:
                 cycle_counts = (
                     copy_back_sync_benchmark_data(self.runtime, self.metadata)
-                    if sync_benchmarking else copy_back_benchmark_data(self.runtime, self.metadata))
+                    if sync_benchmarking
+                    else copy_back_benchmark_data(self.runtime, self.metadata)
+                )
                 np.save(self.output_dir / "perf_cycles.npy", cycle_counts)
                 print_cycle_counts("Cycle count", cycle_counts)
 
-            print("Stopping runtime...", flush=True, end='')
+            print("Stopping runtime...", flush=True, end="")
         finally:
             self.runtime.stop()
         print("done.", flush=True)
@@ -469,8 +482,8 @@ if __name__ == "__main__":
     parser.add_argument("--benchmark", action="store_true", help="Run in benchmark mode")
     parser.add_argument("--randomize", action="store_true", help="Randomize input data instead of loading from files")
     parser.add_argument("--repetitions", default=1, type=int, help="Number of repetitions to run")
-    parser.add_argument("--output-dir", default='', help="Output directory for files")
-    parser.add_argument("--cm-addr", default='', help="Cerebras machine address")
+    parser.add_argument("--output-dir", default="", help="Output directory for files")
+    parser.add_argument("--cm-addr", default="", help="Cerebras machine address")
 
     args = parser.parse_args()
 
@@ -495,7 +508,8 @@ if __name__ == "__main__":
                 argname = program.metadata.argument_order[i]
                 if argname not in program.metadata.inputs:
                     raise ValueError(
-                        f"Scalar file argument {input_file} given for {argname} not found in program inputs.")
+                        f"Scalar file argument {input_file} given for {argname} not found in program inputs."
+                    )
                 arg = program.metadata.inputs[argname].shape
                 if len(arg) > 0:
                     raise ValueError(f"Scalar file argument {input_file} given for {argname} which is not a scalar.")

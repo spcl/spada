@@ -137,37 +137,21 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     with resource_context as sync_resources:
         channel_to_color = _collect_colors_globally(kernel, rectangles, use_memcpy_mode)
 
-    for rect in rectangles:
-        # Create a unique CSL code file based on rectangle offset
-        csl_name = f'code_{rect.x_range[0]}_{rect.y_range[0]}.csl'
-        rect_code, color_map = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode,
-                                                  stream_rects, channel_to_color, disable_benchmarking, sync_benchmarking,
-                                                  disable_asynchronous, disable_dsd, task_fusion,
-                                                  task_id_recycling)
-        color_maps.append(color_map)
-        csl_codes.append(CodeFile(csl_name, rect_code))
-
-    # Prepare outputs
-    layout_code = StringIO()
-
-    ###############################################
-    # Generate main layout file
-
-    # Compute the tight PE bounding box. kernel.get_grid_rect() now returns tight bounds
-    # (last-contained PE + 1) rather than canonicalized stops.
-    x0, x1, y0, y1 = kernel.get_grid_rect()
-    assert x0 == 0, "PE Grid must start at x=0"
-    assert y0 == 0, "PE Grid must start at y=0"
-    rect_size = x1 - x0, y1 - y0
-
-    # Collect unique routes for all rectangles
-    routes_per_rectangle = _collect_routes(rectangles, color_maps)
-
-        if sync_resources is not None:
-            csl_codes.extend(cslbench.load_sync_assets())
+        for rect in rectangles:
+            # Create a unique CSL code file based on rectangle offset
+            csl_name = f'code_{rect.x_range[0]}_{rect.y_range[0]}.csl'
+            rect_code, color_map = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode,
+                                                    stream_rects, channel_to_color, disable_benchmarking, sync_benchmarking,
+                                                    disable_asynchronous, disable_dsd, task_fusion,
+                                                    task_id_recycling)
+            color_maps.append(color_map)
+            csl_codes.append(CodeFile(csl_name, rect_code))
 
         # Prepare outputs
         layout_code = StringIO()
+
+        if sync_resources is not None:
+            csl_codes.extend(cslbench.load_sync_assets())
 
         ###############################################
         # Generate main layout file

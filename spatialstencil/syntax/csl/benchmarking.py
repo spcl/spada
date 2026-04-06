@@ -11,16 +11,6 @@ from typing import Iterator, Sequence
 
 from spatialstencil.syntax.csl.codefile import CodeFile
 
-SYNC_REQUIRED_SYMBOLS = (
-    "f_sync",
-    "f_tic",
-    "f_toc",
-    "f_memcpy_timestamps",
-    "f_reference_timestamps",
-    "time_memcpy",
-    "time_ref",
-)
-
 _SYNC_ASSET_DIR = Path(__file__).resolve().parents[2] / "assets" / "csl" / "sync"
 
 
@@ -132,7 +122,9 @@ def reserve_sync_resources(colors: Sequence[int], local_task_ids: Sequence[int])
     if len(local_task_ids) < 5:
         raise ValueError("Sync benchmarking requires at least 5 CSL local task IDs.")
     sync_colors = tuple(colors[:5])
+    assert len(sync_colors) == 5
     sync_entrypoints = tuple(local_task_ids[-4:])
+    assert len(sync_entrypoints) == 4
     # The reference sync runtime expects its colors to stay below the entrypoint/task-id range.
     available_colors = [color for color in colors[5:] if color < sync_entrypoints[0]]
     return SyncBenchmarkResources(
