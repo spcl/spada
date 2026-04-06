@@ -1,0 +1,65 @@
+// 20 sequential async completions forming a cumulative-sum chain.
+// With 20 logical local tasks this exceeds the 13 hardware task-ID slots on
+// WSE2, so the state-machine recycler must assign multiple logical tasks to
+// every hardware slot.  The final value v19 equals sum(buf[0:20]).
+kernel @task_recycling_chain<>(stream<f32, 20>[1, 1] readonly input,
+                                stream<f32, 1>[1, 1]  writeonly output) {
+    place u16 i, u16 j in [0:1, 0:1] {
+        f32[20] buf
+        f32 v0
+        f32 v1
+        f32 v2
+        f32 v3
+        f32 v4
+        f32 v5
+        f32 v6
+        f32 v7
+        f32 v8
+        f32 v9
+        f32 v10
+        f32 v11
+        f32 v12
+        f32 v13
+        f32 v14
+        f32 v15
+        f32 v16
+        f32 v17
+        f32 v18
+        f32 v19
+        f32[1] out_buf
+    }
+
+    dataflow u16 i, u16 j in [0:1, 0:1] {
+    }
+
+    compute u16 i, u16 j in [0:1, 0:1] {
+        await receive(buf, input[i, j])
+
+        completion s0  = async { v0  = buf[0] }
+        completion s1  = async { v1  = v0  + buf[1] }
+        completion s2  = async { v2  = v1  + buf[2] }
+        completion s3  = async { v3  = v2  + buf[3] }
+        completion s4  = async { v4  = v3  + buf[4] }
+        completion s5  = async { v5  = v4  + buf[5] }
+        completion s6  = async { v6  = v5  + buf[6] }
+        completion s7  = async { v7  = v6  + buf[7] }
+        completion s8  = async { v8  = v7  + buf[8] }
+        completion s9  = async { v9  = v8  + buf[9] }
+        completion s10 = async { v10 = v9  + buf[10] }
+        completion s11 = async { v11 = v10 + buf[11] }
+        completion s12 = async { v12 = v11 + buf[12] }
+        completion s13 = async { v13 = v12 + buf[13] }
+        completion s14 = async { v14 = v13 + buf[14] }
+        completion s15 = async { v15 = v14 + buf[15] }
+        completion s16 = async { v16 = v15 + buf[16] }
+        completion s17 = async { v17 = v16 + buf[17] }
+        completion s18 = async { v18 = v17 + buf[18] }
+        completion s19 = async { v19 = v18 + buf[19] }
+
+        awaitall
+
+        out_buf[0] = v19
+
+        await send(out_buf, output[i, j])
+    }
+}
