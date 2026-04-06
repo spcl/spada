@@ -838,13 +838,11 @@ def test_map_lifting_to_dsd_op(multidimensional):
     assert len(csl_files) > 0
 
     # Look for map lifting to DSD operations
-    dsd_found = False
     for f in csl_files:
         if '@fmuls' in f.code:
-            dsd_found = True
             break
-
-    assert dsd_found, "Expected DSD operations not found in generated CSL"
+    else:
+        raise AssertionError("Expected DSD operations not found in generated CSL")
 
     # Check for the DSD structure (dimensionality)
     if multidimensional:

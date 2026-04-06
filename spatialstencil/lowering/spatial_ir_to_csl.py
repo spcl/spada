@@ -322,12 +322,12 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     #     * Generate routing instructions from dataflow blocks
     #     * Make unique colors out of streams, reduce number of streams
     color_map = _allocate_colors(rect, header, kernel, use_memcpy_mode, stream_extents, channel_to_color)
-    _collect_and_generate_fields(rect.metadata.place, header, footer, kernel, use_memcpy_mode)
     dtypes = _collect_identifier_types(rect.metadata, kernel.arguments)
 
     # Preprocess potential data tasks to convert to loops if possible
     if use_memcpy_mode:
         canonicalization.convert_foreach_data_tasks_to_loops(rect, dtypes)
+        dtypes = _collect_identifier_types(rect.metadata, kernel.arguments)
 
     if not disable_benchmarking:
         benchmark_preamble, benchmark_postamble = _generate_benchmarking_code(header)
@@ -351,6 +351,11 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     else:
         task_creation_behavior = tdag.TaskCreationBehavior.STATE_MACHINE_ON_OVERRUN
     tasks = tdag.create_csl_tasks(completion_dag, rect.metadata.compute, dtypes, task_creation_behavior)
+
+    copy_elimination.prune_unused_place_fields_for_csl_codegen(rect.metadata, dtypes)
+    _collect_and_generate_fields(rect.metadata.place, header, footer, kernel, use_memcpy_mode)
+    dtypes = _collect_identifier_types(rect.metadata, kernel.arguments)
+
     try:
         dsds = _collect_unique_dsds(tasks, rect.metadata, header, dtypes, kernel, use_memcpy_mode)
     except KeyError as e:
@@ -741,6 +746,7 @@ def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, foote
         header.write(f'var {name}: {dtype_as_csl(argument.dtype)};\n')
 
     header.write('\n')
+
 
 
 def _dsd_from_array(array_candidates: dict[str, tuple[spir.FieldDeclaration, list[int | spir.Expression]]],
