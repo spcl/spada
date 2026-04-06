@@ -20,10 +20,18 @@ class MockSdkRuntime:
         self.running = False
         self.data_buffers = {}  # Store data by buffer ID
         self.buffer_names = {}  # Map names to buffer IDs
+        self.known_symbols = set()
         self.next_buffer_id = 1
         self.mock_kernel_func = None
         self.input_data = {}
         self.output_data = {}
+
+    def register_symbol(self, symbol: str) -> int:
+        self.known_symbols.add(symbol)
+        if symbol not in self.buffer_names:
+            self.buffer_names[symbol] = self.next_buffer_id
+            self.next_buffer_id += 1
+        return self.buffer_names[symbol]
 
     def set_mock_kernel(self, kernel_func):
         """Set the mock kernel function to use."""
@@ -43,12 +51,11 @@ class MockSdkRuntime:
         """Mock stop operation."""
         self.running = False
 
-    def get_id(self, symbol: str) -> int:
-        """Get buffer ID for a symbol, creating one if it doesn't exist."""
-        if symbol not in self.buffer_names:
-            self.buffer_names[symbol] = self.next_buffer_id
-            self.next_buffer_id += 1
-        return self.buffer_names[symbol]
+    def get_id(self, symbol: str) -> int | None:
+        """Get buffer ID for a symbol if it exists in the compiled program."""
+        if symbol not in self.known_symbols:
+            return None
+        return self.register_symbol(symbol)
 
     def memcpy_h2d(self, dest: int, src: np.ndarray, px: int, py: int, w: int, h: int, elem_per_pe: int, *,
                    streaming: bool, data_type, order, nonblock: bool):
@@ -86,7 +93,7 @@ class MockSdkRuntime:
                 self.mock_kernel_func(a, b, out)
 
                 # Store result in output buffer
-                out_buffer_id = self.get_id('out')
+                out_buffer_id = self.register_symbol('out')
                 self.data_buffers[out_buffer_id] = out
 
 
@@ -105,12 +112,54 @@ sys.modules['cerebras.sdk.runtime.sdkruntimepybind'] = mock_crt
 # End of mocking the Cerebras SDK
 
 # Now we can safely import the runtime classes
-from spatialstencil.runtime.runtime import Program, ProgramMetadata
+from spatialstencil.runtime.runtime import Program, ProgramMetadata, copy_back_sync_benchmark_data
 
 
 def mock_kernel(a, b, out):
     """Mock kernel function that adds two arrays."""
     out[:] = a + b
+
+
+def pack_sync_memcpy_words(start: int, end: int) -> np.ndarray:
+    words = np.array(
+        [
+            ((start >> 16) & 0xFFFF) << 16 | (start & 0xFFFF),
+            ((end & 0xFFFF) << 16) | ((start >> 32) & 0xFFFF),
+            ((end >> 32) & 0xFFFF) << 16 | ((end >> 16) & 0xFFFF),
+        ],
+        dtype=np.uint32,
+    )
+    return words.view(np.float32)
+
+
+def pack_sync_reference_words(reference: int) -> np.ndarray:
+    words = np.array(
+        [
+            ((reference >> 16) & 0xFFFF) << 16 | (reference & 0xFFFF),
+            (reference >> 32) & 0xFFFF,
+        ],
+        dtype=np.uint32,
+    )
+    return words.view(np.float32)
+
+
+class MockSyncBenchmarkRuntime:
+    def __init__(self, time_memcpy_hwe: np.ndarray, time_ref_hwe: np.ndarray):
+        self.buffer_names = {"time_memcpy": 1, "time_ref": 2}
+        self.data_buffers = {
+            1: time_memcpy_hwe.transpose(1, 0, 2).ravel(),
+            2: time_ref_hwe.transpose(1, 0, 2).ravel(),
+        }
+
+    def launch(self, symbol: str, nonblock: bool = False):
+        return None
+
+    def get_id(self, symbol: str) -> int:
+        return self.buffer_names[symbol]
+
+    def memcpy_d2h(self, dest: np.ndarray, src: int, px: int, py: int, w: int, h: int, elem_per_pe: int, *,
+                   streaming: bool, data_type, order, nonblock: bool):
+        dest[:] = self.data_buffers[src]
 
 
 class TestProgramWithMockRuntime(unittest.TestCase):
@@ -164,6 +213,8 @@ class TestProgramWithMockRuntime(unittest.TestCase):
         # Create mock runtime instance
         self.mock_runtime = MockSdkRuntime(str(self.out_dir))
         self.mock_runtime.set_mock_kernel(mock_kernel)
+        for symbol in ("a", "b", "out"):
+            self.mock_runtime.register_symbol(symbol)
 
     def tearDown(self):
         """Clean up test fixtures."""
@@ -281,6 +332,16 @@ class TestProgramWithMockRuntime(unittest.TestCase):
             with self.assertRaises(ValueError):
                 program(a=a, b=b, c=c)
 
+    def test_benchmark_requires_symbols(self):
+        with patch('spatialstencil.runtime.runtime.crt.SdkRuntime', return_value=self.mock_runtime):
+            program = Program(str(self.program_dir), benchmark=True)
+
+            a = np.ones((4, 4, 1), dtype=np.float32)
+            b = np.ones((4, 4, 1), dtype=np.float32)
+
+            with self.assertRaises(ValueError):
+                program(a, b)
+
 
 class TestProgramMetadata(unittest.TestCase):
     """Test the ProgramMetadata class."""
@@ -344,6 +405,41 @@ class TestProgramMetadata(unittest.TestCase):
         self.assertEqual(metadata.kernel_name, "test_kernel")
         self.assertFalse(metadata.memcpy_mode)
 
+
+class TestSyncBenchmarkingHelpers(unittest.TestCase):
+    def test_copy_back_sync_benchmark_data(self):
+        width = 2
+        height = 2
+        adjusted_start = np.array([[10, 12], [8, 11]], dtype=np.uint64)
+        adjusted_end = np.array([[40, 50], [44, 45]], dtype=np.uint64)
+        base_reference = np.uint64(1000)
+        propagation = np.arange(width, dtype=np.uint64)[:, None] + np.arange(height, dtype=np.uint64)[None, :]
+        raw_reference = base_reference + propagation
+        raw_start = base_reference + adjusted_start
+        raw_end = base_reference + adjusted_end
+
+        time_memcpy = np.empty((width, height, 3), dtype=np.float32)
+        time_ref = np.empty((width, height, 2), dtype=np.float32)
+        for x in range(width):
+            for y in range(height):
+                time_memcpy[x, y] = pack_sync_memcpy_words(int(raw_start[x, y]), int(raw_end[x, y]))
+                time_ref[x, y] = pack_sync_reference_words(int(raw_reference[x, y]))
+
+        metadata = ProgramMetadata(
+            kernel_name="test_kernel",
+            inputs={},
+            outputs={},
+            argument_order=[],
+            memcpy_mode=True,
+            kernel_dims=[width, height],
+            fabric_dims=[width, height],
+            fabric_offsets=[0, 0],
+        )
+        runtime = MockSyncBenchmarkRuntime(time_memcpy, time_ref)
+
+        cycle_count = copy_back_sync_benchmark_data(runtime, metadata)
+
+        self.assertEqual(int(cycle_count), 42)
 
 if __name__ == '__main__':
     unittest.main()

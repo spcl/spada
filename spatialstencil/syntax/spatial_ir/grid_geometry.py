@@ -398,6 +398,7 @@ def split_rectangles(rectangles: list[Rectangle]) -> list[Rectangle]:
     :return: A list of non-overlapping rectangles (preserving metadata)
     """
     result = [r for r in rectangles if r.x_range[0] < r.x_range[1] and r.y_range[0] < r.y_range[1]]
+    origin = len(result)
     i = 0
     while i < len(result):
         has_split = False
@@ -416,8 +417,9 @@ def split_rectangles(rectangles: list[Rectangle]) -> list[Rectangle]:
 
         if not has_split:
             # Loop invariant: No non-equal intersections between rectangles for indices <= i
-            assert all(not result[k].intersects(result[j]) or result[k].is_equal(result[j])
-                       for j in range(len(result)) for k in range(i+1))
+            # Defer assertion to post-condition
+            # assert all(not result[k].intersects(result[j]) or result[k].is_equal(result[j])
+            #            for j in range(len(result)) for k in range(i+1))
             i += 1
 
     # Post-condition:
@@ -425,6 +427,7 @@ def split_rectangles(rectangles: list[Rectangle]) -> list[Rectangle]:
     assert all(not rect1.intersects(rect2) or rect1.is_equal(rect2)
                for rect1 in result for rect2 in result)
 
+    print(f"Split {origin} rectangles into {len(result)}")
     return result
 
 

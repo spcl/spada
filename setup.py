@@ -90,7 +90,7 @@ setup(
     },
     include_package_data=True,
     package_data={
-        "spatialstencil": ["**/*.py"],
+        "spatialstencil": ["**/*.py", "assets/csl/sync/*.csl"],
     },
     keywords=[
         "stencil",
