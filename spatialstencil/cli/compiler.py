@@ -21,15 +21,9 @@ import subprocess
 @click.option('--disable-map', is_flag=True, help='Disable @map operation detection and code generation')
 @click.option('--disable-task-fusion', is_flag=True, help='Disable task fusion optimization')
 @click.option('--disable-task-recycling', is_flag=True, help='Disable task ID recycling')
-@click.option(
-    '--recycle-overflow-only/--recycle-all-local-tasks',
-    default=True,
-    help='Recycle only overflow local tasks instead of recoloring every local task.',
-)
 def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], offset_x: int, offset_y: int,
                        generate_only: bool, disable_benchmarking: bool, disable_asynchronous: bool, disable_dsd: bool,
-                       disable_map: bool, disable_task_fusion: bool, disable_task_recycling: bool,
-                       recycle_overflow_only: bool):
+                       disable_map: bool, disable_task_fusion: bool, disable_task_recycling: bool):
     # Parse parameters into dictionary
     kernel_parameters = {}
     for p in param:
@@ -98,7 +92,6 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         disable_dsd=disable_dsd,
         task_fusion=not disable_task_fusion,
         task_id_recycling=not disable_task_recycling,
-        recycle_overflow_only=recycle_overflow_only,
     )
 
     # Create output folder if it doesn't exist
