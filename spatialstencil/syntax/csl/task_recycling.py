@@ -267,6 +267,7 @@ class TaskBindingPlan:
 def plan_task_bindings(
     tasks: list[tdag.CSLTask],
     task_creation_behavior: tdag.TaskCreationBehavior,
+    disallowed_task_ids: Optional[set[int]] = None,
 ) -> TaskBindingPlan:
     """Compute a local-task binding plan for the generated CSL.
 
@@ -285,34 +286,37 @@ def plan_task_bindings(
     local_task_indices = [i for i, task in enumerate(tasks) if task.task_type == 'local']
     if not local_task_indices:
         return TaskBindingPlan((), {}, {})
+    disallowed_task_ids = disallowed_task_ids or set()
+
+    allowed_local_task_ids = [t for t in constants.LOCAL_TASK_IDS if t not in disallowed_task_ids]
 
     if task_creation_behavior in (
         tdag.TaskCreationBehavior.FAIL_ON_OVERRUN,
         tdag.TaskCreationBehavior.SYNCHRONOUS_ON_OVERRUN,
     ):
-        if len(local_task_indices) > len(constants.LOCAL_TASK_IDS):
+        if len(local_task_indices) > len(allowed_local_task_ids):
             raise ValueError('Too many local tasks')
-        return _plan_unique_slots(local_task_indices)
+        return _plan_unique_slots(local_task_indices, allowed_local_task_ids)
 
     if task_creation_behavior == tdag.TaskCreationBehavior.NO_TASKS:
-        return _plan_unique_slots(local_task_indices)
+        return _plan_unique_slots(local_task_indices, allowed_local_task_ids)
 
-    if len(local_task_indices) <= len(constants.LOCAL_TASK_IDS):
-        return _plan_unique_slots(local_task_indices)
+    if len(local_task_indices) <= len(allowed_local_task_ids):
+        return _plan_unique_slots(local_task_indices, allowed_local_task_ids)
 
-    max_colors = len(constants.LOCAL_TASK_IDS)
+    max_colors = len(allowed_local_task_ids)
     conflict_graph = _build_conflict_graph(tasks, local_task_indices)
     coloring = greedy_coloring(conflict_graph, local_task_indices, max_colors=max_colors, load_balance=True)
     if coloring is None:
         raise ValueError('Too many concurrently-live local tasks for state-machine recycling')
 
-    return _build_plan_from_coloring(coloring)
+    return _build_plan_from_coloring(coloring, allowed_local_task_ids)
 
 
-def _plan_unique_slots(local_task_indices: list[int]) -> TaskBindingPlan:
+def _plan_unique_slots(local_task_indices: list[int], allowed_local_task_ids: list[int]) -> TaskBindingPlan:
     """Build the trivial plan where each local task receives its own slot."""
     coloring = {task_index: color for color, task_index in enumerate(local_task_indices)}
-    return _build_plan_from_coloring(coloring)
+    return _build_plan_from_coloring(coloring, allowed_local_task_ids)
 
 
 def _build_conflict_graph(tasks: list[tdag.CSLTask], local_task_indices: Iterable[int]) -> dict[int, set[int]]:
@@ -531,11 +535,11 @@ def greedy_coloring(
 
 
 
-def _build_plan_from_coloring(coloring: dict[int, int]) -> TaskBindingPlan:
+def _build_plan_from_coloring(coloring: dict[int, int], allowed_local_task_ids: list[int]) -> TaskBindingPlan:
     """Convert a graph coloring into the stable binding structures used by codegen.
 
     Each color becomes one ``LocalTaskSlot`` backed by the corresponding
-    hardware ID in ``constants.LOCAL_TASK_IDS``.  Within each slot, logical task
+    hardware ID in ``allowed_local_task_ids``.  Within each slot, logical task
     indices are sorted to make state assignment deterministic.  The position of a
     task inside that sorted tuple is its per-slot state number.
     """
@@ -548,7 +552,7 @@ def _build_plan_from_coloring(coloring: dict[int, int]) -> TaskBindingPlan:
     task_to_local_state: dict[int, int] = {}
     for slot_index, color in enumerate(sorted(color_to_tasks)):
         task_indices = tuple(sorted(color_to_tasks[color]))
-        slot = LocalTaskSlot(slot_index, constants.LOCAL_TASK_IDS[slot_index], task_indices)
+        slot = LocalTaskSlot(slot_index, allowed_local_task_ids[slot_index], task_indices)
         local_slots.append(slot)
         for state_index, task_index in enumerate(task_indices):
             task_to_local_slot[task_index] = slot_index

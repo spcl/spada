@@ -392,7 +392,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         if len(tasks) != len_for_reporting:
             print(f'P{rect.x_range[0]},{rect.y_range[0]}: Reduced from {len_for_reporting} to {len(tasks)} tasks.')
 
-    task_bindings = task_recycling.plan_task_bindings(tasks, task_creation_behavior)
+    task_bindings = task_recycling.plan_task_bindings(tasks, task_creation_behavior, set(color_map.values()))
 
     print(f'Stats: Using {sum(1 if t.task_type == "local" else 0 for t in tasks)} local tasks across '
           f'{len(task_bindings.local_slots)} local task IDs, '
