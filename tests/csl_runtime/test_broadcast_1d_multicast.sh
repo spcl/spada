@@ -12,9 +12,10 @@ FOLDER="broadcast_1d_multicast_sptl"
 run_broadcast_1d_mc() {
     N=$1
     K=$2
-    echo "--- broadcast_1d_multicast N=$N K=$K ---"
-
-    sptlc "$COLLECTIVES_DIR/broadcast_1D_multicast.sptl" "$FOLDER" -p N=$N -p K=$K
+    shift 2
+    EXTRA_ARGS=$@
+    echo "--- broadcast_1d_multicast N=$N K=$K $EXTRA_ARGS ---"
+    sptlc "$COLLECTIVES_DIR/broadcast_1D_multicast.sptl" "$FOLDER" -p N=$N -p K=$K $EXTRA_ARGS
 
     python3 - <<PYEOF
 import numpy as np
@@ -33,3 +34,4 @@ run_broadcast_1d_mc 2 2
 run_broadcast_1d_mc 4 2
 run_broadcast_1d_mc 8 4
 run_broadcast_1d_mc 4 8
+run_broadcast_1d_mc 4 2 --sync-benchmarking

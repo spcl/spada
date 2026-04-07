@@ -167,4 +167,8 @@ simconfig.json
 simfab_traces/
 *.npy
 wio_flow.json
-/*_sptl/
+*_sptl/
+wio_*
+wio_*/
+*.nsys-rep
+report*.sqlite

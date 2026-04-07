@@ -3,9 +3,12 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Union, TYPE_CHECKING
+from typing import Any, Dict, List, Union, Tuple, TYPE_CHECKING, Optional
 import numpy as np
+import numpy.typing as npt
 import time
+
+SYNC_REQUIRED_SYMBOLS = ("f_sync", "f_tic", "f_toc", "__benchmark_refclock")
 
 if TYPE_CHECKING:
     from spatialstencil.runtime import cerebras_runtime_stub as crt
@@ -13,8 +16,9 @@ else:
     try:
         from cerebras.sdk.runtime import sdkruntimepybind as crt
     except (ImportError, ModuleNotFoundError):
-        raise ImportError("Cerebras SDK not found. Please install the Cerebras SDK or use `cs_python` to "
-                          "execute this script.")
+        raise ImportError(
+            "Cerebras SDK not found. Please install the Cerebras SDK or use `cs_python` to " "execute this script."
+        )
 
 ########################################################
 # Serialization and Type Definitions
@@ -24,6 +28,7 @@ else:
 @dataclass
 class ArrayType:
     """Type for array arguments."""
+
     shape: List[int]
     dtype: str  # One of f32, f16, i32, u32, etc.
     buffer_size: Union[int, None] = None  # Optional buffer size for streams
@@ -50,6 +55,7 @@ dtype_to_numpy = {
 @dataclass
 class ProgramMetadata:
     """Metadata for a compiled program."""
+
     kernel_name: str
     inputs: Dict[str, ArrayType]
     outputs: Dict[str, ArrayType]
@@ -60,10 +66,10 @@ class ProgramMetadata:
     fabric_offsets: List[int]  # Offsets in the fabric for the kernel
 
     @classmethod
-    def from_json(cls, json_data: Union[str, Dict[str, Any]]) -> 'ProgramMetadata':
+    def from_json(cls, json_data: Union[str, Dict[str, Any]]) -> "ProgramMetadata":
         """
         Create a ProgramMetadata instance from JSON data.
-        
+
         :param json_data: JSON string or dictionary containing metadata
         :return: ProgramMetadata instance
         """
@@ -75,17 +81,14 @@ class ProgramMetadata:
 
         return cls(
             kernel_name=json_data.get("kernel_name", ""),
-            inputs={
-                k: ArrayType(**v) for k, v in json_data.get("inputs", {}).items()
-            },
-            outputs={
-                k: ArrayType(**v) for k, v in json_data.get("outputs", {}).items()
-            },
+            inputs={k: ArrayType(**v) for k, v in json_data.get("inputs", {}).items()},
+            outputs={k: ArrayType(**v) for k, v in json_data.get("outputs", {}).items()},
             argument_order=json_data.get("argument_order", []),
             memcpy_mode=json_data.get("memcpy_mode", False),
             kernel_dims=json_data.get("kernel_dims", []),
             fabric_dims=json_data.get("fabric_dims", []),
-            fabric_offsets=json_data.get("fabric_offsets", []))
+            fabric_offsets=json_data.get("fabric_offsets", []),
+        )
 
 
 ########################################################
@@ -93,7 +96,9 @@ class ProgramMetadata:
 ########################################################
 
 
-def flatten_copy(name: str, data: np.ndarray, shape: List[int], runtime: crt.SdkRuntime, metadata: ProgramMetadata, benchmark: bool):
+def flatten_copy(
+    name: str, data: np.ndarray, shape: List[int], runtime: crt.SdkRuntime, metadata: ProgramMetadata, benchmark: bool
+):
     """
     Copy data to the device, flattening it if necessary.
     This function assumes that the runtime has a method `memcpy_h2d` for copying.
@@ -163,17 +168,25 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
     np.copyto(data, sdk_buf.transpose(1, 0, 2))
 
 
-def copy_back_benchmark_data(runtime: crt.SdkRuntime, metadata: ProgramMetadata) -> np.ndarray:
+def convert_timestamp(hw_timestamp: npt.NDArray[np.uint32]) -> npt.NDArray[np.uint64]:
+    # Convert 3x16-bit timestamp to the 48-bit little endian integer
+    return (
+        hw_timestamp[:, :, 0].astype(np.uint64)
+        | (hw_timestamp[:, :, 1].astype(np.uint64) << 16)
+        | (hw_timestamp[:, :, 2].astype(np.uint64) << 32)
+    ).astype(np.uint64)
+
+
+def copy_back_benchmark_data(runtime: crt.SdkRuntime, metadata: ProgramMetadata) -> Tuple[np.ndarray, np.ndarray]:
     """
     Copy back benchmarking data from the device.
-    
+
     :param runtime: The Cerebras SDK runtime object to perform the copy operation
     :param metadata: Program metadata containing input/output information
-    :return: Numpy array containing cycle counts
+    :return: A tuple of Numpy arrays containing (cycles at start time, cycles at end time)
     """
     cycle_start = np.zeros(metadata.kernel_dims + [3], dtype=np.uint32)
     cycle_stop = np.zeros(metadata.kernel_dims + [3], dtype=np.uint32)
-    cycle_counts = np.zeros(metadata.kernel_dims, dtype=np.uint64)
     runtime.memcpy_d2h(
         cycle_start.ravel(),
         runtime.get_id("__benchmark_start"),
@@ -183,7 +196,8 @@ def copy_back_benchmark_data(runtime: crt.SdkRuntime, metadata: ProgramMetadata)
         streaming=False,
         data_type=crt.MemcpyDataType.MEMCPY_16BIT,
         order=crt.MemcpyOrder.ROW_MAJOR,
-        nonblock=False)
+        nonblock=False,
+    )
     runtime.memcpy_d2h(
         cycle_stop.ravel(),
         runtime.get_id("__benchmark_stop"),
@@ -193,16 +207,86 @@ def copy_back_benchmark_data(runtime: crt.SdkRuntime, metadata: ProgramMetadata)
         streaming=False,
         data_type=crt.MemcpyDataType.MEMCPY_16BIT,
         order=crt.MemcpyOrder.ROW_MAJOR,
-        nonblock=False)
-    # Convert 3x16-bit timestamp to the 48-bit little endian integer
-    cycle_start = (
-        cycle_start[:, :, 0].astype(np.uint64) | (cycle_start[:, :, 1].astype(np.uint64) << 16) |
-        (cycle_start[:, :, 2].astype(np.uint64) << 32))
-    cycle_stop = (
-        cycle_stop[:, :, 0].astype(np.uint64) | (cycle_stop[:, :, 1].astype(np.uint64) << 16) |
-        (cycle_stop[:, :, 2].astype(np.uint64) << 32))
-    cycle_counts = cycle_stop - cycle_start
-    return cycle_counts
+        nonblock=False,
+    )
+    cycle_start = convert_timestamp(cycle_start)
+    cycle_stop = convert_timestamp(cycle_stop)
+    return cycle_start, cycle_stop
+
+
+def copy_back_benchmark_cycles(runtime: crt.SdkRuntime, metadata: ProgramMetadata) -> np.ndarray:
+    """
+    Copy back benchmarking data from the device.
+
+    :param runtime: The Cerebras SDK runtime object to perform the copy operation
+    :param metadata: Program metadata containing input/output information
+    :return: Numpy array containing cycle counts
+    """
+    cycle_start, cycle_stop = copy_back_benchmark_data(runtime, metadata)
+    return cycle_stop - cycle_start
+
+
+def copy_back_sync_buffer(runtime: crt.SdkRuntime, metadata: ProgramMetadata) -> np.ndarray:
+    """
+    Copy back the reference clock sync-benchmarking buffer.
+
+    :param runtime: The Cerebras SDK runtime object to perform the copy operation
+    :param metadata: Program metadata containing input/output information
+    :return: Numpy array containing the reference clock for each PE
+    """
+    cycle_ref = np.zeros(metadata.kernel_dims + [3], dtype=np.uint32)
+    runtime.memcpy_d2h(
+        cycle_ref.ravel(),
+        runtime.get_id("__benchmark_refclock"),
+        0,
+        0,
+        *cycle_ref.shape,
+        streaming=False,
+        data_type=crt.MemcpyDataType.MEMCPY_16BIT,
+        order=crt.MemcpyOrder.ROW_MAJOR,
+        nonblock=False,
+    )
+    return convert_timestamp(cycle_ref)
+
+
+def copy_back_sync_benchmark_data(runtime: crt.SdkRuntime, metadata: ProgramMetadata) -> np.ndarray:
+    """
+    Copy back sync-benchmarking data and reconstruct the corrected global cycle count.
+
+    :param runtime: The Cerebras SDK runtime object to perform the copy operation
+    :param metadata: Program metadata containing input/output information
+    :return: Numpy scalar containing the total number of cycles spent on the chip
+             for the benchmarked period.
+    """
+    # Compute propagation delay (one cycle per link) to synchronize reference clocks
+    width, height = metadata.kernel_dims
+    propagation_delay = np.arange(width, dtype=np.uint64)[:, None] + np.arange(height, dtype=np.uint64)[None, :]
+
+    time_start, time_end = copy_back_benchmark_data(runtime, metadata)
+    reference = copy_back_sync_buffer(runtime, metadata)
+    reference = reference - propagation_delay
+    time_start = time_start - reference
+    time_end = time_end - reference
+
+    # Return the total time spent on the chip
+    return time_end.max() - time_start.min()
+
+
+def print_cycle_counts(label: str, cycle_counts: np.ndarray) -> None:
+    """
+    Print benchmark data in a compact form for either scalar or per-PE cycle counts.
+    """
+    values = np.asarray(cycle_counts)
+    if values.ndim == 0 or values.size == 1:
+        print(f"{label} total time: {int(values.reshape(())):,}")
+        return
+
+    print(
+        f"{label} stats:\n"
+        f"  Min:    {np.min(values):,}\n"
+        f"  Max:    {np.max(values):,}\n"
+        f"  Median: {np.median(values).astype(np.uint64):,}"
+    )
 
 
 ########################################################
@@ -213,7 +297,14 @@ def copy_back_benchmark_data(runtime: crt.SdkRuntime, metadata: ProgramMetadata)
 class Program:
     """A program that can be run on a device."""
 
-    def __init__(self, folder: str, benchmark: bool = False, repetitions: int = 1, output_dir: str = ''):
+    def __init__(
+        self,
+        folder: str,
+        benchmark: bool = False,
+        repetitions: int = 1,
+        output_dir: str = "",
+        cm_addr: Optional[str] = None,
+    ):
         """
         Initialize the Program with a folder containing the compiled program.
 
@@ -233,7 +324,7 @@ class Program:
         if not metadata_path.exists():
             raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
 
-        with open(metadata_path, 'r') as f:
+        with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
         self.metadata = ProgramMetadata.from_json(metadata)
@@ -242,18 +333,30 @@ class Program:
             os.makedirs(self.output_dir, exist_ok=True)
 
         # Initialize SDK runtime
-        cmaddr = os.environ.get('CM_ADDR', None)
+        cmaddr = cm_addr or os.environ.get("CM_ADDR", None)
         self.simulator = cmaddr is None
+        print("SIMULATOR?", self.simulator)
         self.runtime = crt.SdkRuntime(str(self.out_folder), suppress_simfab_trace=True, cmaddr=cmaddr)
 
         # Store input/output information from metadata
         self.inputs = self.metadata.inputs
         self.outputs = self.metadata.outputs
 
+        print("SYNC BENCHMARK?", self.has_sync_benchmarking())
+
+    def has_symbol(self, symbol: str) -> bool:
+        return self.runtime.get_id(symbol) is not None
+
+    def has_sync_benchmarking(self) -> bool:
+        return all(self.has_symbol(symbol) for symbol in SYNC_REQUIRED_SYMBOLS)
+
+    def has_basic_benchmarking(self) -> bool:
+        return self.has_symbol("__benchmark_start") and self.has_symbol("__benchmark_stop")
+
     def __call__(self, *args, **kwargs) -> Dict[str, np.ndarray]:
         """
         Run the program with the provided arguments.
-        
+
         :param args: Positional arguments for the program
         :param kwargs: Keyword arguments for the program
         :return: Dictionary of output tensors
@@ -279,14 +382,20 @@ class Program:
         scalar_args = [scalar_kwargs[name] for name in self.metadata.argument_order if name in scalar_kwargs]
 
         try:
-            print("Loading program...", flush=True, end='')
+            print("Loading program...", flush=True, end="")
             self.runtime.load()
             self.runtime.run()
             print("done.", flush=True)
 
+            sync_benchmarking = False
             if self.benchmark:
-                if self.runtime.get_id("__benchmark_start") is None or self.runtime.get_id("__benchmark_stop") is None:
+                sync_benchmarking = self.has_sync_benchmarking()
+                if not sync_benchmarking and not self.has_basic_benchmarking():
                     raise ValueError("Benchmarking requested but not enabled in the program.")
+
+            if self.benchmark and sync_benchmarking and not self.metadata.memcpy_mode:
+                self.runtime.launch("f_sync", nonblock=False)
+                self.runtime.launch("f_tic", nonblock=False)
 
             # Copy data to device
             for name, data in kwargs.items():
@@ -305,24 +414,31 @@ class Program:
                 # Use flatten_copy to copy data to device
                 flatten_copy(name, data, expected_shape, self.runtime, self.metadata, self.benchmark)
 
+            if self.benchmark and sync_benchmarking and self.metadata.memcpy_mode:
+                self.runtime.launch("f_sync", nonblock=False)
+
             # Run the program
             for i in range(self.repetitions):
                 if self.metadata.memcpy_mode:
                     if self.benchmark and not self.simulator and i == 0:
                         time.sleep(5.0)
-                    print("Launching kernel...", flush=True, end='')
+                    print("Launching kernel...", flush=True, end="")
+                    if self.benchmark and sync_benchmarking:
+                        self.runtime.launch("f_tic", nonblock=False)
                     self.runtime.launch(self.metadata.kernel_name, *scalar_args, nonblock=False)
+                    if self.benchmark and sync_benchmarking:
+                        self.runtime.launch("f_toc", nonblock=False)
                     print("kernel launched.", flush=True)
 
                     if self.benchmark:
-                        cycle_counts = copy_back_benchmark_data(self.runtime, self.metadata)
+                        cycle_counts = (
+                            copy_back_sync_benchmark_data(self.runtime, self.metadata)
+                            if sync_benchmarking
+                            else copy_back_benchmark_cycles(self.runtime, self.metadata)
+                        )
                         num_digits = len(str(self.repetitions))
                         np.save(self.output_dir / f"perf_cycles_{i:0{num_digits}d}.npy", cycle_counts)
-                        # Print min, max, median cycle counts in a more readable format
-                        print(f"Iteration {i} cycle count stats:\n"
-                                f"  Min:    {np.min(cycle_counts):,}\n"
-                                f"  Max:    {np.max(cycle_counts):,}\n"
-                                f"  Median: {np.median(cycle_counts).astype(np.uint64):,}")
+                        print_cycle_counts(f"Iteration {i} cycle count", cycle_counts)
 
             # Copy outputs back from device
             results = {}
@@ -344,15 +460,15 @@ class Program:
             print("Copy-back complete.", flush=True)
 
             if self.benchmark and not self.metadata.memcpy_mode:
-                cycle_counts = copy_back_benchmark_data(self.runtime, self.metadata)
+                cycle_counts = (
+                    copy_back_sync_benchmark_data(self.runtime, self.metadata)
+                    if sync_benchmarking
+                    else copy_back_benchmark_data(self.runtime, self.metadata)
+                )
                 np.save(self.output_dir / "perf_cycles.npy", cycle_counts)
-                # Print min, max, median cycle counts in a more readable format
-                print(f"Cycle count stats:\n"
-                      f"  Min:    {np.min(cycle_counts):,}\n"
-                      f"  Max:    {np.max(cycle_counts):,}\n"
-                      f"  Median: {np.median(cycle_counts).astype(np.uint64):,}")
+                print_cycle_counts("Cycle count", cycle_counts)
 
-            print("Stopping runtime...", flush=True, end='')
+            print("Stopping runtime...", flush=True, end="")
         finally:
             self.runtime.stop()
         print("done.", flush=True)
@@ -369,12 +485,13 @@ if __name__ == "__main__":
     parser.add_argument("--benchmark", action="store_true", help="Run in benchmark mode")
     parser.add_argument("--randomize", action="store_true", help="Randomize input data instead of loading from files")
     parser.add_argument("--repetitions", default=1, type=int, help="Number of repetitions to run")
-    parser.add_argument("--output-dir", default='', help="Output directory for files")
+    parser.add_argument("--output-dir", default="", help="Output directory for files")
+    parser.add_argument("--cm-addr", default="", help="Cerebras machine address")
 
     args = parser.parse_args()
 
     # Load the program
-    program = Program(args.program_folder, args.benchmark, args.repetitions, args.output_dir)
+    program = Program(args.program_folder, args.benchmark, args.repetitions, args.output_dir, args.cm_addr)
 
     # Load input arrays from .npy files
     inputs = []
@@ -394,7 +511,8 @@ if __name__ == "__main__":
                 argname = program.metadata.argument_order[i]
                 if argname not in program.metadata.inputs:
                     raise ValueError(
-                        f"Scalar file argument {input_file} given for {argname} not found in program inputs.")
+                        f"Scalar file argument {input_file} given for {argname} not found in program inputs."
+                    )
                 arg = program.metadata.inputs[argname].shape
                 if len(arg) > 0:
                     raise ValueError(f"Scalar file argument {input_file} given for {argname} which is not a scalar.")

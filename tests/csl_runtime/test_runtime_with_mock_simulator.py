@@ -11,6 +11,7 @@ from spatialstencil.runtime.cerebras_runtime_stub import MemcpyDataType, MemcpyO
 # Mock the Cerebras SDK module BEFORE any imports from spatialstencil
 # This needs to be done at the very beginning to prevent ImportError
 
+
 class MockSdkRuntime:
     """Mock implementation of the Cerebras SDK runtime for testing."""
 
@@ -20,10 +21,18 @@ class MockSdkRuntime:
         self.running = False
         self.data_buffers = {}  # Store data by buffer ID
         self.buffer_names = {}  # Map names to buffer IDs
+        self.known_symbols = set()
         self.next_buffer_id = 1
         self.mock_kernel_func = None
         self.input_data = {}
         self.output_data = {}
+
+    def register_symbol(self, symbol: str) -> int:
+        self.known_symbols.add(symbol)
+        if symbol not in self.buffer_names:
+            self.buffer_names[symbol] = self.next_buffer_id
+            self.next_buffer_id += 1
+        return self.buffer_names[symbol]
 
     def set_mock_kernel(self, kernel_func):
         """Set the mock kernel function to use."""
@@ -43,15 +52,27 @@ class MockSdkRuntime:
         """Mock stop operation."""
         self.running = False
 
-    def get_id(self, symbol: str) -> int:
-        """Get buffer ID for a symbol, creating one if it doesn't exist."""
-        if symbol not in self.buffer_names:
-            self.buffer_names[symbol] = self.next_buffer_id
-            self.next_buffer_id += 1
-        return self.buffer_names[symbol]
+    def get_id(self, symbol: str) -> int | None:
+        """Get buffer ID for a symbol if it exists in the compiled program."""
+        if symbol not in self.known_symbols:
+            return None
+        return self.register_symbol(symbol)
 
-    def memcpy_h2d(self, dest: int, src: np.ndarray, px: int, py: int, w: int, h: int, elem_per_pe: int, *,
-                   streaming: bool, data_type, order, nonblock: bool):
+    def memcpy_h2d(
+        self,
+        dest: int,
+        src: np.ndarray,
+        px: int,
+        py: int,
+        w: int,
+        h: int,
+        elem_per_pe: int,
+        *,
+        streaming: bool,
+        data_type,
+        order,
+        nonblock: bool
+    ):
         """Mock host-to-device memory copy."""
         # Store the data in our mock buffer
         self.data_buffers[dest] = src.copy()
@@ -61,8 +82,21 @@ class MockSdkRuntime:
                 self.input_data[name] = src.copy()
                 break
 
-    def memcpy_d2h(self, dest: np.ndarray, src: int, px: int, py: int, w: int, h: int, elem_per_pe: int, *,
-                   streaming: bool, data_type, order, nonblock: bool):
+    def memcpy_d2h(
+        self,
+        dest: np.ndarray,
+        src: int,
+        px: int,
+        py: int,
+        w: int,
+        h: int,
+        elem_per_pe: int,
+        *,
+        streaming: bool,
+        data_type,
+        order,
+        nonblock: bool
+    ):
         """Mock device-to-host memory copy."""
         if src in self.data_buffers:
             dest[:] = self.data_buffers[src]
@@ -86,7 +120,7 @@ class MockSdkRuntime:
                 self.mock_kernel_func(a, b, out)
 
                 # Store result in output buffer
-                out_buffer_id = self.get_id('out')
+                out_buffer_id = self.register_symbol("out")
                 self.data_buffers[out_buffer_id] = out
 
 
@@ -97,20 +131,53 @@ mock_crt.MemcpyOrder = MemcpyOrder
 mock_crt.SdkRuntime = MockSdkRuntime
 
 # Mock the cerebras module hierarchy
-sys.modules['cerebras'] = MagicMock()
-sys.modules['cerebras.sdk'] = MagicMock()
-sys.modules['cerebras.sdk.runtime'] = MagicMock()
-sys.modules['cerebras.sdk.runtime.sdkruntimepybind'] = mock_crt
+sys.modules["cerebras"] = MagicMock()
+sys.modules["cerebras.sdk"] = MagicMock()
+sys.modules["cerebras.sdk.runtime"] = MagicMock()
+sys.modules["cerebras.sdk.runtime.sdkruntimepybind"] = mock_crt
 
 # End of mocking the Cerebras SDK
 
 # Now we can safely import the runtime classes
-from spatialstencil.runtime.runtime import Program, ProgramMetadata
+from spatialstencil.runtime.runtime import Program, ProgramMetadata, copy_back_sync_benchmark_data
 
 
 def mock_kernel(a, b, out):
     """Mock kernel function that adds two arrays."""
     out[:] = a + b
+
+
+class MockSyncBenchmarkRuntime:
+    def __init__(self, time_start_hwe: np.ndarray, time_stop_hwe: np.ndarray, time_ref_hwe: np.ndarray):
+        self.buffer_names = {"__benchmark_start": 1, "__benchmark_stop": 2, "__benchmark_refclock": 3}
+        self.data_buffers = {
+            1: time_start_hwe.transpose(1, 0, 2).ravel(),
+            1: time_stop_hwe.transpose(1, 0, 2).ravel(),
+            2: time_ref_hwe.transpose(1, 0, 2).ravel(),
+        }
+
+    def launch(self, symbol: str, nonblock: bool = False):
+        return None
+
+    def get_id(self, symbol: str) -> int:
+        return self.buffer_names[symbol]
+
+    def memcpy_d2h(
+        self,
+        dest: np.ndarray,
+        src: int,
+        px: int,
+        py: int,
+        w: int,
+        h: int,
+        elem_per_pe: int,
+        *,
+        streaming: bool,
+        data_type,
+        order,
+        nonblock: bool
+    ):
+        dest[:] = self.data_buffers[src]
 
 
 class TestProgramWithMockRuntime(unittest.TestCase):
@@ -131,46 +198,35 @@ class TestProgramWithMockRuntime(unittest.TestCase):
         self.metadata = {
             "kernel_name": "test_kernel",
             "inputs": {
-                "a": {
-                    "shape": [4, 4],
-                    "dtype": "f32",
-                    "buffer_size": 1
-                },
-                "b": {
-                    "shape": [4, 4],
-                    "dtype": "f32",
-                    "buffer_size": 1
-                }
+                "a": {"shape": [4, 4], "dtype": "f32", "buffer_size": 1},
+                "b": {"shape": [4, 4], "dtype": "f32", "buffer_size": 1},
             },
-            "outputs": {
-                "out": {
-                    "shape": [4, 4],
-                    "dtype": "f32",
-                    "buffer_size": 1
-                }
-            },
+            "outputs": {"out": {"shape": [4, 4], "dtype": "f32", "buffer_size": 1}},
             "argument_order": ["a", "b"],
             "memcpy_mode": True,
             "kernel_dims": [4, 4],
             "fabric_dims": [4, 4],
-            "fabric_offsets": [0, 0]
+            "fabric_offsets": [0, 0],
         }
 
         # Write metadata to file
         metadata_path = self.program_dir / "metadata.json"
-        with open(metadata_path, 'w') as f:
+        with open(metadata_path, "w") as f:
             json.dump(self.metadata, f)
 
         # Create mock runtime instance
         self.mock_runtime = MockSdkRuntime(str(self.out_dir))
         self.mock_runtime.set_mock_kernel(mock_kernel)
+        for symbol in ("a", "b", "out"):
+            self.mock_runtime.register_symbol(symbol)
 
     def tearDown(self):
         """Clean up test fixtures."""
         import shutil
+
         shutil.rmtree(self.temp_dir)
 
-    @patch('spatialstencil.runtime.runtime.crt.SdkRuntime')
+    @patch("spatialstencil.runtime.runtime.crt.SdkRuntime")
     def test_program_initialization(self, mock_sdk_runtime_class):
         """Test that Program initializes correctly with metadata."""
         mock_sdk_runtime_class.return_value = self.mock_runtime
@@ -188,7 +244,7 @@ class TestProgramWithMockRuntime(unittest.TestCase):
     def test_program_execution_with_positional_args(self):
         """Test program execution with positional arguments."""
         # Patch the SdkRuntime class directly in the runtime module
-        with patch('spatialstencil.runtime.runtime.crt.SdkRuntime', return_value=self.mock_runtime):
+        with patch("spatialstencil.runtime.runtime.crt.SdkRuntime", return_value=self.mock_runtime):
             program = Program(str(self.program_dir))
 
             # Create test input data
@@ -205,7 +261,7 @@ class TestProgramWithMockRuntime(unittest.TestCase):
 
     def test_program_execution_with_keyword_args(self):
         """Test program execution with keyword arguments."""
-        with patch('spatialstencil.runtime.runtime.crt.SdkRuntime', return_value=self.mock_runtime):
+        with patch("spatialstencil.runtime.runtime.crt.SdkRuntime", return_value=self.mock_runtime):
             program = Program(str(self.program_dir))
 
             # Create test input data
@@ -222,7 +278,7 @@ class TestProgramWithMockRuntime(unittest.TestCase):
 
     def test_program_shape_validation(self):
         """Test that program validates input shapes correctly."""
-        with patch('spatialstencil.runtime.runtime.crt.SdkRuntime', return_value=self.mock_runtime):
+        with patch("spatialstencil.runtime.runtime.crt.SdkRuntime", return_value=self.mock_runtime):
             program = Program(str(self.program_dir))
 
             # Create test input data with wrong shape
@@ -235,7 +291,7 @@ class TestProgramWithMockRuntime(unittest.TestCase):
 
     def test_program_missing_input(self):
         """Test that program raises error for missing inputs."""
-        with patch('spatialstencil.runtime.runtime.crt.SdkRuntime', return_value=self.mock_runtime):
+        with patch("spatialstencil.runtime.runtime.crt.SdkRuntime", return_value=self.mock_runtime):
             program = Program(str(self.program_dir))
 
             # Create test input data - only provide one input
@@ -247,7 +303,7 @@ class TestProgramWithMockRuntime(unittest.TestCase):
 
     def test_mock_kernel_execution_verification(self):
         """Test that our mock kernel is actually being executed with correct data."""
-        with patch('spatialstencil.runtime.runtime.crt.SdkRuntime', return_value=self.mock_runtime):
+        with patch("spatialstencil.runtime.runtime.crt.SdkRuntime", return_value=self.mock_runtime):
             program = Program(str(self.program_dir))
 
             # Create specific test input data to verify kernel execution
@@ -269,7 +325,7 @@ class TestProgramWithMockRuntime(unittest.TestCase):
 
     def test_program_unexpected_input(self):
         """Test that program raises error for unexpected inputs."""
-        with patch('spatialstencil.runtime.runtime.crt.SdkRuntime', return_value=self.mock_runtime):
+        with patch("spatialstencil.runtime.runtime.crt.SdkRuntime", return_value=self.mock_runtime):
             program = Program(str(self.program_dir))
 
             # Create test input data
@@ -281,6 +337,16 @@ class TestProgramWithMockRuntime(unittest.TestCase):
             with self.assertRaises(ValueError):
                 program(a=a, b=b, c=c)
 
+    def test_benchmark_requires_symbols(self):
+        with patch("spatialstencil.runtime.runtime.crt.SdkRuntime", return_value=self.mock_runtime):
+            program = Program(str(self.program_dir), benchmark=True)
+
+            a = np.ones((4, 4, 1), dtype=np.float32)
+            b = np.ones((4, 4, 1), dtype=np.float32)
+
+            with self.assertRaises(ValueError):
+                program(a, b)
+
 
 class TestProgramMetadata(unittest.TestCase):
     """Test the ProgramMetadata class."""
@@ -289,23 +355,13 @@ class TestProgramMetadata(unittest.TestCase):
         """Test creating ProgramMetadata from dictionary."""
         data = {
             "kernel_name": "test_kernel",
-            "inputs": {
-                "x": {
-                    "shape": [10, 10],
-                    "dtype": "f32"
-                }
-            },
-            "outputs": {
-                "y": {
-                    "shape": [10, 10],
-                    "dtype": "f32"
-                }
-            },
+            "inputs": {"x": {"shape": [10, 10], "dtype": "f32"}},
+            "outputs": {"y": {"shape": [10, 10], "dtype": "f32"}},
             "argument_order": ["x"],
             "memcpy_mode": True,
             "kernel_dims": [10, 10],
             "fabric_dims": [10, 10],
-            "fabric_offsets": [0, 0]
+            "fabric_offsets": [0, 0],
         }
 
         metadata = ProgramMetadata.from_json(data)
@@ -319,23 +375,13 @@ class TestProgramMetadata(unittest.TestCase):
         """Test creating ProgramMetadata from JSON string."""
         data = {
             "kernel_name": "test_kernel",
-            "inputs": {
-                "x": {
-                    "shape": [5, 5],
-                    "dtype": "f32"
-                }
-            },
-            "outputs": {
-                "y": {
-                    "shape": [5, 5],
-                    "dtype": "f32"
-                }
-            },
+            "inputs": {"x": {"shape": [5, 5], "dtype": "f32"}},
+            "outputs": {"y": {"shape": [5, 5], "dtype": "f32"}},
             "argument_order": ["x"],
             "memcpy_mode": False,
             "kernel_dims": [5, 5],
             "fabric_dims": [5, 5],
-            "fabric_offsets": [0, 0]
+            "fabric_offsets": [0, 0],
         }
 
         json_string = json.dumps(data)
@@ -345,5 +391,5 @@ class TestProgramMetadata(unittest.TestCase):
         self.assertFalse(metadata.memcpy_mode)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

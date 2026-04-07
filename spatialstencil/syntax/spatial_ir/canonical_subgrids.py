@@ -66,6 +66,7 @@ def canonicalize_subgrids(kernel: Kernel) -> Kernel:
     subgrids = kernel.subgrids()
 
     # split subgrids so that no two un-equal subgrids overlap
+    print(f"Splitting {len(subgrids)} grids")
     split = split_rectangles(subgrids)
 
     # group the subgrids into phases (by phase Id)

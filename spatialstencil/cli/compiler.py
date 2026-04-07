@@ -16,14 +16,19 @@ import subprocess
 @click.option('--offset-y', '-y', default=0, type=int, help='Offset for rectangular region in y direction')
 @click.option('--generate-only', '-g', is_flag=True, help='Only generate the output files without compiling them')
 @click.option('--disable-benchmarking', is_flag=True, help='Disable benchmarking code generation (and memory overhead)')
+@click.option('--sync-benchmarking', is_flag=True, help='Generate sync-assisted benchmarking support')
 @click.option('--disable-asynchronous', is_flag=True, help='Disable asynchronous task code generation')
 @click.option('--disable-dsd', is_flag=True, help='Disable DSD operation detection and code generation')
 @click.option('--disable-map', is_flag=True, help='Disable @map operation detection and code generation')
 @click.option('--disable-task-fusion', is_flag=True, help='Disable task fusion optimization')
 @click.option('--disable-task-recycling', is_flag=True, help='Disable task ID recycling')
 def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], offset_x: int, offset_y: int,
-                       generate_only: bool, disable_benchmarking: bool, disable_asynchronous: bool, disable_dsd: bool,
-                       disable_map: bool, disable_task_fusion: bool, disable_task_recycling: bool):
+                       generate_only: bool, disable_benchmarking: bool, sync_benchmarking: bool,
+                       disable_asynchronous: bool, disable_dsd: bool, disable_map: bool,
+                       disable_task_fusion: bool, disable_task_recycling: bool):
+    if disable_benchmarking and sync_benchmarking:
+        raise click.UsageError("--sync-benchmarking cannot be used with --disable-benchmarking")
+
     # Parse parameters into dictionary
     kernel_parameters = {}
     for p in param:
@@ -88,6 +93,7 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     csl_files = s2c.lower_spatial_ir_to_csl(
         kernel,
         disable_benchmarking=disable_benchmarking,
+        sync_benchmarking=sync_benchmarking,
         disable_asynchronous=disable_asynchronous,
         disable_dsd=disable_dsd,
         task_fusion=not disable_task_fusion,
@@ -98,6 +104,9 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     os.makedirs(output_folder, exist_ok=True)
     for f in csl_files:
         output_path = os.path.join(output_folder, f.filename)
+        parent_dir = os.path.dirname(output_path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
         with open(output_path, 'w') as out_file:
             out_file.write(f.code)
 
@@ -171,7 +180,7 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         fabric_width, fabric_height = xend, yend
 
     cslc_command = [
-        'cslc', f'--arch={csl.ARCH}', 'layout.csl', f'--fabric-dims={fabric_width},{fabric_height}',
+        os.getenv('CSLC', 'cslc'), f'--arch={csl.ARCH}', 'layout.csl', f'--fabric-dims={fabric_width},{fabric_height}',
         f'--fabric-offsets={offset_x + xbegin},{offset_y + ybegin}', '--memcpy', f'--channels={memcpy_channels}'
     ]
     print("Compiling with command:", ' '.join(cslc_command))
@@ -185,7 +194,8 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
           "To run the program, use the Cerebras SDK python runtime with npy files as arguments:")
     runtime_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "runtime", "runtime.py"))
     args_str = ' '.join(f"{arg}.npy" for arg in metadata["argument_order"] if arg in input_args)
-    print(f"cs_python {runtime_path} {output_folder} {args_str}")
+    cs_python = os.getenv('CS_PYTHON', 'cs_python')
+    print(f"{cs_python} {runtime_path} {output_folder} {args_str}")
 
 
 if __name__ == '__main__':
