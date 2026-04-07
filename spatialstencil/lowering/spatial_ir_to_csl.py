@@ -164,7 +164,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
         rect_size = x1 - x0, y1 - y0
 
         # Collect unique routes for all rectangles
-        routes_per_rectangle = _collect_routes(rectangles, color_maps)
+        reusable_sync_color_ids = set(sync_resources.reusable_sync_colors) if sync_resources is not None else None
+        routes_per_rectangle = _collect_routes(rectangles, color_maps, reusable_sync_color_ids)
 
         if use_memcpy_mode:
             layout_code.write(f'''
@@ -1188,8 +1189,49 @@ def _route_dir(dx: int, dy: int):
         return ('NORTH', 'SOUTH')
 
 
+def _format_route_config(
+    rx_dirs: tuple[str, ...],
+    tx_dirs: tuple[str, ...],
+    pos1: tuple[tuple[str, ...], tuple[str, ...]] | None = None,
+) -> str:
+    """
+    Build the anonymous struct passed as @set_color_config config.
+
+    If ``pos1`` is provided, route-switch metadata is emitted under ``.switches``.
+    """
+    rx_expr = ', '.join(rx_dirs)
+    tx_expr = ', '.join(tx_dirs)
+    if pos1 is None:
+        return f'.{{ .routes = .{{ .rx = .{{{rx_expr}}}, .tx = .{{{tx_expr}}} }} }}'
+
+    pos1_rx, pos1_tx = pos1
+    pos1_rx_expr = ', '.join(pos1_rx)
+    pos1_tx_expr = ', '.join(pos1_tx)
+    return (
+        f'.{{ .routes = .{{ .rx = .{{{rx_expr}}}, .tx = .{{{tx_expr}}} }}, '
+        f'.switches = .{{ .pos1 = .{{ .rx = .{{{pos1_rx_expr}}}, .tx = .{{{pos1_tx_expr}}} }}, '
+        f'.ring_mode = false }} }}'
+    )
+
+
+def _format_set_color_config(
+    x_expr: str,
+    y_expr: str,
+    color_expr: str,
+    rx_dirs: tuple[str, ...],
+    tx_dirs: tuple[str, ...],
+    pos1: tuple[tuple[str, ...], tuple[str, ...]] | None = None,
+) -> str:
+    """Render a single @set_color_config statement."""
+    return (
+        f'@set_color_config({x_expr}, {y_expr}, {color_expr}, '
+        f'{_format_route_config(rx_dirs, tx_dirs, pos1)});'
+    )
+
+
 def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[str,
-                                                                                int]]) -> dict[tuple[int, int], str]:
+                                                                                int]],
+                    reusable_sync_color_ids: set[int] | None = None) -> dict[tuple[int, int], str]:
     """
     Creates a parametric version of the Routing Graph (see the Spatial IR specification for more information) and
     returns a dictionary of code segements to add to the layout CSL file based on the streams.
@@ -1209,15 +1251,43 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
         # Make routing instructions unique
         routing_instructions: set[str] = set()
 
+        def _add_route_inst(
+            x_expr: str,
+            y_expr: str,
+            color_expr: str,
+            color_id: int,
+            rx_dirs: tuple[str, ...],
+            tx_dirs: tuple[str, ...],
+        ) -> None:
+            pos1 = None
+            if reusable_sync_color_ids is not None and color_id in reusable_sync_color_ids:
+                # Reusable colors carry explicit switch metadata so host-side control wavelets
+                # can advance to an alternate route configuration.
+                pos1 = (rx_dirs, tx_dirs)
+            routing_inst = INDENT + _format_set_color_config(
+                x_expr,
+                y_expr,
+                color_expr,
+                rx_dirs,
+                tx_dirs,
+                pos1=pos1,
+            ) + '\n'
+            if routing_inst not in routing_instructions:
+                nonlocal inst
+                inst += routing_inst
+                routing_instructions.add(routing_inst)
+
         # For each hop, make a color WEST-EAST/NORTH-SOUTH pair. For the first and last hop, pair with RAMP
         for stream in rect.metadata.dataflow.statements:
             if stream.stream_name not in sends_recvs:  # Skip unused streams
                 continue
             sent, received = sends_recvs[stream.stream_name]
             if received:
-                color_name_inbound = f'@get_color({color_map[name_to_csl(stream.stream_name) + "_IN"]})'
+                color_id_inbound = color_map[name_to_csl(stream.stream_name) + "_IN"]
+                color_name_inbound = f'@get_color({color_id_inbound})'
             if sent:
-                color_name_outbound = f'@get_color({color_map[name_to_csl(stream.stream_name) + "_OUT"]})'
+                color_id_outbound = color_map[name_to_csl(stream.stream_name) + "_OUT"]
+                color_name_outbound = f'@get_color({color_id_outbound})'
 
             if isinstance(stream.stream, spir.ExternStreamDeclaration):
                 continue  # Extern streams do not have on-chip routing
@@ -1260,11 +1330,7 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
                         return f'pe_x - {-k}', 'pe_y'
 
                 # Sender: inject into fabric toward receivers.
-                routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{RAMP}, .tx = .{%s} } });\n' % (
-                    color_name_outbound, tx_dir)
-                if routing_inst not in routing_instructions:
-                    inst += routing_inst
-                    routing_instructions.add(routing_inst)
+                _add_route_inst('pe_x', 'pe_y', color_name_outbound, color_id_outbound, ('RAMP',), (tx_dir,))
 
                 if is_negative:
                     # Negative multicast: receivers at start, start-1, …, stop+1 (stop exclusive).
@@ -1273,103 +1339,60 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
                     # Gap relay-only PEs between sender and first receiver (when start < -1).
                     for k in range(-1, start, -1):
                         cx, cy = _coord(k)
-                        routing_inst = INDENT + '@set_color_config(%s, %s, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                            cx, cy, color_name_outbound, rx_dir, tx_dir)
-                        if routing_inst not in routing_instructions:
-                            inst += routing_inst
-                            routing_instructions.add(routing_inst)
+                        _add_route_inst(cx, cy, color_name_outbound, color_id_outbound, (rx_dir,), (tx_dir,))
 
                     # Intermediate receivers: forward toward farthest and deliver to RAMP.
                     for k in range(start, k_last, -1):
                         cx, cy = _coord(k)
-                        routing_inst = INDENT + '@set_color_config(%s, %s, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s, RAMP} } });\n' % (
-                            cx, cy, color_name_outbound, rx_dir, tx_dir)
-                        if routing_inst not in routing_instructions:
-                            inst += routing_inst
-                            routing_instructions.add(routing_inst)
+                        _add_route_inst(cx, cy, color_name_outbound, color_id_outbound, (rx_dir,), (tx_dir, 'RAMP'))
 
                     # Last (farthest) receiver: deliver to RAMP only, no forwarding.
                     cx, cy = _coord(k_last)
-                    routing_inst = INDENT + '@set_color_config(%s, %s, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{RAMP} } });\n' % (
-                        cx, cy, color_name_outbound, rx_dir)
-                    if routing_inst not in routing_instructions:
-                        inst += routing_inst
-                        routing_instructions.add(routing_inst)
+                    _add_route_inst(cx, cy, color_name_outbound, color_id_outbound, (rx_dir,), ('RAMP',))
                 else:
                     # Positive multicast: receivers at start, start+1, …, stop-1 (stop exclusive).
                     # Gap relay-only PEs between sender and first receiver (when start > 1).
                     for k in range(1, start):
                         cx, cy = _coord(k)
-                        routing_inst = INDENT + '@set_color_config(%s, %s, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                            cx, cy, color_name_outbound, rx_dir, tx_dir)
-                        if routing_inst not in routing_instructions:
-                            inst += routing_inst
-                            routing_instructions.add(routing_inst)
+                        _add_route_inst(cx, cy, color_name_outbound, color_id_outbound, (rx_dir,), (tx_dir,))
 
                     # Intermediate receivers: forward and simultaneously deliver to RAMP.
                     for k in range(start, stop - 1):
                         cx, cy = _coord(k)
-                        routing_inst = INDENT + '@set_color_config(%s, %s, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s, RAMP} } });\n' % (
-                            cx, cy, color_name_outbound, rx_dir, tx_dir)
-                        if routing_inst not in routing_instructions:
-                            inst += routing_inst
-                            routing_instructions.add(routing_inst)
+                        _add_route_inst(cx, cy, color_name_outbound, color_id_outbound, (rx_dir,), (tx_dir, 'RAMP'))
 
                     # Last receiver: deliver to RAMP only, no forwarding.
                     k_last = stop - 1
                     cx, cy = _coord(k_last)
-                    routing_inst = INDENT + '@set_color_config(%s, %s, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{RAMP} } });\n' % (
-                        cx, cy, color_name_outbound, rx_dir)
-                    if routing_inst not in routing_instructions:
-                        inst += routing_inst
-                        routing_instructions.add(routing_inst)
+                    _add_route_inst(cx, cy, color_name_outbound, color_id_outbound, (rx_dir,), ('RAMP',))
                 continue
 
             if len(stream.stream.routing.hops) == 1:  # Inbound and outbound generated together
                 route = _route_dir(*stream.stream.routing.hops[0].offset)
                 if sent:
-                    routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                        color_name_outbound, 'RAMP', route[1])
-                    if routing_inst not in routing_instructions:
-                        inst += routing_inst
-                        routing_instructions.add(routing_inst)
+                    _add_route_inst('pe_x', 'pe_y', color_name_outbound, color_id_outbound, ('RAMP',), (route[1],))
                 if received:
-                    routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                        color_name_inbound, route[0], 'RAMP')
-                    if routing_inst not in routing_instructions:
-                        inst += routing_inst
-                        routing_instructions.add(routing_inst)
+                    _add_route_inst('pe_x', 'pe_y', color_name_inbound, color_id_inbound, (route[0],), ('RAMP',))
             else:  # Multi-hop
                 if sent:
                     first_hop = stream.stream.routing.hops[0]
                     route = ('RAMP', _route_dir(*first_hop.offset)[1])
-                    routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                        color_name_outbound, route[0], route[1])
-                    if routing_inst not in routing_instructions:
-                        inst += routing_inst
-                        routing_instructions.add(routing_inst)
+                    _add_route_inst('pe_x', 'pe_y', color_name_outbound, color_id_outbound, (route[0],), (route[1],))
                     cur_offx = 0
                     cur_offy = 0
                     for hop in stream.stream.routing.hops[1:]:
                         route = _route_dir(*hop.offset)
                         cur_offx += hop.offset[0]
                         cur_offy += hop.offset[1]
-                        routing_inst = INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                            cur_offx, cur_offy, color_name_outbound, route[0], route[1])
-                        if routing_inst not in routing_instructions:
-                            inst += routing_inst
-                            routing_instructions.add(routing_inst)
+                        _add_route_inst(f'pe_x + {cur_offx}', f'pe_y + {cur_offy}', color_name_outbound, color_id_outbound,
+                                        (route[0],), (route[1],))
                 if received:
                     # The receiver only configures itself (pe_x + 0, pe_y + 0).
                     # Intermediate PEs are configured by the sender block above,
                     # which walks forward through hops[1:] relative to the sender PE.
                     last_hop = stream.stream.routing.hops[-1]
                     route = (_route_dir(*last_hop.offset)[0], 'RAMP')
-                    routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                        color_name_inbound, route[0], route[1])
-                    if routing_inst not in routing_instructions:
-                        inst += routing_inst
-                        routing_instructions.add(routing_inst)
+                    _add_route_inst('pe_x', 'pe_y', color_name_inbound, color_id_inbound, (route[0],), (route[1],))
 
         result[(rect.x_range[0], rect.y_range[0])] = inst
 

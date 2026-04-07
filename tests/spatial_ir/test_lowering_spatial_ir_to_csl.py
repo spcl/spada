@@ -1,5 +1,9 @@
 import os
-from spatialstencil.lowering.spatial_ir_to_csl import lower_spatial_ir_to_csl
+from spatialstencil.lowering.spatial_ir_to_csl import (
+    _format_route_config,
+    _format_set_color_config,
+    lower_spatial_ir_to_csl,
+)
 from spatialstencil.syntax.spatial_ir import parser, passes
 import pytest
 
@@ -126,6 +130,30 @@ def test_forward_sum():
         print(f.filename, ':')
         print(f.code)
         print('=============')
+
+
+def test_route_config_formatter_without_switches():
+    config = _format_route_config(("RAMP",), ("EAST",))
+    assert ".routes" in config
+    assert ".switches" not in config
+
+
+def test_route_config_formatter_with_pos1_switch():
+    config = _format_route_config(("RAMP",), ("EAST",), pos1=(("WEST",), ("RAMP",)))
+    assert ".routes" in config
+    assert ".switches" in config
+    assert ".pos1" in config
+
+    stmt = _format_set_color_config(
+        "pe_x",
+        "pe_y",
+        "@get_color(0)",
+        ("RAMP",),
+        ("EAST",),
+        pos1=(("WEST",), ("RAMP",)),
+    )
+    assert "@set_color_config(" in stmt
+    assert ".switches" in stmt
 
 
 if __name__ == '__main__':

@@ -27,6 +27,8 @@ class RectangleBenchmarkingCode:
 class SyncBenchmarkResources:
     available_colors: list[int]
     sync_colors: tuple[int, int, int, int, int]
+    reusable_sync_colors: tuple[int, int, int, int]
+    dedicated_sync_colors: tuple[int]
     available_local_task_ids: list[int]
     sync_entrypoints: tuple[int, int, int, int]
 
@@ -55,7 +57,8 @@ const timestamp = @import_module("<time>");
 const sync_mod = @import_module("sync/pe.csl", @concat_structs(sync_params, .{
     .f_callback = sys_mod.unblock_cmd_stream,
     .input_queues = [3]u16{2, 3, 4},
-    .output_queues = [3]u16{2, 3, 4}
+    .output_queues = [3]u16{2, 3, 4},
+    .configure_sync_routes = true
 }));
 
 """,
@@ -82,20 +85,30 @@ fn f_sync() void {
     )
 
 
-def reserve_sync_resources(colors: Sequence[int], local_task_ids: Sequence[int]) -> SyncBenchmarkResources:
+def reserve_sync_resources(
+    colors: Sequence[int],
+    local_task_ids: Sequence[int],
+    reuse_sync_colors_for_kernel: bool = False,
+) -> SyncBenchmarkResources:
     if len(colors) < 5:
         raise ValueError("Sync benchmarking requires at least 5 CSL colors.")
     if len(local_task_ids) < 5:
         raise ValueError("Sync benchmarking requires at least 5 CSL local task IDs.")
     sync_colors = tuple(colors[:5])
     assert len(sync_colors) == 5
+    reusable_sync_colors = tuple(sync_colors[:4])
+    dedicated_sync_colors = (sync_colors[4],)
     sync_entrypoints = tuple(local_task_ids[-4:])
     assert len(sync_entrypoints) == 4
     # The reference sync runtime expects its colors to stay below the entrypoint/task-id range.
     available_colors = [color for color in colors[5:] if color < sync_entrypoints[0]]
+    if reuse_sync_colors_for_kernel:
+        available_colors = list(reusable_sync_colors) + available_colors
     return SyncBenchmarkResources(
         available_colors=available_colors,
         sync_colors=sync_colors,
+        reusable_sync_colors=reusable_sync_colors,
+        dedicated_sync_colors=dedicated_sync_colors,
         available_local_task_ids=list(local_task_ids[:-5]),
         sync_entrypoints=sync_entrypoints,
     )

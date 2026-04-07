@@ -36,6 +36,7 @@ param f_callback : fn ()void;
 // output_queues={2,3,4}
 param input_queues:[3]u16;
 param output_queues:[3]u16;
+param configure_sync_routes: bool = true;
 
 const c_recv_px_iq = @get_input_queue(input_queues[0]);
 const c_send_px_oq = @get_output_queue(output_queues[0]);
@@ -211,17 +212,19 @@ comptime {
 // P_odd: recv C1, send C0
 // P_last: send C0 if odd; send C1 if even
 comptime {
-    if (first_px){
-        // px = 0: receive from east
-        @set_local_color_config(c_recv_px, .{ .routes = .{ .rx = .{EAST}, .tx = .{RAMP} } } );
-    }else{
-        if (last_px){
-           // px = width-1: send to west
-           @set_local_color_config(c_send_px, .{ .routes = .{ .rx = .{RAMP}, .tx = .{WEST} } } );
+    if (configure_sync_routes) {
+        if (first_px){
+            // px = 0: receive from east
+            @set_local_color_config(c_recv_px, .{ .routes = .{ .rx = .{EAST}, .tx = .{RAMP} } } );
         }else{
-           // 0 < px < width-1: receive from east, send to west
-           @set_local_color_config(c_recv_px, .{ .routes = .{ .rx = .{EAST}, .tx = .{RAMP} } } );
-           @set_local_color_config(c_send_px, .{ .routes = .{ .rx = .{RAMP}, .tx = .{WEST} } } );
+            if (last_px){
+               // px = width-1: send to west
+               @set_local_color_config(c_send_px, .{ .routes = .{ .rx = .{RAMP}, .tx = .{WEST} } } );
+            }else{
+               // 0 < px < width-1: receive from east, send to west
+               @set_local_color_config(c_recv_px, .{ .routes = .{ .rx = .{EAST}, .tx = .{RAMP} } } );
+               @set_local_color_config(c_send_px, .{ .routes = .{ .rx = .{RAMP}, .tx = .{WEST} } } );
+            }
         }
     }
 }
@@ -238,17 +241,19 @@ comptime {
 // P_odd: recv C3, send C2
 // P_last: send C2 if odd; send C3 if even
 comptime {
-    if (first_py){
-        // py = 0 (even): receive from south
-        @set_local_color_config(c_recv_py, .{ .routes = .{ .rx = .{SOUTH}, .tx = .{RAMP} } } );
-    }else{
-        if (last_py){
-           // py = height-1: send to north
-           @set_local_color_config(c_send_py, .{ .routes = .{ .rx = .{RAMP}, .tx = .{NORTH} } } );
+    if (configure_sync_routes) {
+        if (first_py){
+            // py = 0 (even): receive from south
+            @set_local_color_config(c_recv_py, .{ .routes = .{ .rx = .{SOUTH}, .tx = .{RAMP} } } );
         }else{
-           // 0 < py < height-1: receive from south, send to north
-           @set_local_color_config(c_recv_py, .{ .routes = .{ .rx = .{SOUTH}, .tx = .{RAMP} } } );
-           @set_local_color_config(c_send_py, .{ .routes = .{ .rx = .{RAMP}, .tx = .{NORTH} } } );
+            if (last_py){
+               // py = height-1: send to north
+               @set_local_color_config(c_send_py, .{ .routes = .{ .rx = .{RAMP}, .tx = .{NORTH} } } );
+            }else{
+               // 0 < py < height-1: receive from south, send to north
+               @set_local_color_config(c_recv_py, .{ .routes = .{ .rx = .{SOUTH}, .tx = .{RAMP} } } );
+               @set_local_color_config(c_send_py, .{ .routes = .{ .rx = .{RAMP}, .tx = .{NORTH} } } );
+            }
         }
     }
 }

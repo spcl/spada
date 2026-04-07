@@ -15,6 +15,30 @@ FAILED=0
 # Array to store failed tests
 declare -a FAILED_TESTS
 
+REAL_SPTLC="$(command -v sptlc || true)"
+if [ -z "$REAL_SPTLC" ]; then
+    echo -e "${RED}ERROR${NC}: sptlc not found on PATH"
+    exit 1
+fi
+
+SYNC_SPTLC_WRAPPER_DIR="$(mktemp -d)"
+cleanup_wrapper() {
+    rm -rf "$SYNC_SPTLC_WRAPPER_DIR"
+}
+trap cleanup_wrapper EXIT
+
+cat >"$SYNC_SPTLC_WRAPPER_DIR/sptlc" <<EOF
+#!/bin/sh
+real_sptlc="$REAL_SPTLC"
+for arg in "\$@"; do
+    if [ "\$arg" = "--sync-benchmarking" ]; then
+        exec "\$real_sptlc" "\$@"
+    fi
+done
+exec "\$real_sptlc" "\$@" --sync-benchmarking
+EOF
+chmod +x "$SYNC_SPTLC_WRAPPER_DIR/sptlc"
+
 echo -e "${BLUE}================================${NC}"
 echo -e "${BLUE}  Running Test Suite${NC}"
 echo -e "${BLUE}================================${NC}"
@@ -50,28 +74,36 @@ for test_file in "${TEST_FILES[@]}"; do
         continue
     fi
     
-    TOTAL=$((TOTAL + 1))
-    
-    echo -e "${BLUE}Running:${NC} $test_file"
-    echo "----------------------------------------"
-    
-    # Run the test and capture its exit code
-    bash "$test_path"
-    EXIT_CODE=$?
-    
-    echo "----------------------------------------"
-    
-    # Check exit code and update counters
-    if [ $EXIT_CODE -eq 0 ]; then
-        echo -e "${GREEN}✓ PASSED${NC}: $test_file"
-        PASSED=$((PASSED + 1))
-    else
-        echo -e "${RED}✗ FAILED${NC}: $test_file (exit code: $EXIT_CODE)"
-        FAILED=$((FAILED + 1))
-        FAILED_TESTS+=("$test_file (exit code: $EXIT_CODE)")
-    fi
-    
-    echo ""
+    for mode in "normal" "sync"; do
+        TOTAL=$((TOTAL + 1))
+
+        if [ "$mode" = "normal" ]; then
+            mode_label="without sync benchmarking"
+            echo -e "${BLUE}Running:${NC} $test_file (${mode_label})"
+            echo "----------------------------------------"
+            bash "$test_path"
+            EXIT_CODE=$?
+        else
+            mode_label="with sync benchmarking"
+            echo -e "${BLUE}Running:${NC} $test_file (${mode_label})"
+            echo "----------------------------------------"
+            PATH="$SYNC_SPTLC_WRAPPER_DIR:$PATH" bash "$test_path"
+            EXIT_CODE=$?
+        fi
+
+        echo "----------------------------------------"
+
+        if [ $EXIT_CODE -eq 0 ]; then
+            echo -e "${GREEN}✓ PASSED${NC}: $test_file (${mode})"
+            PASSED=$((PASSED + 1))
+        else
+            echo -e "${RED}✗ FAILED${NC}: $test_file (${mode}, exit code: $EXIT_CODE)"
+            FAILED=$((FAILED + 1))
+            FAILED_TESTS+=("$test_file (${mode}, exit code: $EXIT_CODE)")
+        fi
+
+        echo ""
+    done
 done
 
 # Print summary

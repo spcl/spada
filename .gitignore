@@ -172,3 +172,6 @@ wio_*
 wio_*/
 *.nsys-rep
 report*.sqlite
+# Cerebras SDK (downloaded to tests/csl_runtime/ for Docker builds)
+tests/csl_runtime/cerebras-sdk.tar.gz
+tests/csl_runtime/cerebras-sdk/
