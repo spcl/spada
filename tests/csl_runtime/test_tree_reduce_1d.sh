@@ -7,20 +7,27 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/_lib.sh"
 
-L=2   # 2^L = 4 PEs
-K=4
+L=4   # 2^L = 4 PEs
+K=2
 FOLDER="tree_reduce_1d_sptl"
 
-sptlc "$COLLECTIVES_DIR/tree_reduce_1D.sptl" "$FOLDER" -p L=$L -p K=$K
+run_tree_reduce_1d() {
+    EXTRA_ARGS=$@
+    echo "--- tree_reduce_1d L=$L K=$K $EXTRA_ARGS ---"
+    sptlc "$COLLECTIVES_DIR/tree_reduce_1D.sptl" "$FOLDER" -p L=$L -p K=$K $EXTRA_ARGS
 
-python3 - <<PYEOF
+    python3 - <<PYEOF
 import numpy as np
 n_pes = 1 << $L   # 2^L
 a = np.random.rand(n_pes, 1, $K).astype(np.float32)
 np.save('a_in.npy', a)
 PYEOF
 
-timeout -s 9 120 cs_python "$RUNTIME_PY" "$FOLDER" a_in.npy --benchmark
+    timeout -s 9 120 cs_python "$RUNTIME_PY" "$FOLDER" a_in.npy --benchmark
 
-verify_reduce_sum
-cleanup "$FOLDER"
+    verify_reduce_sum
+    cleanup "$FOLDER"
+}
+
+run_tree_reduce_1d
+run_tree_reduce_1d --sync-benchmarking
