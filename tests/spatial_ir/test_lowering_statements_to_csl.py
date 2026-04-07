@@ -158,7 +158,7 @@ def test_send_statement_array():
     kernel = passes.concretize_parameters(kernel, N=8)
     kernel = passes.constexpr_propagation(kernel)
 
-    csl_files = lower_spatial_ir_to_csl(kernel)
+    csl_files = lower_spatial_ir_to_csl(kernel, copy_elision=False)
 
     # Check that CSL files were generated
     assert len(csl_files) > 0

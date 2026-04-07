@@ -1,8 +1,21 @@
-from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, copy_elimination, parser
+from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, copy_elimination, parser, passes
 
 
 def _optimize_kernel(kernel: spir.Kernel):
     rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    copy_elimination.eliminate_redundant_copies(rects)
+    copy_elimination.prune_unused_fields(rects)
+    assert len(rects) == 1
+    return rects[0]
+
+
+def _optimize_kernel_after_extern_lowering(kernel: spir.Kernel, **parameters):
+    kernel = passes.concretize_parameters(kernel, **parameters)
+    rects = canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
+    canonicalization.lower_bulk_communication(rects)
+    canonicalization.lower_array_assignment(rects)
+    canonicalization.lower_arguments_to_extern(rects, kernel)
+    copy_elimination.remove_extern_field_copies(rects)
     copy_elimination.eliminate_redundant_copies(rects)
     copy_elimination.prune_unused_fields(rects)
     assert len(rects) == 1
@@ -303,6 +316,198 @@ def test_do_not_elide_extern_field_in_copy_chain():
     assert isinstance(second_stmt.source.value, spir.Identifier)
     assert first_stmt.destination.name == "tmp"
     assert second_stmt.source.value.name == "tmp"
+
+
+def test_remove_extern_field_copy_prefers_input_extern():
+    kernel = parser.parse_string(
+        """
+        kernel @copy<N, K>(stream<f32, K>[N, 1] readonly a_in,
+                           stream<f32, K>[1, 1] writeonly out) {
+            place u16 i, u16 j in [0:N, 0:1] {
+                f32[K] a
+            }
+            compute u16 i, u16 j in [0:N, 0:1] {
+                await receive(a, a_in[i, j])
+                await map u16 k in [0:K] {
+                    a[k] = a[k] + 1.0
+                }
+                await send(a, out[0, 0])
+            }
+        }
+        """,
+        "test.sptl",
+    )
+
+    rect = _optimize_kernel_after_extern_lowering(kernel, N=4, K=4)
+
+    assert _place_field_names(rect) == ["a_in", "out"]
+    assert len(rect.metadata.compute.statements) == 2
+
+    map_stmt = rect.metadata.compute.statements[0]
+    send_stmt = rect.metadata.compute.statements[1]
+
+    assert isinstance(map_stmt, spir.MapStatement)
+    assignment = map_stmt.body[0]
+    assert isinstance(assignment, spir.AssignmentStatement)
+    assert isinstance(assignment.destination, spir.ArraySlice)
+    assert isinstance(assignment.source.value, spir.BinaryOperator)
+    assert assignment.destination.array.name == "a_in"
+
+    left = assignment.source.value.left.value
+    assert isinstance(left, spir.ArraySlice)
+    assert left.array.name == "a_in"
+
+    assert isinstance(send_stmt, spir.SendStatement)
+    assert isinstance(send_stmt.local_array, spir.Identifier)
+    assert send_stmt.local_array.name == "a_in"
+    assert isinstance(send_stmt.stream_name, spir.Identifier)
+    assert send_stmt.stream_name.name == "out"
+
+
+def test_remove_extern_field_copy_falls_back_to_output_extern_on_input_conflict():
+    kernel = parser.parse_string(
+        """
+        kernel @copy<N, K>(stream<f32, K>[N, 1] readonly a_in,
+                           stream<f32, K>[1, 1] writeonly out) {
+            place u16 i, u16 j in [0:N, 0:1] {
+                f32[K] a
+                f32[K] mirror
+            }
+            compute u16 i, u16 j in [0:N, 0:1] {
+                await receive(a, a_in[i, j])
+                await receive(mirror, a_in[i, j])
+                await map u16 k in [0:K] {
+                    a[k] = a[k] + 1.0
+                }
+                await send(a, out[0, 0])
+            }
+        }
+        """,
+        "test.sptl",
+    )
+
+    rect = _optimize_kernel_after_extern_lowering(kernel, N=4, K=4)
+
+    assert _place_field_names(rect) == ["mirror", "a_in", "out"]
+    assert len(rect.metadata.compute.statements) == 3
+
+    out_receive_stmt = rect.metadata.compute.statements[0]
+    mirror_receive_stmt = rect.metadata.compute.statements[1]
+    map_stmt = rect.metadata.compute.statements[2]
+
+    assert isinstance(out_receive_stmt, spir.ForeachStatement)
+    out_receive_assignment = out_receive_stmt.body[0]
+    assert isinstance(out_receive_assignment, spir.AssignmentStatement)
+    assert isinstance(out_receive_assignment.destination, spir.ArraySlice)
+    assert out_receive_assignment.destination.array.name == "out"
+
+    assert isinstance(mirror_receive_stmt, spir.ForeachStatement)
+    mirror_receive_assignment = mirror_receive_stmt.body[0]
+    assert isinstance(mirror_receive_assignment, spir.AssignmentStatement)
+    assert isinstance(mirror_receive_assignment.destination, spir.ArraySlice)
+    assert mirror_receive_assignment.destination.array.name == "mirror"
+
+    assert isinstance(map_stmt, spir.MapStatement)
+    map_assignment = map_stmt.body[0]
+    assert isinstance(map_assignment, spir.AssignmentStatement)
+    assert isinstance(map_assignment.destination, spir.ArraySlice)
+    assert isinstance(map_assignment.source.value, spir.BinaryOperator)
+    assert map_assignment.destination.array.name == "out"
+    left = map_assignment.source.value.left.value
+    assert isinstance(left, spir.ArraySlice)
+    assert left.array.name == "out"
+
+
+def test_do_not_remove_extern_field_copy_when_input_extern_is_read_twice():
+    kernel = parser.parse_string(
+        """
+        kernel @copy<N, K>(stream<f32, K>[N, 1] readonly a_in) {
+            place u16 i, u16 j in [0:N, 0:1] {
+                f32[K] a
+                f32[K] mirror
+                f32[K] left
+            }
+            compute u16 i, u16 j in [0:N, 0:1] {
+                await receive(a, a_in[i, j])
+                await receive(mirror, a_in[i, j])
+                left = a
+            }
+        }
+        """,
+        "test.sptl",
+    )
+
+    rect = _optimize_kernel_after_extern_lowering(kernel, N=4, K=4)
+
+    assert _place_field_names(rect) == ["a", "mirror", "left", "a_in"]
+    assert len(rect.metadata.compute.statements) == 3
+
+    first_receive_stmt = rect.metadata.compute.statements[0]
+    second_receive_stmt = rect.metadata.compute.statements[1]
+    left_map = rect.metadata.compute.statements[2]
+
+    assert isinstance(first_receive_stmt, spir.ForeachStatement)
+    first_receive_assignment = first_receive_stmt.body[0]
+    assert isinstance(first_receive_assignment, spir.AssignmentStatement)
+    assert isinstance(first_receive_assignment.destination, spir.ArraySlice)
+    assert first_receive_assignment.destination.array.name == "a"
+
+    assert isinstance(second_receive_stmt, spir.ForeachStatement)
+    second_receive_assignment = second_receive_stmt.body[0]
+    assert isinstance(second_receive_assignment, spir.AssignmentStatement)
+    assert isinstance(second_receive_assignment.destination, spir.ArraySlice)
+    assert second_receive_assignment.destination.array.name == "mirror"
+
+    assert isinstance(left_map, spir.MapStatement)
+    left_assignment = left_map.body[0]
+    assert isinstance(left_assignment, spir.AssignmentStatement)
+    assert isinstance(left_assignment.source.value, spir.ArraySlice)
+    assert left_assignment.source.value.array.name == "a"
+
+
+def test_remove_extern_field_copy_allows_direct_for_loop_use():
+    kernel = parser.parse_string(
+        """
+        kernel @copy<N, K>(stream<f32, K>[N, 1] readonly a_in,
+                           stream<f32, K>[1, 1] writeonly out) {
+            place u16 i, u16 j in [0:N, 0:1] {
+                f32[K] a
+            }
+            compute u16 i, u16 j in [0:N, 0:1] {
+                await receive(a, a_in[i, j])
+                for u16 k in [0:K] {
+                    a[k] = a[k] + 1.0
+                }
+                await send(a, out[0, 0])
+            }
+        }
+        """,
+        "test.sptl",
+    )
+
+    rect = _optimize_kernel_after_extern_lowering(kernel, N=4, K=4)
+
+    assert _place_field_names(rect) == ["a_in", "out"]
+    assert len(rect.metadata.compute.statements) == 2
+
+    loop_stmt = rect.metadata.compute.statements[0]
+    send_stmt = rect.metadata.compute.statements[1]
+
+    assert isinstance(loop_stmt, spir.ForStatement)
+    loop_assignment = loop_stmt.body[0]
+    assert isinstance(loop_assignment, spir.AssignmentStatement)
+    assert isinstance(loop_assignment.destination, spir.ArraySlice)
+    assert isinstance(loop_assignment.source.value, spir.BinaryOperator)
+    assert loop_assignment.destination.array.name == "a_in"
+    left = loop_assignment.source.value.left.value
+    assert isinstance(left, spir.ArraySlice)
+    assert left.array.name == "a_in"
+
+    assert isinstance(send_stmt, spir.SendStatement)
+    assert isinstance(send_stmt.local_array, spir.Identifier)
+    assert send_stmt.local_array.name == "a_in"
+    assert isinstance(send_stmt.stream_name, spir.Identifier)
+    assert send_stmt.stream_name.name == "out"
 
 
 def test_do_not_remove_copy_across_for_boundary():

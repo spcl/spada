@@ -21,7 +21,7 @@ import copy
 from collections import defaultdict
 from dataclasses import dataclass
 
-from spatialstencil.syntax.spatial_ir import irnodes as spir
+from spatialstencil.syntax.spatial_ir import irnodes as spir, passes
 from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
 
 
@@ -1052,6 +1052,49 @@ def _optimize_region(
     return optimized
 
 
+def _extract_extern_bulk_input_copy(
+    stmt: spir.Statement,
+    local_field: spir.Identifier,
+    extern_fields: set[spir.Identifier],
+    all_place_fields: set[spir.Identifier],
+) -> spir.Identifier | None:
+    """Return the extern source for a lowered bulk receive into ``local_field``."""
+    producer = _extract_foreach_bulk_producer(stmt, {local_field}, all_place_fields)
+    if producer is None or producer.destination_field != local_field:
+        return None
+    if producer.source.field not in extern_fields:
+        return None
+    return producer.source.field
+
+
+def _extract_extern_bulk_output_copy(
+    stmt: spir.Statement,
+    local_field: spir.Identifier,
+    extern_fields: set[spir.Identifier],
+) -> spir.Identifier | None:
+    """Return the extern destination for a whole-array send from ``local_field``."""
+    consumer = _extract_whole_array_send_consumer(stmt)
+    if consumer is None or consumer.source_field != local_field:
+        return None
+    if not isinstance(stmt, spir.SendStatement):
+        return None
+    target_field = _underlying_field(stmt.stream_name)
+    if target_field not in extern_fields:
+        return None
+    return target_field
+
+
+def _extern_alias_target_is_safe(
+    statements: list[spir.Statement],
+    skipped_statement_index: int,
+    target_field: spir.Identifier,
+) -> bool:
+    """Return whether ``target_field`` is unused outside the boundary copy being removed."""
+    other_statements = statements[:skipped_statement_index] + statements[skipped_statement_index + 1:]
+    referenced_fields = _fields_referenced_in_statements(other_statements, {target_field})
+    return target_field not in referenced_fields
+
+
 class RemoveRedundantCopies:
     """
     Apply whole-field copy elimination to each rectangle's compute block.
@@ -1141,3 +1184,75 @@ def eliminate_redundant_copies(rectangles: list[Rectangle[PEBlock]]) -> None:
     """
     _remove_redundant_copies(rectangles)
     remove_single_element_index_copies(rectangles)
+
+
+def remove_extern_field_copies(rectangles: list[Rectangle[PEBlock]]) -> None:
+    """Remove bulk copy statements whose source/destination is an extern field,
+    if the internal field acts as a pure forwarding buffer between the extern field and other fields.
+    """
+    for rect in rectangles:
+        changed = True
+        while changed:
+            changed = False
+            field_declarations = {decl.field_name: decl for decl in rect.metadata.place.statements}
+            all_place_fields = set(field_declarations)
+            extern_fields = {identifier for identifier, decl in field_declarations.items() if decl.is_extern}
+            non_extern_fields = [identifier for identifier, decl in field_declarations.items() if not decl.is_extern]
+
+            statements = rect.metadata.compute.statements
+            for local_field in non_extern_fields:
+                local_decl = field_declarations[local_field]
+                input_candidates = [
+                    (index, extern_field)
+                    for index, stmt in enumerate(statements)
+                    for extern_field in
+                    [_extract_extern_bulk_input_copy(stmt, local_field, extern_fields, all_place_fields)]
+                    if extern_field is not None
+                ]
+                output_candidates = [
+                    (index, extern_field)
+                    for index, stmt in enumerate(statements)
+                    for extern_field in [_extract_extern_bulk_output_copy(stmt, local_field, extern_fields)]
+                    if extern_field is not None
+                ]
+
+                safe_input = None
+                if len(input_candidates) == 1:
+                    input_index, input_field = input_candidates[0]
+                    if field_declarations[input_field].dtype == local_decl.dtype and _extern_alias_target_is_safe(
+                            statements,
+                            input_index,
+                            input_field,
+                    ):
+                        safe_input = (input_index, input_field)
+
+                safe_output = None
+                if len(output_candidates) == 1:
+                    output_index, output_field = output_candidates[0]
+                    if field_declarations[output_field].dtype == local_decl.dtype and _extern_alias_target_is_safe(
+                            statements,
+                            output_index,
+                            output_field,
+                    ):
+                        safe_output = (output_index, output_field)
+
+                if safe_input is not None:
+                    removed_statement_index, target_field = safe_input
+                elif safe_output is not None:
+                    removed_statement_index, target_field = safe_output
+                else:
+                    continue
+
+                rewriter = passes.FindAndReplace({local_field: target_field})
+                rewritten_statements: list[spir.Statement] = []
+                for index, stmt in enumerate(statements):
+                    if index == removed_statement_index:
+                        continue
+                    rewritten = rewriter.visit(stmt)
+                    if not isinstance(rewritten, spir.Statement):
+                        raise TypeError(f'Expected statement rewrite, got "{type(rewritten).__name__}"')
+                    rewritten_statements.append(rewritten)
+
+                rect.metadata.compute.statements = rewritten_statements
+                changed = True
+                break
