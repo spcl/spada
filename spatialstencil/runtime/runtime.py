@@ -222,7 +222,7 @@ def copy_back_benchmark_cycles(runtime: crt.SdkRuntime, metadata: ProgramMetadat
     :param metadata: Program metadata containing input/output information
     :return: Numpy array containing cycle counts
     """
-    cycle_start, cycle_stop = copy_back_benchmark_cycles(runtime, metadata)
+    cycle_start, cycle_stop = copy_back_benchmark_data(runtime, metadata)
     return cycle_stop - cycle_start
 
 
