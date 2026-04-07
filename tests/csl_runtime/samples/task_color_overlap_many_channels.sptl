@@ -1,0 +1,149 @@
+// Small runtime regression for local-task IDs overlapping communication colors.
+//
+// The program uses only 2 PEs but allocates 9 explicit channels (0..8), which
+// forces CSL colors 0..8 to be reserved. Prior to the fix in
+// plan_task_bindings(..., disallowed_task_ids=colors), the first local task
+// would still bind to hardware task ID 8, colliding with color 8.
+//
+// PE (1,0) sends its scalar over 9 distinct channels to PE (0,0). PE (0,0)
+// receives all 9 values asynchronously, adds them to its own local input, and
+// writes the result:
+//
+//   out = inp[0,0] + 9 * inp[1,0]
+//
+// This keeps the simulation tiny while reproducing the high-color regime that
+// previously only showed up in larger collectives such as tree_reduce_2D with
+// LX > 8.
+kernel @task_color_overlap_many_channels<>(
+    stream<f32, 1>[2, 1] readonly inp,
+    stream<f32, 1>[1, 1] writeonly out
+) {
+    place u16 i, u16 j in [0:2, 0:1] {
+        f32 local
+        f32 r0
+        f32 r1
+        f32 r2
+        f32 r3
+        f32 r4
+        f32 r5
+        f32 r6
+        f32 r7
+        f32 r8
+        f32 result
+        f32[1] out_buf
+    }
+
+    dataflow u16 i#0, u16 j#0 in [0:1, 0:1] {
+        stream<f32> west0 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 0
+        }
+        stream<f32> west1 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 1
+        }
+        stream<f32> west2 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 2
+        }
+        stream<f32> west3 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 3
+        }
+        stream<f32> west4 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 4
+        }
+        stream<f32> west5 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 5
+        }
+        stream<f32> west6 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 6
+        }
+        stream<f32> west7 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 7
+        }
+        stream<f32> west8 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 8
+        }
+    }
+
+    dataflow u16 i#1, u16 j#1 in [1:2, 0:1] {
+        stream<f32> west0 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 0
+        }
+        stream<f32> west1 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 1
+        }
+        stream<f32> west2 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 2
+        }
+        stream<f32> west3 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 3
+        }
+        stream<f32> west4 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 4
+        }
+        stream<f32> west5 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 5
+        }
+        stream<f32> west6 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 6
+        }
+        stream<f32> west7 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 7
+        }
+        stream<f32> west8 = relative_stream(-1, 0) {
+            hops = [(-1, 0)],
+            channel = 8
+        }
+    }
+
+    compute u16 i#2, u16 j#2 in [0:1, 0:1] {
+        await receive(local, inp[i#2, j#2])
+
+        completion c0 = receive(r0, west0)
+        completion c1 = receive(r1, west1)
+        completion c2 = receive(r2, west2)
+        completion c3 = receive(r3, west3)
+        completion c4 = receive(r4, west4)
+        completion c5 = receive(r5, west5)
+        completion c6 = receive(r6, west6)
+        completion c7 = receive(r7, west7)
+        completion c8 = receive(r8, west8)
+
+        awaitall
+
+        result = local + r0 + r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8
+        out_buf[0] = result
+        await send(out_buf, out[i#2, j#2])
+    }
+
+    compute u16 i#3, u16 j#3 in [1:2, 0:1] {
+        await receive(local, inp[i#3, j#3])
+
+        completion c0 = send(local, west0)
+        completion c1 = send(local, west1)
+        completion c2 = send(local, west2)
+        completion c3 = send(local, west3)
+        completion c4 = send(local, west4)
+        completion c5 = send(local, west5)
+        completion c6 = send(local, west6)
+        completion c7 = send(local, west7)
+        completion c8 = send(local, west8)
+
+        awaitall
+    }
+}

@@ -53,3 +53,22 @@ def test_csl_runtime_task_recycling_sample_lowers(filename: str):
     combined = '\n'.join(f.code for f in csl_files)
     assert combined.strip(), 'expected non-empty CSL'
     assert '__task_slot_' in combined, 'expected task-ID recycling in generated CSL'
+
+
+def test_codegen_avoids_local_task_id_color_overlap():
+    path = os.path.join(_CSL_RUNTIME_TASK_RECYCLING_SAMPLES, 'task_color_overlap_many_channels.sptl')
+    kernel = parser.parse_file(path)
+    kernel = passes.constexpr_propagation(kernel)
+
+    csl_files = lower_spatial_ir_to_csl(
+        kernel, task_fusion=False, copy_elision=True, prune_memory=True)
+    combined = '\n'.join(f.code for f in csl_files)
+
+    local_task_ids = {int(v) for v in re.findall(r'@get_local_task_id\((\d+)\)', combined)}
+    colors = {int(v) for v in re.findall(r'@get_color\((\d+)\)', combined)}
+
+    assert 8 in colors, 'sample should force color 8 to be allocated'
+    assert local_task_ids
+    assert local_task_ids.isdisjoint(colors), (
+        f'local task IDs overlap communication colors: ids={sorted(local_task_ids)}, colors={sorted(colors)}'
+    )
