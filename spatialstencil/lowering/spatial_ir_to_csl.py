@@ -447,7 +447,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
                         color_map,
                         tasks,
                         task_bindings,
-                        benchmark_postamble,
+                        benchmark_code.kernel_postamble,
                         indent='        ',
                     )
                 except KeyError as e:
@@ -475,7 +475,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
                     color_map,
                     tasks,
                     task_bindings,
-                    benchmark_code.benchmark_postamble,
+                    benchmark_code.kernel_postamble,
                     indent='    ',
                 )
             except KeyError as e:
@@ -1597,25 +1597,19 @@ def _add_benchmarking_fields(rectangles: list[Rectangle[PEBlock]], sync_benchmar
             spir.FieldDeclaration(
                 field_name=spir.Identifier('__benchmark_start', 0),
                 dtype=spir.ArrayType(spir.ScalarType.u16, [3]),
-                is_extern=not sync_benchmarking,
+                is_extern=True,
             ))
         rect.metadata.place.statements.append(
             spir.FieldDeclaration(
                 field_name=spir.Identifier('__benchmark_stop', 0),
                 dtype=spir.ArrayType(spir.ScalarType.u16, [3]),
-                is_extern=not sync_benchmarking,
+                is_extern=True,
             ))
         if sync_benchmarking:
             rect.metadata.place.statements.append(
                 spir.FieldDeclaration(
-                    field_name=spir.Identifier('time_memcpy', 0),
-                    dtype=spir.ArrayType(spir.ScalarType.f32, [3]),
-                    is_extern=True,
-                ))
-            rect.metadata.place.statements.append(
-                spir.FieldDeclaration(
-                    field_name=spir.Identifier('time_ref', 0),
-                    dtype=spir.ArrayType(spir.ScalarType.f32, [2]),
+                    field_name=spir.Identifier('__benchmark_refclock', 0),
+                    dtype=spir.ArrayType(spir.ScalarType.u16, [3]),
                     is_extern=True,
                 ))
 

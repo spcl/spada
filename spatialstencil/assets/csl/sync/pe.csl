@@ -49,7 +49,7 @@ const c_bcast_oq = @get_output_queue(input_queues[2]);
 const timestamp = @import_module("<time>");
 
 // tsc_size_words = 3
-var tscRefBuffer = @zeros([timestamp.tsc_size_words]u16);
+var tscRefBuffer: *[timestamp.tsc_size_words]u16;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Main memory (48KB)
@@ -104,7 +104,9 @@ var fab_trans_data_bcast_wdsd = @get_dsd(fabout_dsd, .{
 
 
 // Each row performs a sync from the last PE to first PE
-fn f_sync() void {
+fn f_sync(refClock: *[3]u16) void {
+    tscRefBuffer = refClock;
+
     // sync a row
     if (last_px){
         // px = width-1: send sync signal
@@ -163,7 +165,7 @@ task f_sync_bcast() void {
 // T is regarded as clock 0 because all PEs sync with P0.0
 task f_exit() void {
 
-    timestamp.get_timestamp(&tscRefBuffer);
+    timestamp.get_timestamp(tscRefBuffer);
 
     //sys_mod.unblock_cmd_stream();
     f_callback();

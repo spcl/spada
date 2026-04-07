@@ -55,8 +55,9 @@ const timestamp = @import_module("<time>");
 const sync_mod = @import_module("sync/pe.csl", @concat_structs(sync_params, .{
     .f_callback = sys_mod.unblock_cmd_stream,
     .input_queues = [3]u16{2, 3, 4},
-    .output_queues = [3]u16{2, 3, 4},
+    .output_queues = [3]u16{2, 3, 4}
 }));
+
 """,
         helpers="""
 fn f_tic() void {
@@ -69,49 +70,14 @@ fn f_toc() void {
     sys_mod.unblock_cmd_stream();
 }
 
-fn f_memcpy_timestamps() void {
-    var lo_: u16 = 0;
-    var hi_: u16 = 0;
-
-    lo_ = __benchmark_start[0];
-    hi_ = __benchmark_start[1];
-    time_memcpy[0] = @bitcast(f32, (@as(u32, hi_) << @as(u16, 16)) | @as(u32, lo_));
-
-    lo_ = __benchmark_start[2];
-    hi_ = __benchmark_stop[0];
-    time_memcpy[1] = @bitcast(f32, (@as(u32, hi_) << @as(u16, 16)) | @as(u32, lo_));
-
-    lo_ = __benchmark_stop[1];
-    hi_ = __benchmark_stop[2];
-    time_memcpy[2] = @bitcast(f32, (@as(u32, hi_) << @as(u16, 16)) | @as(u32, lo_));
-
-    sys_mod.unblock_cmd_stream();
-}
-
 fn f_sync() void {
-    sync_mod.f_sync();
+    sync_mod.f_sync(&__benchmark_refclock);
 }
 
-fn f_reference_timestamps() void {
-    var lo_: u16 = 0;
-    var hi_: u16 = 0;
-
-    lo_ = sync_mod.tscRefBuffer[0];
-    hi_ = sync_mod.tscRefBuffer[1];
-    time_ref[0] = @bitcast(f32, (@as(u32, hi_) << @as(u16, 16)) | @as(u32, lo_));
-
-    lo_ = sync_mod.tscRefBuffer[2];
-    hi_ = 0;
-    time_ref[1] = @bitcast(f32, (@as(u32, hi_) << @as(u16, 16)) | @as(u32, lo_));
-
-    sys_mod.unblock_cmd_stream();
-}
 """,
         footer_exports="""    @export_symbol(f_tic, "f_tic");
     @export_symbol(f_toc, "f_toc");
-    @export_symbol(f_memcpy_timestamps, "f_memcpy_timestamps");
     @export_symbol(f_sync, "f_sync");
-    @export_symbol(f_reference_timestamps, "f_reference_timestamps");
 """,
     )
 
@@ -178,9 +144,7 @@ def generate_sync_tile_binding() -> str:
 def generate_sync_layout_exports() -> str:
     return """    @export_name("f_tic", fn()void);
     @export_name("f_toc", fn()void);
-    @export_name("f_memcpy_timestamps", fn()void);
     @export_name("f_sync", fn()void);
-    @export_name("f_reference_timestamps", fn()void);
 """
 
 

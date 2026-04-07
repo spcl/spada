@@ -3,19 +3,12 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Union, TYPE_CHECKING, Optional
+from typing import Any, Dict, List, Union, Tuple, TYPE_CHECKING, Optional
 import numpy as np
+import numpy.typing as npt
 import time
 
-SYNC_REQUIRED_SYMBOLS = (
-    "f_sync",
-    "f_tic",
-    "f_toc",
-    "f_memcpy_timestamps",
-    "f_reference_timestamps",
-    "time_memcpy",
-    "time_ref",
-)
+SYNC_REQUIRED_SYMBOLS = ("f_sync", "f_tic", "f_toc", "__benchmark_refclock")
 
 if TYPE_CHECKING:
     from spatialstencil.runtime import cerebras_runtime_stub as crt
@@ -175,17 +168,25 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
     np.copyto(data, sdk_buf.transpose(1, 0, 2))
 
 
-def copy_back_benchmark_data(runtime: crt.SdkRuntime, metadata: ProgramMetadata) -> np.ndarray:
+def convert_timestamp(hw_timestamp: npt.NDArray[np.uint32]) -> npt.NDArray[np.uint64]:
+    # Convert 3x16-bit timestamp to the 48-bit little endian integer
+    return (
+        hw_timestamp[:, :, 0].astype(np.uint64)
+        | (hw_timestamp[:, :, 1].astype(np.uint64) << 16)
+        | (hw_timestamp[:, :, 2].astype(np.uint64) << 32)
+    ).astype(np.uint64)
+
+
+def copy_back_benchmark_data(runtime: crt.SdkRuntime, metadata: ProgramMetadata) -> Tuple[np.ndarray, np.ndarray]:
     """
     Copy back benchmarking data from the device.
-    
+
     :param runtime: The Cerebras SDK runtime object to perform the copy operation
     :param metadata: Program metadata containing input/output information
-    :return: Numpy array containing cycle counts
+    :return: A tuple of Numpy arrays containing (cycles at start time, cycles at end time)
     """
     cycle_start = np.zeros(metadata.kernel_dims + [3], dtype=np.uint32)
     cycle_stop = np.zeros(metadata.kernel_dims + [3], dtype=np.uint32)
-    cycle_counts = np.zeros(metadata.kernel_dims, dtype=np.uint64)
     runtime.memcpy_d2h(
         cycle_start.ravel(),
         runtime.get_id("__benchmark_start"),
@@ -195,7 +196,8 @@ def copy_back_benchmark_data(runtime: crt.SdkRuntime, metadata: ProgramMetadata)
         streaming=False,
         data_type=crt.MemcpyDataType.MEMCPY_16BIT,
         order=crt.MemcpyOrder.ROW_MAJOR,
-        nonblock=False)
+        nonblock=False,
+    )
     runtime.memcpy_d2h(
         cycle_stop.ravel(),
         runtime.get_id("__benchmark_stop"),
@@ -205,69 +207,69 @@ def copy_back_benchmark_data(runtime: crt.SdkRuntime, metadata: ProgramMetadata)
         streaming=False,
         data_type=crt.MemcpyDataType.MEMCPY_16BIT,
         order=crt.MemcpyOrder.ROW_MAJOR,
-        nonblock=False)
-    # Convert 3x16-bit timestamp to the 48-bit little endian integer
-    cycle_start = (
-        cycle_start[:, :, 0].astype(np.uint64) | (cycle_start[:, :, 1].astype(np.uint64) << 16) |
-        (cycle_start[:, :, 2].astype(np.uint64) << 32))
-    cycle_stop = (
-        cycle_stop[:, :, 0].astype(np.uint64) | (cycle_stop[:, :, 1].astype(np.uint64) << 16) |
-        (cycle_stop[:, :, 2].astype(np.uint64) << 32))
-    cycle_counts = cycle_stop - cycle_start
-    return cycle_counts
+        nonblock=False,
+    )
+    cycle_start = convert_timestamp(cycle_start)
+    cycle_stop = convert_timestamp(cycle_stop)
+    return cycle_start, cycle_stop
 
 
-def copy_back_sync_buffer(name: str, elem_per_pe: int, runtime: crt.SdkRuntime, metadata: ProgramMetadata) -> np.ndarray:
+def copy_back_benchmark_cycles(runtime: crt.SdkRuntime, metadata: ProgramMetadata) -> np.ndarray:
     """
-    Copy back a sync-benchmarking buffer in host (width, height, elem) order.
+    Copy back benchmarking data from the device.
+
+    :param runtime: The Cerebras SDK runtime object to perform the copy operation
+    :param metadata: Program metadata containing input/output information
+    :return: Numpy array containing cycle counts
     """
-    width, height = metadata.kernel_dims
-    sdk_buf = np.empty((height, width, elem_per_pe), dtype=np.float32)
+    cycle_start, cycle_stop = copy_back_benchmark_cycles(runtime, metadata)
+    return cycle_stop - cycle_start
+
+
+def copy_back_sync_buffer(runtime: crt.SdkRuntime, metadata: ProgramMetadata) -> np.ndarray:
+    """
+    Copy back the reference clock sync-benchmarking buffer.
+
+    :param runtime: The Cerebras SDK runtime object to perform the copy operation
+    :param metadata: Program metadata containing input/output information
+    :return: Numpy array containing the reference clock for each PE
+    """
+    cycle_ref = np.zeros(metadata.kernel_dims + [3], dtype=np.uint32)
     runtime.memcpy_d2h(
-        sdk_buf.ravel(),
-        runtime.get_id(name),
+        cycle_ref.ravel(),
+        runtime.get_id("__benchmark_refclock"),
         0,
         0,
-        width,
-        height,
-        elem_per_pe,
+        *cycle_ref.shape,
         streaming=False,
-        data_type=crt.MemcpyDataType.MEMCPY_32BIT,
+        data_type=crt.MemcpyDataType.MEMCPY_16BIT,
         order=crt.MemcpyOrder.ROW_MAJOR,
         nonblock=False,
     )
-    return sdk_buf.transpose(1, 0, 2)
+    return convert_timestamp(cycle_ref)
 
 
 def copy_back_sync_benchmark_data(runtime: crt.SdkRuntime, metadata: ProgramMetadata) -> np.ndarray:
     """
     Copy back sync-benchmarking data and reconstruct the corrected global cycle count.
+
+    :param runtime: The Cerebras SDK runtime object to perform the copy operation
+    :param metadata: Program metadata containing input/output information
+    :return: Numpy scalar containing the total number of cycles spent on the chip
+             for the benchmarked period.
     """
-    runtime.launch("f_memcpy_timestamps", nonblock=False)
-    time_memcpy = copy_back_sync_buffer("time_memcpy", 3, runtime, metadata).view(np.uint32)
-
-    runtime.launch("f_reference_timestamps", nonblock=False)
-    time_ref = copy_back_sync_buffer("time_ref", 2, runtime, metadata).view(np.uint32)
-
-    time_start = (
-        (time_memcpy[:, :, 0] & np.uint32(0x0000FFFF)).astype(np.uint64) |
-        ((time_memcpy[:, :, 0] >> np.uint32(16)).astype(np.uint64) << np.uint64(16)) |
-        ((time_memcpy[:, :, 1] & np.uint32(0x0000FFFF)).astype(np.uint64) << np.uint64(32)))
-    time_end = (
-        ((time_memcpy[:, :, 1] >> np.uint32(16)).astype(np.uint64)) |
-        ((time_memcpy[:, :, 2] & np.uint32(0x0000FFFF)).astype(np.uint64) << np.uint64(16)) |
-        ((time_memcpy[:, :, 2] >> np.uint32(16)).astype(np.uint64) << np.uint64(32)))
-    reference = (
-        (time_ref[:, :, 0] & np.uint32(0x0000FFFF)).astype(np.uint64) |
-        ((time_ref[:, :, 0] >> np.uint32(16)).astype(np.uint64) << np.uint64(16)) |
-        ((time_ref[:, :, 1] & np.uint32(0x0000FFFF)).astype(np.uint64) << np.uint64(32)))
-
+    # Compute propagation delay (one cycle per link) to synchronize reference clocks
     width, height = metadata.kernel_dims
     propagation_delay = np.arange(width, dtype=np.uint64)[:, None] + np.arange(height, dtype=np.uint64)[None, :]
+
+    time_start, time_end = copy_back_benchmark_data(runtime, metadata)
+    reference = copy_back_sync_buffer(runtime, metadata)
     reference = reference - propagation_delay
     time_start = time_start - reference
     time_end = time_end - reference
-    return time_end - time_start
+
+    # Return the total time spent on the chip
+    return time_end.max() - time_start.min()
 
 
 def print_cycle_counts(label: str, cycle_counts: np.ndarray) -> None:
@@ -276,13 +278,15 @@ def print_cycle_counts(label: str, cycle_counts: np.ndarray) -> None:
     """
     values = np.asarray(cycle_counts)
     if values.ndim == 0 or values.size == 1:
-        print(f"{label}: {int(values.reshape(())):,}")
+        print(f"{label} total time: {int(values.reshape(())):,}")
         return
 
-    print(f"{label} stats:\n"
-          f"  Min:    {np.min(values):,}\n"
-          f"  Max:    {np.max(values):,}\n"
-          f"  Median: {np.median(values).astype(np.uint64):,}")
+    print(
+        f"{label} stats:\n"
+        f"  Min:    {np.min(values):,}\n"
+        f"  Max:    {np.max(values):,}\n"
+        f"  Median: {np.median(values).astype(np.uint64):,}"
+    )
 
 
 ########################################################
@@ -410,6 +414,9 @@ class Program:
                 # Use flatten_copy to copy data to device
                 flatten_copy(name, data, expected_shape, self.runtime, self.metadata, self.benchmark)
 
+            if self.benchmark and sync_benchmarking and self.metadata.memcpy_mode:
+                self.runtime.launch("f_sync", nonblock=False)
+
             # Run the program
             for i in range(self.repetitions):
                 if self.metadata.memcpy_mode:
@@ -417,7 +424,6 @@ class Program:
                         time.sleep(5.0)
                     print("Launching kernel...", flush=True, end="")
                     if self.benchmark and sync_benchmarking:
-                        self.runtime.launch("f_sync", nonblock=False)
                         self.runtime.launch("f_tic", nonblock=False)
                     self.runtime.launch(self.metadata.kernel_name, *scalar_args, nonblock=False)
                     if self.benchmark and sync_benchmarking:
@@ -428,14 +434,11 @@ class Program:
                         cycle_counts = (
                             copy_back_sync_benchmark_data(self.runtime, self.metadata)
                             if sync_benchmarking
-                            else copy_back_benchmark_data(self.runtime, self.metadata)
+                            else copy_back_benchmark_cycles(self.runtime, self.metadata)
                         )
                         num_digits = len(str(self.repetitions))
                         np.save(self.output_dir / f"perf_cycles_{i:0{num_digits}d}.npy", cycle_counts)
                         print_cycle_counts(f"Iteration {i} cycle count", cycle_counts)
-
-                        if sync_benchmarking:
-                            break  # TODO: Hangs in subsequent iterations
 
             # Copy outputs back from device
             results = {}
