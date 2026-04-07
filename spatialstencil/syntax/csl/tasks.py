@@ -117,7 +117,6 @@ def create_csl_tasks(
     # Loop over completion DAG to coarsen completions to tasks
     for cnode in nx.topological_sort(completion_dag):
         node = block.statements[cnode.statement_id]
-
         # Figure out whether this task type is a local task or a data task
         if (isinstance(node, spir.ForeachStatement) and dsd_ops.get_dsd_op(dtypes, node) is None and
                 cnode.optype == 'post'):
@@ -260,13 +259,18 @@ def create_csl_tasks(
             pred_task = cnode_to_task_id[pred]
             if pred_task == stmt_task:  # Skip sequential edges
                 continue
+            # Predecessor lived on the contracted empty last task; no task slot remains for it.
+            if pred_task >= len(result):
+                continue
 
             has_edge = any(e == stmt_task for e, _ in result[pred_task].outgoing)
             if not has_edge:
                 task = result[pred_task]
                 if task.task_type == "local":
                     task.statements.append("TERMINATOR")
-                    if stmt_task in task_has_activate or result[stmt_task].task_type == 'data':
+                    # After contracting an empty trailing task, stmt_task may equal len(result), meaning exit.
+                    succ_is_data = stmt_task < len(result) and result[stmt_task].task_type == 'data'
+                    if stmt_task in task_has_activate or succ_is_data:
                         task.outgoing.append((stmt_task, InterTaskEdge.UNBLOCK))
                     else:
                         task.outgoing.append((stmt_task, InterTaskEdge.ACTIVATE))

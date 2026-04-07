@@ -100,6 +100,17 @@ def test_two_phase_split():
         print('=============')
 
 
+def test_neighbor_exchange_lowers():
+    """``neighbor_exchange.sptl`` lowers to CSL without errors (neighbor send/receive)."""
+    file = os.path.join(os.path.dirname(__file__), 'samples', 'neighbor_exchange.sptl')
+    kernel = parser.parse_file(file)
+    kernel = passes.concretize_parameters(kernel, K=4)
+    kernel = passes.constexpr_propagation(kernel)
+    csl_files = lower_spatial_ir_to_csl(kernel)
+    assert csl_files, 'expected at least one generated CSL file'
+    assert all(f.code.strip() for f in csl_files), 'expected non-empty CSL bodies'
+
+
 def test_laplacian():
     file = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'stencils', 'laplacian_routed.sptl')
     kernel = parser.parse_file(file)
@@ -136,5 +147,6 @@ if __name__ == '__main__':
     for _fname, _params in _COLLECTIVES_2D:
         test_collective_2d(_fname, _params)
     test_two_phase_split()
+    test_neighbor_exchange_lowers()
     test_laplacian()
     test_forward_sum()
