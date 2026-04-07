@@ -106,13 +106,16 @@ def reserve_codegen_resources(csl_constants_module) -> Iterator[SyncBenchmarkRes
     resources = reserve_sync_resources(csl_constants_module.COLORS, csl_constants_module.LOCAL_TASK_IDS)
     original_colors = csl_constants_module.COLORS
     original_local_task_ids = csl_constants_module.LOCAL_TASK_IDS
+    original_data_task_ids = csl_constants_module.DATA_TASK_IDS
     csl_constants_module.COLORS = resources.available_colors
     csl_constants_module.LOCAL_TASK_IDS = resources.available_local_task_ids
+    csl_constants_module.DATA_TASK_IDS = resources.available_colors
     try:
         yield resources
     finally:
         csl_constants_module.COLORS = original_colors
         csl_constants_module.LOCAL_TASK_IDS = original_local_task_ids
+        csl_constants_module.DATA_TASK_IDS = original_data_task_ids
 
 
 def generate_sync_layout_setup(width: int, height: int, resources: SyncBenchmarkResources) -> str:
