@@ -700,21 +700,16 @@ def _allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Ke
                               'to lowering to CSL')
 
         if outbound:
-            # Look up channel in color map
+            # channel_to_color already holds the final color ID
             this_color = channel_to_color[channel_offset + resolved]
 
-            # Add to mapping
-            result[name + "_OUT"] = csl.COLORS[this_color]
-            # Declare color
+            result[name + "_OUT"] = this_color
             header.write(f'const {name}_color_out: color = @get_color({result[name + "_OUT"]});\n')
 
         if inbound:
-            # Look up channel in color map
             this_color = channel_to_color[channel_offset + resolved]
 
-            # Add to mapping
-            result[name + "_IN"] = csl.COLORS[this_color]
-            # Declare color
+            result[name + "_IN"] = this_color
             header.write(f'const {name}_color_in: color = @get_color({result[name + "_IN"]});\n')
 
     if result:
