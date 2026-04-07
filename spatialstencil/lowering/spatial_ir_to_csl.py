@@ -704,7 +704,7 @@ def _allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Ke
             this_color = channel_to_color[channel_offset + resolved]
 
             # Add to mapping
-            result[name + "_OUT"] = csl.COLORS[this_color]
+            result[name + "_OUT"] = this_color
             # Declare color
             header.write(f'const {name}_color_out: color = @get_color({result[name + "_OUT"]});\n')
 
@@ -713,7 +713,7 @@ def _allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Ke
             this_color = channel_to_color[channel_offset + resolved]
 
             # Add to mapping
-            result[name + "_IN"] = csl.COLORS[this_color]
+            result[name + "_IN"] = this_color
             # Declare color
             header.write(f'const {name}_color_in: color = @get_color({result[name + "_IN"]});\n')
 
