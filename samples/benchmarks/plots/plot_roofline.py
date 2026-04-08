@@ -1,3 +1,63 @@
+"""plot_roofline.py — Roofline plot for Cerebras WSE-2 and NVIDIA A100.
+
+QUICK START
+-----------
+Empty roofline (hardware ceilings only):
+
+    python plot_roofline.py
+
+Add GEMV data (all k values, 750×994 shape):
+
+    python plot_roofline.py --gemv-csv gemv_750_994.csv
+
+Add GEMV data for a single block size k=16:
+
+    python plot_roofline.py --gemv-csv gemv_750_994.csv --k 16
+
+Add 2-D reduce collectives (all k, all methods, both sources):
+
+    python plot_roofline.py --reduce-csv reduce2d_fixed_pxpy_df.csv
+
+Filter reduce to k=2048 elements/PE and only two methods:
+
+    python plot_roofline.py \\
+        --reduce-csv reduce2d_fixed_pxpy_df.csv \\
+        --reduce-k 2048 \\
+        --reduce-methods twophase_reduce_2d tree_reduce_2d
+
+Combine GEMV and reduce with a custom output directory:
+
+    python plot_roofline.py \\
+        --gemv-csv gemv_750_994.csv --k 16 \\
+        --reduce-csv reduce2d_fixed_pxpy_df.csv --reduce-k 2048 \\
+        --output-dir my_plots/
+
+EXPECTED CSV COLUMNS
+--------------------
+GEMV CSV  (--gemv-csv):
+    shape_label, px, py, k, series, source, time_us[, ci_low_us, ci_high_us]
+    - series: "WSE-2 GEMV", "WSE-2 GEMV Two-phase", "A100 GEMV CUBLAS"
+    - Only rows with shape_label=="750x994" are used.
+
+Reduce CSV  (--reduce-csv):
+    x, method, source, time_us[, ci_low_us, ci_high_us]
+    - x: message size in bytes (= k_count × 4 for f32)
+    - method: chain_reduce_2d | tree_reduce_2d | twophase_reduce_2d
+    - source: "This work" (filled marker) | "HPDC24" (hollow marker, dashed)
+    - PE grid is assumed to be 512×512 (hardcoded in ReduceMetrics).
+
+EXTENDING TO NEW OPERATIONS
+---------------------------
+1. Subclass OperationMetrics and implement flops() and bytes_transferred().
+2. Define COLOR_MAP, MARKER_MAP, and optionally MARKERFACECOLOR_MAP dicts.
+3. Call load_series() with the new metrics instance and add the result to
+   data_series before calling plot_roofline().
+
+OUTPUT
+------
+Saves roofline.png (300 dpi) and roofline.pdf to --output-dir
+(default: plots/roofline_plots/ next to this script).
+"""
 from __future__ import annotations
 
 import argparse
@@ -114,7 +174,7 @@ class RooflineDataSeries:
     color: str
     marker: str
     linestyle: str = "-"
-    markerfacecolor: str | None = None   # None means use the series color (filled)
+    fillstyle: str = "full"   # "full" | "none" (hollow) | "left" (half-filled)
 
 
 # ── Series loader ─────────────────────────────────────────────────────────────
@@ -124,31 +184,35 @@ def load_series(
     metrics: OperationMetrics,
     groupby: list[str],
     color_map: dict[str, str],
-    marker_map: dict[str, str],
+    marker: str | dict[str, str] = "o",
     label_fn: Callable[[tuple], str] | None = None,
     filter_fn: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
+    color_key: str = "primary",
     linestyle_map: dict[str, str] | None = None,
-    markerfacecolor_map: dict[str, str | None] | None = None,
+    fillstyle_map: dict[str, str] | None = None,
 ) -> list[RooflineDataSeries]:
     """Load a CSV and produce one `RooflineDataSeries` per group.
 
+    Visual encoding convention (enforced by the caller via maps):
+      - Color   → author / source  (``color_key="secondary"`` for [method, source] groupby)
+      - Marker  → problem type     (single string, same for every series in the call)
+      - Fillstyle → implementation (``fillstyle_map`` keyed on primary / method)
+      - Linestyle → source         (``linestyle_map`` keyed on secondary / source)
+
     Args:
-        csv_path:           Path to the measurements CSV.
-        metrics:            `OperationMetrics` subclass that knows how to compute
-                            FLOPs and bytes from each row.
-        groupby:            Column names to group by (e.g. ``["method", "source"]``).
-        color_map:          Maps the *first* groupby column value to a hex color.
-        marker_map:         Maps the *first* groupby column value to a marker string.
-        label_fn:           Optional function from the group-key tuple to a display
-                            label.  Defaults to joining values with " / ".
-        filter_fn:          Optional function applied to the full DataFrame before
-                            grouping.
-        linestyle_map:      Optional dict mapping the *last* groupby column value to
-                            a matplotlib linestyle (e.g. ``{"This work": "-",
-                            "HPDC24": "--"}``).  Defaults to solid for all groups.
-        markerfacecolor_map: Optional dict mapping the *last* groupby column value
-                            to a marker face color string, or ``None`` for filled
-                            (e.g. ``{"This work": None, "HPDC24": "white"}``).
+        csv_path:     Path to the measurements CSV.
+        metrics:      ``OperationMetrics`` subclass for FLOPs and bytes.
+        groupby:      Column names to group by, e.g. ``["method", "source"]``.
+        color_map:    Maps a group-key value to a hex color.
+        color_key:    Which key element drives color: ``"primary"`` (first column)
+                      or ``"secondary"`` (last column).  Default ``"primary"``.
+        marker:       Either a fixed marker string (same for all groups) or a dict
+                      keyed on the primary key.
+        fillstyle_map: Dict keyed on primary key → matplotlib fillstyle string
+                      (``"full"`` / ``"none"`` / ``"left"``).  ``"full"`` if absent.
+        linestyle_map: Dict keyed on secondary key → matplotlib linestyle string.
+        label_fn:     Function from the group-key tuple to a legend label.
+        filter_fn:    Optional pre-filter applied to the full DataFrame.
     """
     df = pd.read_csv(csv_path)
     if filter_fn is not None:
@@ -164,11 +228,12 @@ def load_series(
         primary   = str(key_tuple[0])
         secondary = str(key_tuple[-1])
 
-        color           = color_map.get(primary, "#333333")
-        marker          = marker_map.get(primary, "o")
-        linestyle       = (linestyle_map or {}).get(secondary, "-")
-        markerfacecolor = (markerfacecolor_map or {}).get(secondary, None)
-        label           = label_fn(key)
+        color_lookup = secondary if color_key == "secondary" else primary
+        color     = color_map.get(color_lookup, "#333333")
+        mkr       = marker if isinstance(marker, str) else marker.get(primary, "o")
+        linestyle = (linestyle_map or {}).get(secondary, "-")
+        fillstyle = (fillstyle_map or {}).get(primary, "full")
+        label     = label_fn(key)
 
         points = []
         for _, row in group.iterrows():
@@ -180,8 +245,7 @@ def load_series(
         points.sort(key=lambda p: p.intensity)
         result.append(RooflineDataSeries(
             label=label, points=points,
-            color=color, marker=marker, linestyle=linestyle,
-            markerfacecolor=markerfacecolor,
+            color=color, marker=mkr, linestyle=linestyle, fillstyle=fillstyle,
         ))
 
     return result
@@ -217,56 +281,51 @@ class ReduceMetrics(OperationMetrics):
         return float((self.n * k + k) * 4)
 
 
-# ── GEMV series configuration ─────────────────────────────────────────────────
+# ── Visual encoding ───────────────────────────────────────────────────────────
+# Color   → author / source
+# Marker  → problem type  (one marker per dataset, same for every series)
+# Fillstyle → implementation variant within a problem
 
-GEMV_COLOR_MAP: dict[str, str] = {
-    "WSE-2 GEMV":           "#C84C09",
-    "WSE-2 GEMV Two-phase": "#EE9B00",
-    "A100 CUBLAS":          "#005F73",
+# Color per author/source (shared across all datasets).
+# Deliberately distinct from the hardware roofline colors
+# (WSE-2 = #C84C09 orange, A100 = #005F73 teal).
+SOURCE_COLOR: dict[str, str] = {
+    "This work": "#2166AC",   # blue  — our WSE-2 results
+    "WSE":       "#2166AC",   # same  — GEMV CSV uses "WSE" instead of "This work"
+    "HPDC24":    "#762A83",   # purple — HPDC24 baseline
+    "A100":      "#1A9641",   # green  — A100 CUBLAS baseline
 }
 
-GEMV_MARKER_MAP: dict[str, str] = {
-    "WSE-2 GEMV":           "o",
-    "WSE-2 GEMV Two-phase": "s",
-    "A100 CUBLAS":          "^",
+# Marker per problem type (fixed string passed to load_series)
+GEMV_MARKER   = "o"
+REDUCE_MARKER = "D"
+
+# Fillstyle per GEMV implementation  (keyed on "series" column)
+# "full" = filled · "none" = hollow · "left" = half-filled
+GEMV_FILLSTYLE_MAP: dict[str, str] = {
+    "WSE-2 GEMV":           "full",
+    "WSE-2 GEMV Two-phase": "left",
+    "A100 GEMV CUBLAS":     "none",
 }
 
-GEMV_MARKERFACECOLOR_MAP: dict[str, str | None] = {
-    "WSE-2 GEMV":           None,      # filled
-    "WSE-2 GEMV Two-phase": None,      # filled
-    "A100 CUBLAS":          "white",   # hollow
+# Fillstyle per reduce method  (keyed on "method" column)
+REDUCE_FILLSTYLE_MAP: dict[str, str] = {
+    "chain_reduce_2d":    "full",
+    "tree_reduce_2d":     "none",
+    "twophase_reduce_2d": "left",
 }
 
-
-# ── Reduce series configuration ───────────────────────────────────────────────
-
-REDUCE_COLOR_MAP: dict[str, str] = {
-    "chain_reduce_2d":     "#0B6E4F",
-    "tree_reduce_2d":      "#9B2226",
-    "twophase_reduce_2d":  "#264653",
-}
-
-REDUCE_MARKER_MAP: dict[str, str] = {
-    "chain_reduce_2d":     "D",
-    "tree_reduce_2d":      "v",
-    "twophase_reduce_2d":  "P",
-}
-
+# Human-readable reduce method labels
 REDUCE_LABEL_MAP: dict[str, str] = {
-    "chain_reduce_2d":     "Chain Reduce 2D",
-    "tree_reduce_2d":      "Tree Reduce 2D",
-    "twophase_reduce_2d":  "Two-phase Reduce 2D",
+    "chain_reduce_2d":    "Chain Reduce 2D",
+    "tree_reduce_2d":     "Tree Reduce 2D",
+    "twophase_reduce_2d": "Two-phase Reduce 2D",
 }
 
+# Linestyle per source (secondary distinguisher for multi-point reduce series)
 REDUCE_SOURCE_LINESTYLE: dict[str, str] = {
     "This work": "-",
     "HPDC24":    "--",
-}
-
-# None → filled (use series color); "white" → hollow marker
-REDUCE_SOURCE_MARKERFACECOLOR: dict[str, str | None] = {
-    "This work": None,
-    "HPDC24":    "white",
 }
 
 
@@ -296,7 +355,7 @@ HARDWARE: tuple[HardwareSpec, ...] = (
         peak_gflops=WSE2_PEAK_GFLOPS,
         peak_label="1.785 PFLOPs",
         roofs=(
-            BandwidthRoof("Memory\n20.0 PB/s", WSE2_MEMORY_BW_GBS, label_x=0.013),
+            BandwidthRoof("Memory\n20.0 PB/s", WSE2_MEMORY_BW_GBS, label_x=0.025, linestyle="--"),
             BandwidthRoof("Off/onramp to fabric\n3.3 PB/s", WSE2_FABRIC_BW_GBS, label_x=0.055),
         ),
         color="#C84C09",
@@ -307,11 +366,11 @@ HARDWARE: tuple[HardwareSpec, ...] = (
         peak_gflops=A100_PEAK_GFLOPS,
         peak_label="19.5 TFLOPs",
         roofs=(
-            BandwidthRoof("L1 - 2573.8 GB/s", A100_L1_BW_GBS, label_x=0.5),
+            BandwidthRoof("L1 - 2573.8 GB/s", A100_L1_BW_GBS, label_x=0.5, linestyle="--"),
             BandwidthRoof("DRAM - 1224.2 GB/s", A100_DRAM_BW_GBS, label_x=2.0),
         ),
         color="#005F73",
-        name_xy=(20.0, A100_PEAK_GFLOPS * 0.22),
+        name_xy=(20.0, A100_PEAK_GFLOPS * 0.06),
     ),
 )
 
@@ -395,7 +454,7 @@ def plot_roofline(
         ridge_min = min(hw.peak_gflops / r.bandwidth_gbs for r in hw.roofs)
         peak_label_x = max(X_MIN * 2.0, ridge_min * 1.25)
         ax.text(
-            peak_label_x, hw.peak_gflops,
+            peak_label_x, hw.peak_gflops * 1.1,
             hw.peak_label,
             fontsize=9,
             va="bottom",
@@ -419,15 +478,14 @@ def plot_roofline(
         xs = [p.intensity for p in series.points]
         ys = [p.gflops for p in series.points]
 
-        mfc = series.markerfacecolor if series.markerfacecolor is not None else series.color
         ax.plot(
             xs, ys,
             color=series.color,
             marker=series.marker,
             linestyle=series.linestyle,
+            fillstyle=series.fillstyle,
             linewidth=2.4,
             markersize=7,
-            markerfacecolor=mfc,
             label=series.label,
         )
 
@@ -456,7 +514,10 @@ def plot_roofline(
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate roofline plot for WSE-2 and A100.")
+    parser = argparse.ArgumentParser(
+        description="Generate roofline plot for WSE-2 and A100. See module docstring for full usage.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument(
         "--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR,
         help="Output directory for plots",
@@ -498,10 +559,12 @@ def main() -> None:
         gemv_series = load_series(
             csv_path=args.gemv_csv,
             metrics=ScaledGEMVMetrics(),
-            groupby=["series"],
-            color_map=GEMV_COLOR_MAP,
-            marker_map=GEMV_MARKER_MAP,
-            markerfacecolor_map=GEMV_MARKERFACECOLOR_MAP,
+            groupby=["series", "source"],
+            color_map=SOURCE_COLOR,
+            color_key="secondary",
+            marker=GEMV_MARKER,
+            fillstyle_map=GEMV_FILLSTYLE_MAP,
+            label_fn=lambda key: key[0],
             filter_fn=gemv_filter,
         )
         k_desc = f", k={args.k}" if args.k is not None else ""
@@ -521,10 +584,11 @@ def main() -> None:
             csv_path=args.reduce_csv,
             metrics=ReduceMetrics(px=512, py=512),
             groupby=["method", "source"],
-            color_map=REDUCE_COLOR_MAP,
-            marker_map=REDUCE_MARKER_MAP,
+            color_map=SOURCE_COLOR,
+            color_key="secondary",
+            marker=REDUCE_MARKER,
+            fillstyle_map=REDUCE_FILLSTYLE_MAP,
             linestyle_map=REDUCE_SOURCE_LINESTYLE,
-            markerfacecolor_map=REDUCE_SOURCE_MARKERFACECOLOR,
             label_fn=lambda key: f"{REDUCE_LABEL_MAP.get(key[0], key[0])} ({key[1]})",
             filter_fn=reduce_filter,
         )
