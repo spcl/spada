@@ -9,6 +9,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+STENCIL_DIR="$SCRIPT_DIR/../../samples"
 BENCHMARK_DIR="$SCRIPT_DIR/../../samples/benchmarks"
 RUNTIME="$SCRIPT_DIR/../../spatialstencil/runtime/runtime.py"
 OUTPUT_DIR="$SCRIPT_DIR/benchmark"
@@ -17,6 +18,13 @@ TOTAL=0
 PASSED=0
 FAILED=0
 FAILED_TESTS=()
+
+echo -e "${BLUE}================================${NC}"
+echo -e "${BLUE}  Generating SPADA files${NC}"
+echo -e "${BLUE}================================${NC}"
+echo ""
+
+python -m spatialstencil.cli.gt4py_to_spatial "$STENCIL_DIR/stencils.py" 4,4,4 "$BENCHMARK_DIR"
 
 echo -e "${BLUE}================================${NC}"
 echo -e "${BLUE}  Running Benchmark Suite${NC}"
