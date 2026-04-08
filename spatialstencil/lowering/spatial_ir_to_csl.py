@@ -8,6 +8,7 @@ import copy
 import functools
 from io import StringIO
 import textwrap
+from spatialstencil.syntax.common.types import BIT_WIDTH
 from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, analysis, passes
 from spatialstencil.syntax.spatial_ir import copy_elimination
 from spatialstencil.syntax.spatial_ir import canonical_subgrids
@@ -393,8 +394,10 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
             print(f'P{rect.x_range[0]},{rect.y_range[0]}: Reduced from {len_for_reporting} to {len(tasks)} tasks.')
 
     task_bindings = task_recycling.plan_task_bindings(tasks, task_creation_behavior)
+    place_block_bytes = _place_block_storage_bytes(rect.metadata.place)
 
-    print(f'Stats: Using {sum(1 if t.task_type == "local" else 0 for t in tasks)} local tasks across '
+    print(f'Stats P{rect.x_range[0]},{rect.y_range[0]}: {place_block_bytes} bytes/PE, '
+          f'{sum(1 if t.task_type == "local" else 0 for t in tasks)} local tasks across '
           f'{len(task_bindings.local_slots)} local task IDs, '
           f'{sum(1 if t.task_type == "data" else 0 for t in tasks)} data tasks, '
           f'{len(set(color_map.values()))} colors')
@@ -767,6 +770,34 @@ def _collect_and_generate_fields(place: spir.PlaceBlock, header: StringIO, foote
         header.write(f'var {name}: {dtype_as_csl(argument.dtype)};\n')
 
     header.write('\n')
+
+
+
+def _dtype_storage_bits(dtype: spir.ScalarType | spir.StreamType | spir.ArrayType) -> int:
+    def _evaluate_extent(extent: int | spir.Expression) -> int:
+        if isinstance(extent, int):
+            return extent
+
+        value = extent.eval()
+        if not isinstance(value, int):
+            raise ValueError(f'Expected integer place-block extent, got {value!r}.')
+        return value
+
+    if isinstance(dtype, spir.ScalarType):
+        return BIT_WIDTH[dtype]
+    if isinstance(dtype, spir.StreamType):
+        return BIT_WIDTH[dtype.element_type]
+    element_count = functools.reduce(lambda total, extent: total * _evaluate_extent(extent), dtype.shape, 1)
+    return element_count * _dtype_storage_bits(dtype.base_type)
+
+
+def _field_storage_bytes(field: spir.FieldDeclaration) -> int:
+    bits = _dtype_storage_bits(field.dtype)
+    return (bits + 7) // 8
+
+
+def _place_block_storage_bytes(place: spir.PlaceBlock) -> int:
+    return sum(_field_storage_bytes(field) for field in place.statements)
 
 
 def _dsd_from_array(array_candidates: dict[str, tuple[spir.FieldDeclaration, list[int | spir.Expression]]],
