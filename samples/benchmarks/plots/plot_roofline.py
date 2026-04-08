@@ -511,6 +511,86 @@ def load_stencil_series(
     return result
 
 
+def load_a100_stencil_series(
+    a100_dir: Path,
+    flops_csv: Path,
+    stencil_k: int | None = None,
+    stencil_programs: list[str] | None = None,
+) -> list[RooflineDataSeries]:
+    """Load A100 stencil baseline series from a directory of per-stencil CSVs.
+
+    Each CSV must have columns: program_id, program_label, i, j, k, time_us.
+    Arithmetic intensity and FLOPs-per-point are derived from *flops_csv*
+    (output of ``python -m spatialstencil.cli.count_flop``), whose program
+    names are expected to follow the ``<name>_<i>_<j>_<k>`` convention.
+
+    Args:
+        a100_dir:         Directory containing per-stencil A100 CSV files.
+        flops_csv:        Stencil flops CSV (same one used for WSE-2 stencils).
+        stencil_k:        If given, include only rows with this z-depth.
+        stencil_programs: If given, include only these program_label values.
+    """
+    flops_df = pd.read_csv(flops_csv)
+
+    ai_lookup: dict[str, float] = {}
+    flops_per_point: dict[str, float] = {}
+    for _, row in flops_df.iterrows():
+        prog = str(row["Program"])
+        parts = prog.split("_")
+        key = "_".join(parts[:-3]) if len(parts) > 3 else prog
+        ai_lookup[key] = float(row["ArithmeticIntensity"])
+        if len(parts) > 3:
+            try:
+                ix, jx, kx = int(parts[-3]), int(parts[-2]), int(parts[-1])
+                flops_per_point[key] = float(row["Flop"]) / (ix * jx * kx)
+            except (ValueError, ZeroDivisionError):
+                flops_per_point[key] = 0.0
+
+    frames = [pd.read_csv(p) for p in sorted(a100_dir.glob("*.csv")) if p.is_file()]
+    if not frames:
+        print(f"Warning: no CSV files found in {a100_dir}")
+        return []
+    df = pd.concat(frames, ignore_index=True)
+
+    if stencil_programs is not None:
+        df = df[df["program_label"].isin(stencil_programs)]
+    if stencil_k is not None:
+        df = df[df["k"] == stencil_k]
+
+    result: list[RooflineDataSeries] = []
+
+    for prog_name, group in df.groupby("program_label"):
+        prog_str = str(prog_name)
+        flop_key = STENCIL_NAME_MAP.get(prog_str, prog_str.lower().replace(" ", "_"))
+        if flop_key not in ai_lookup:
+            print(f"Warning: no AI data for A100 '{prog_str}' (key '{flop_key}') — skipping")
+            continue
+
+        intensity = ai_lookup[flop_key]
+        color = STENCIL_COLOR_MAP.get(prog_str, "#333333")
+
+        points: list[RooflinePoint] = []
+        for _, row in group.iterrows():
+            actual_flops = (
+                flops_per_point[flop_key]
+                * float(row["i"]) * float(row["j"]) * float(row["k"])
+            )
+            gflops = actual_flops / (float(row["time_us"]) * 1e-6) / 1e9
+            points.append(RooflinePoint(intensity, gflops, gflops, gflops))
+
+        points.sort(key=lambda p: p.gflops)
+        result.append(RooflineDataSeries(
+            label=f"A100 {prog_str}",
+            points=points,
+            color=color,
+            marker=STENCIL_MARKER,
+            linestyle="",
+            fillstyle="none",   # hollow = A100
+        ))
+
+    return result
+
+
 # ── Hardware roofline spec ────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -749,6 +829,13 @@ def main() -> None:
         help="If set, restrict stencil data to rows with this z-depth (k).",
     )
     parser.add_argument(
+        "--a100-stencil-dir", type=Path, default=None,
+        metavar="DIR",
+        help="Directory of A100 stencil baseline CSVs "
+             "(columns: program_id, program_label, i, j, k, time_us). "
+             "Requires --stencil-flops-csv for FLOPs/AI lookup.",
+    )
+    parser.add_argument(
         "--stencil-programs", nargs="*", default=None,
         metavar="PROG",
         help="If set, show only these stencil program names "
@@ -851,6 +938,20 @@ def main() -> None:
         p_desc = f", programs={args.stencil_programs}" if args.stencil_programs else ""
         print(f"Loaded {len(stencil_series)} stencil series from {args.stencil_scaling_csv}{k_desc}{p_desc}")
         data_series += stencil_series
+
+    if args.a100_stencil_dir is not None:
+        if not args.a100_stencil_dir.is_dir():
+            parser.error(f"--a100-stencil-dir does not exist: {args.a100_stencil_dir}")
+        if args.stencil_flops_csv is None:
+            parser.error("--a100-stencil-dir requires --stencil-flops-csv for FLOPs/AI lookup")
+        a100_stencil_series = load_a100_stencil_series(
+            a100_dir=args.a100_stencil_dir,
+            flops_csv=args.stencil_flops_csv,
+            stencil_k=args.stencil_k,
+            stencil_programs=args.stencil_programs,
+        )
+        print(f"Loaded {len(a100_stencil_series)} A100 stencil series from {args.a100_stencil_dir}")
+        data_series += a100_stencil_series
 
     plot_roofline(args.output_dir, data_series)
 
