@@ -204,6 +204,7 @@ class MemoryCounter(NodeVisitor):
         self.total_loads: int = 0
         self.total_stores: int = 0
         self.total_bytes: int = 0
+        self.total_streaming_bytes: int = 0   # bytes counting each program-argument field once
         self.statement_memory: list[dict] = []
 
     # ------------------------------------------------------------------
@@ -264,18 +265,25 @@ class MemoryCounter(NodeVisitor):
             return 0
         return BIT_WIDTH.get(dtype, 0) // 8
 
-    def count_statement_memory(self, node: StatementBlock) -> tuple[int, int, int, int, int]:
+    def count_statement_memory(
+        self, node: StatementBlock
+    ) -> tuple[set[tuple], int, int, int, int, int, int]:
         """
         Count memory accesses for a single StatementBlock.
 
         Returns:
-            (unique_loads_per_point, stores_per_point, bytes_per_element,
-             domain_size, num_extents)
+            (all_loads, unique_loads_per_point, unique_input_fields,
+             stores_per_point, bytes_per_element, domain_size, num_extents)
+
+        ``all_loads`` is the raw set of ``(field_name, offset_tuple)`` pairs,
+        returned so callers can filter by program-level argument names.
+        ``unique_input_fields`` counts distinct field *names* (irrespective of
+        offset) within this statement only — not filtered to program args.
         """
         if not isinstance(node, StatementBlock):
-            return 0, 0, 0, 0, 0
+            return set(), 0, 0, 0, 0, 0, 0
 
-        # Collect all unique loads across every statement in the block
+        # Collect all unique (field_name, offset) load pairs
         all_loads: set[tuple] = set()
         for stmt in node.walk():
             if isinstance(stmt, AssignOp):
@@ -285,21 +293,22 @@ class MemoryCounter(NodeVisitor):
                     all_loads |= self.count_expression_loads(expr)
 
         unique_loads_per_point = len(all_loads)
-        stores_per_point = len(node.outputs)
-        bytes_per_element = self._dtype_bytes(node)
+        unique_input_fields    = len({field_name for field_name, _ in all_loads})
+        stores_per_point       = len(node.outputs)
+        bytes_per_element      = self._dtype_bytes(node)
 
         # Reuse the same domain/extent logic as FLOPCounter
         if not node.operation_type.destination:
-            return unique_loads_per_point, stores_per_point, bytes_per_element, 0, 0
+            return all_loads, unique_loads_per_point, unique_input_fields, stores_per_point, bytes_per_element, 0, 0
 
         output_type = node.operation_type.destination[0]
         if not isinstance(output_type, (ViewType, FieldType)):
-            return unique_loads_per_point, stores_per_point, bytes_per_element, 0, 0
+            return all_loads, unique_loads_per_point, unique_input_fields, stores_per_point, bytes_per_element, 0, 0
 
         domain_size = FLOPCounter().calculate_domain_size(output_type.domain)
         num_extents = len(output_type.extent.extents) if isinstance(output_type, ViewType) else 1
 
-        return unique_loads_per_point, stores_per_point, bytes_per_element, domain_size, num_extents
+        return all_loads, unique_loads_per_point, unique_input_fields, stores_per_point, bytes_per_element, domain_size, num_extents
 
     # ------------------------------------------------------------------
     # Visitor
@@ -307,19 +316,23 @@ class MemoryCounter(NodeVisitor):
 
     def visit_StatementBlock(self, node: StatementBlock):
         """Visit a StatementBlock and accumulate memory stats."""
-        loads_pp, stores_pp, bpe, domain_size, num_extents = self.count_statement_memory(node)
+        all_loads, loads_pp, unique_fields, stores_pp, bpe, domain_size, num_extents = (
+            self.count_statement_memory(node)
+        )
 
         total_accesses = (loads_pp + stores_pp) * domain_size * num_extents
-        total_bytes = total_accesses * bpe
-        total_loads = loads_pp * domain_size * num_extents
-        total_stores = stores_pp * domain_size * num_extents
+        total_bytes    = total_accesses * bpe
+        total_loads    = loads_pp  * domain_size * num_extents
+        total_stores   = stores_pp * domain_size * num_extents
 
-        self.total_loads += total_loads
+        self.total_loads  += total_loads
         self.total_stores += total_stores
-        self.total_bytes += total_bytes
+        self.total_bytes  += total_bytes
         self.statement_memory.append({
             'node': node,
+            'all_loads': all_loads,           # raw (field_name, offset) set — used by count()
             'loads_per_point': loads_pp,
+            'unique_input_fields': unique_fields,
             'stores_per_point': stores_pp,
             'bytes_per_element': bpe,
             'domain_size': domain_size,
@@ -346,12 +359,40 @@ class MemoryCounter(NodeVisitor):
         self.total_loads = 0
         self.total_stores = 0
         self.total_bytes = 0
+        self.total_streaming_bytes = 0
         self.statement_memory = []
         self.visit(program)
+
+        # Streaming bytes: only program-level input/output arguments touch DRAM.
+        # Intermediate StatementBlock results live in registers and must NOT be counted.
+        prog_input_names: set[str] = {inp.name for inp in program.inputs}
+        accessed_prog_inputs: set[str] = set()
+        for stmt_info in self.statement_memory:
+            for field_name, _ in stmt_info['all_loads']:
+                if field_name in prog_input_names:
+                    accessed_prog_inputs.add(field_name)
+
+        n_prog_inputs  = len(accessed_prog_inputs)
+        n_prog_outputs = len(program.outputs)
+
+        # Use the program-level output type for domain_size and bpe.
+        # Statement-level domains can be partial (e.g. a FORWARD sweep initialises
+        # only the k=0 slice in a separate computation block), so picking domain_size
+        # from the first visited statement gives the wrong answer.
+        domain_size = bpe = 0
+        if program.operation_type.destination:
+            prog_out = program.operation_type.destination[0]
+            if isinstance(prog_out, (FieldType, ViewType)):
+                domain_size = FLOPCounter().calculate_domain_size(prog_out.domain)
+                bpe = BIT_WIDTH.get(getattr(prog_out, 'dtype', None), 0) // 8
+
+        self.total_streaming_bytes = (n_prog_inputs + n_prog_outputs) * domain_size * bpe
+
         return {
             'loads': self.total_loads,
             'stores': self.total_stores,
             'bytes': self.total_bytes,
+            'streaming_bytes': self.total_streaming_bytes,
             'statement_memory': self.statement_memory,
         }
 

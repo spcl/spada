@@ -34,13 +34,19 @@ def analyze_file(
     parser: Parser,
     flop_counter: FLOPCounter,
     mem_counter: MemoryCounter,
-) -> tuple[str, int, int, int, int, float, bool, str]:
+) -> tuple[str, int, int, int, int, float, int, float, bool, str]:
     """
     Analyze a single .spst file and return results.
 
     Returns:
         (filename, flops, loads, stores, bytes_transferred,
-         arithmetic_intensity, success, error_message)
+         arithmetic_intensity, streaming_bytes, streaming_ai,
+         success, error_message)
+
+    ``streaming_bytes`` counts each distinct input *field* once per domain
+    point (plus all output writes), modelling an L1-cache-resident kernel where
+    neighbour reads of the same field are satisfied from cache.
+    ``streaming_ai`` = flops / streaming_bytes.
     """
     try:
         with open(filepath, 'r') as f:
@@ -54,12 +60,15 @@ def analyze_file(
         loads = mem['loads']
         stores = mem['stores']
         total_bytes = mem['bytes']
+        streaming_bytes = mem['streaming_bytes']
         ai = flops / total_bytes if total_bytes > 0 else float('nan')
+        streaming_ai = flops / streaming_bytes if streaming_bytes > 0 else float('nan')
 
-        return (str(filepath), flops, loads, stores, total_bytes, ai, True, "")
+        return (str(filepath), flops, loads, stores, total_bytes, ai,
+                streaming_bytes, streaming_ai, True, "")
 
     except Exception as e:
-        return (str(filepath), 0, 0, 0, 0, float('nan'), False, str(e))
+        return (str(filepath), 0, 0, 0, 0, float('nan'), 0, float('nan'), False, str(e))
 
 
 def print_header():
@@ -76,18 +85,19 @@ def print_summary(results: list[tuple]):
 
     Each result tuple:
         (filename, flops, loads, stores, bytes_transferred,
-         arithmetic_intensity, success, error_message)
+         arithmetic_intensity, streaming_bytes, streaming_ai,
+         success, error_message)
     """
-    successful = [r for r in results if r[6]]
-    failed = [r for r in results if not r[6]]
+    successful = [r for r in results if r[8]]
+    failed = [r for r in results if not r[8]]
 
-    print("\n" + "=" * 100)
+    print("\n" + "=" * 120)
     print("SUMMARY")
-    print("=" * 100)
+    print("=" * 120)
 
     import pandas as pd
     rows = []
-    for filename, flops, loads, stores, total_bytes, ai, _, _ in successful:
+    for filename, flops, loads, stores, total_bytes, ai, streaming_bytes, streaming_ai, _, _ in successful:
         rows.append({
             'Program': Path(filename).name[:-5],
             'Flop': flops,
@@ -95,36 +105,45 @@ def print_summary(results: list[tuple]):
             'Stores': stores,
             'Bytes': total_bytes,
             'ArithmeticIntensity': ai,
+            'StreamingBytes': streaming_bytes,
+            'StreamingAI': streaming_ai,
         })
     df = pd.DataFrame(rows)
     df.to_csv("flops.csv", index=False)
 
     if successful:
         print(f"\nSuccessfully analyzed {len(successful)} file(s):")
-        print("-" * 100)
-        print(f"{'File':<45} {'FLOPs':>14} {'Loads':>12} {'Stores':>10} {'Bytes':>14} {'AI (F/B)':>12}")
-        print("-" * 100)
+        print("-" * 120)
+        print(f"{'File':<45} {'FLOPs':>14} {'Loads':>12} {'Stores':>10} "
+              f"{'Bytes':>14} {'AI (F/B)':>12} {'Stream.Bytes':>14} {'Stream.AI':>12}")
+        print("-" * 120)
 
-        total_flops = total_loads = total_stores = total_bytes_sum = 0
-        for filename, flops, loads, stores, total_bytes, ai, _, _ in successful:
+        total_flops = total_loads = total_stores = total_bytes_sum = total_stream_sum = 0
+        for filename, flops, loads, stores, total_bytes, ai, streaming_bytes, streaming_ai, _, _ in successful:
             display_name = Path(filename).name
-            ai_str = f"{ai:.4f}" if ai == ai else "n/a"  # nan check
-            print(f"{display_name:<45} {flops:>14,} {loads:>12,} {stores:>10,} {total_bytes:>14,} {ai_str:>12}")
-            total_flops += flops
-            total_loads += loads
-            total_stores += stores
+            ai_str  = f"{ai:.4f}"          if ai == ai          else "n/a"
+            sai_str = f"{streaming_ai:.4f}" if streaming_ai == streaming_ai else "n/a"
+            print(f"{display_name:<45} {flops:>14,} {loads:>12,} {stores:>10,} "
+                  f"{total_bytes:>14,} {ai_str:>12} {streaming_bytes:>14,} {sai_str:>12}")
+            total_flops     += flops
+            total_loads     += loads
+            total_stores    += stores
             total_bytes_sum += total_bytes
+            total_stream_sum += streaming_bytes
 
-        print("-" * 100)
-        overall_ai = total_flops / total_bytes_sum if total_bytes_sum > 0 else float('nan')
-        overall_ai_str = f"{overall_ai:.4f}" if overall_ai == overall_ai else "n/a"
-        print(f"{'TOTAL':<45} {total_flops:>14,} {total_loads:>12,} {total_stores:>10,} {total_bytes_sum:>14,} {overall_ai_str:>12}")
-        print("-" * 100)
+        print("-" * 120)
+        overall_ai  = total_flops / total_bytes_sum  if total_bytes_sum  > 0 else float('nan')
+        overall_sai = total_flops / total_stream_sum if total_stream_sum > 0 else float('nan')
+        ai_str  = f"{overall_ai:.4f}"  if overall_ai  == overall_ai  else "n/a"
+        sai_str = f"{overall_sai:.4f}" if overall_sai == overall_sai else "n/a"
+        print(f"{'TOTAL':<45} {total_flops:>14,} {total_loads:>12,} {total_stores:>10,} "
+              f"{total_bytes_sum:>14,} {ai_str:>12} {total_stream_sum:>14,} {sai_str:>12}")
+        print("-" * 120)
 
     if failed:
         print(f"\n\nFailed to analyze {len(failed)} file(s):")
         print("-" * 100)
-        for filename, _, _, _, _, _, _, error in failed:
+        for filename, _, _, _, _, _, _, _, _, error in failed:
             display_name = Path(filename).name
             print(f"\n{display_name}:")
             print(f"  Error: {error}")
@@ -174,9 +193,10 @@ def main():
             result = analyze_file(filepath, parser, flop_counter, mem_counter)
             results.append(result)
 
-            if result[6]:  # Success
-                ai_str = f"{result[5]:.4f}" if result[5] == result[5] else "n/a"
-                print(f"✓ {result[1]:,} FLOPs  {result[4]:,} B  AI={ai_str}")
+            if result[8]:  # Success
+                ai_str  = f"{result[5]:.4f}" if result[5] == result[5] else "n/a"
+                sai_str = f"{result[7]:.4f}" if result[7] == result[7] else "n/a"
+                print(f"✓ {result[1]:,} FLOPs  {result[4]:,} B  AI={ai_str}  StreamingAI={sai_str}")
             else:  # Failed
                 print(f"✗ ERROR")
         

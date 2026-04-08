@@ -427,7 +427,7 @@ STENCIL_COLOR_MAP: dict[str, str] = {
 # Map from display name (scaling CSV) to program key prefix (flops CSV)
 STENCIL_NAME_MAP: dict[str, str] = {
     "2D Laplacian":    "laplacian",
-    "Vertical Stencil": "vertical_advection",
+    "Vertical Stencil": "pure_vertical",
     "UVBKE":           "uvbke",
 }
 
@@ -477,8 +477,12 @@ def load_stencil_series(
         prog_str = str(prog_name)
         key = STENCIL_NAME_MAP.get(prog_str, prog_str.lower().replace(" ", "_"))
         if key not in ai_lookup:
-            print(f"Warning: no AI data for '{prog_str}' (key '{key}') in {flops_csv}")
-            continue
+            raise KeyError(
+                f"No flop data found for stencil '{prog_str}' (looked up key '{key}') in {flops_csv}. "
+                f"Available keys: {sorted(ai_lookup)}. "
+                f"Re-run 'python -m spatialstencil.cli.count_flop' and update --stencil-flops-csv, "
+                f"or add '{prog_str}' to STENCIL_NAME_MAP."
+            )
 
         intensity = ai_lookup[key]
         color = STENCIL_COLOR_MAP.get(prog_str, "#333333")
@@ -516,6 +520,7 @@ def load_a100_stencil_series(
     flops_csv: Path,
     stencil_k: int | None = None,
     stencil_programs: list[str] | None = None,
+    use_streaming_ai: bool = True,
 ) -> list[RooflineDataSeries]:
     """Load A100 stencil baseline series from a directory of per-stencil CSVs.
 
@@ -525,12 +530,19 @@ def load_a100_stencil_series(
     names are expected to follow the ``<name>_<i>_<j>_<k>`` convention.
 
     Args:
-        a100_dir:         Directory containing per-stencil A100 CSV files.
-        flops_csv:        Stencil flops CSV (same one used for WSE-2 stencils).
-        stencil_k:        If given, include only rows with this z-depth.
-        stencil_programs: If given, include only these program_label values.
+        a100_dir:          Directory containing per-stencil A100 CSV files.
+        flops_csv:         Stencil flops CSV (same one used for WSE-2 stencils).
+        stencil_k:         If given, include only rows with this z-depth.
+        stencil_programs:  If given, include only these program_label values.
+        use_streaming_ai:  If True, use ``StreamingAI`` from *flops_csv* instead
+                           of ``ArithmeticIntensity``.  StreamingAI counts each
+                           input *field* once (L1-cache-resident model) rather
+                           than counting every unique load offset, giving a
+                           higher effective AI appropriate for cache-friendly
+                           A100 stencil kernels.
     """
     flops_df = pd.read_csv(flops_csv)
+    ai_col = "StreamingAI" if (use_streaming_ai and "StreamingAI" in flops_df.columns) else "ArithmeticIntensity"
 
     ai_lookup: dict[str, float] = {}
     flops_per_point: dict[str, float] = {}
@@ -538,7 +550,7 @@ def load_a100_stencil_series(
         prog = str(row["Program"])
         parts = prog.split("_")
         key = "_".join(parts[:-3]) if len(parts) > 3 else prog
-        ai_lookup[key] = float(row["ArithmeticIntensity"])
+        ai_lookup[key] = float(row[ai_col])
         if len(parts) > 3:
             try:
                 ix, jx, kx = int(parts[-3]), int(parts[-2]), int(parts[-1])
@@ -563,8 +575,12 @@ def load_a100_stencil_series(
         prog_str = str(prog_name)
         flop_key = STENCIL_NAME_MAP.get(prog_str, prog_str.lower().replace(" ", "_"))
         if flop_key not in ai_lookup:
-            print(f"Warning: no AI data for A100 '{prog_str}' (key '{flop_key}') — skipping")
-            continue
+            raise KeyError(
+                f"No flop data found for A100 stencil '{prog_str}' (looked up key '{flop_key}'). "
+                f"Available keys: {sorted(ai_lookup)}. "
+                f"Re-run 'python -m spatialstencil.cli.count_flop' and update --stencil-flops-csv, "
+                f"or add '{prog_str}' to STENCIL_NAME_MAP."
+            )
 
         intensity = ai_lookup[flop_key]
         color = STENCIL_COLOR_MAP.get(prog_str, "#333333")
@@ -638,7 +654,7 @@ HARDWARE: tuple[HardwareSpec, ...] = (
 
 X_MIN, X_MAX = 1e-2, 1e2
 Y_MIN, Y_MAX = 10.0, 1e7
-FIG_W, FIG_H = 5.5, 8.1
+FIG_W, FIG_H = 5.8, 8.1
 X_DECADES = np.log10(X_MAX) - np.log10(X_MIN)   # 4
 Y_DECADES = np.log10(Y_MAX) - np.log10(Y_MIN)   # 6
 
@@ -836,6 +852,12 @@ def main() -> None:
              "Requires --stencil-flops-csv for FLOPs/AI lookup.",
     )
     parser.add_argument(
+        "--a100-stencil-no-streaming-ai", action="store_true", default=False,
+        help="Use raw ArithmeticIntensity instead of StreamingAI for A100 stencil "
+             "series.  By default StreamingAI is used (L1-cache model: each input "
+             "field counted once from DRAM).",
+    )
+    parser.add_argument(
         "--stencil-programs", nargs="*", default=None,
         metavar="PROG",
         help="If set, show only these stencil program names "
@@ -949,6 +971,7 @@ def main() -> None:
             flops_csv=args.stencil_flops_csv,
             stencil_k=args.stencil_k,
             stencil_programs=args.stencil_programs,
+            use_streaming_ai=not args.a100_stencil_no_streaming_ai,
         )
         print(f"Loaded {len(a100_stencil_series)} A100 stencil series from {args.a100_stencil_dir}")
         data_series += a100_stencil_series
