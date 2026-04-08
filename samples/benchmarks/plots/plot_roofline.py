@@ -243,8 +243,15 @@ def load_series(
     label_fn: Callable[[tuple], str] | None = None,
     filter_fn: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
     color_key: str = "primary",
+    color_index: int | None = None,
+    color_fn: Callable[[tuple], str] | None = None,
     linestyle_map: dict[str, str] | None = None,
+    linestyle_index: int | None = None,
     fillstyle_map: dict[str, str] | None = None,
+    fillstyle_index: int | None = None,
+    marker_map: dict[str, str] | None = None,
+    marker_index: int | None = None,
+    dropna: bool = True,
 ) -> list[RooflineDataSeries]:
     """Load a CSV and produce one `RooflineDataSeries` per group.
 
@@ -278,16 +285,31 @@ def load_series(
 
     result: list[RooflineDataSeries] = []
 
-    for key, group in df.groupby(groupby):
+    for key, group in df.groupby(groupby, dropna=dropna):
         key_tuple = key if isinstance(key, tuple) else (key,)
         primary   = str(key_tuple[0])
         secondary = str(key_tuple[-1])
 
-        color_lookup = secondary if color_key == "secondary" else primary
-        color     = color_map.get(color_lookup, "#333333")
-        mkr       = marker if isinstance(marker, str) else marker.get(primary, "o")
-        linestyle = (linestyle_map or {}).get(secondary, "-")
-        fillstyle = (fillstyle_map or {}).get(primary, "full")
+        if color_fn is not None:
+            color = color_fn(key_tuple)
+        elif color_index is not None:
+            color = color_map.get(str(key_tuple[color_index]), "#333333")
+        else:
+            color_lookup = secondary if color_key == "secondary" else primary
+            color = color_map.get(color_lookup, "#333333")
+
+        # Marker: check override map first (e.g. HPDC24 → "x"), then fall back
+        mkr_override = (marker_map or {}).get(
+            str(key_tuple[marker_index]) if marker_index is not None else "", None
+        )
+        mkr = mkr_override if mkr_override else (
+            marker if isinstance(marker, str) else marker.get(primary, "o")
+        )
+
+        ls_lookup = str(key_tuple[linestyle_index]) if linestyle_index is not None else secondary
+        linestyle = (linestyle_map or {}).get(ls_lookup, "-")
+        fs_lookup = str(key_tuple[fillstyle_index]) if fillstyle_index is not None else primary
+        fillstyle = (fillstyle_map or {}).get(fs_lookup, "full")
         label     = label_fn(key)
 
         points = []
@@ -321,53 +343,61 @@ class ReduceMetrics(OperationMetrics):
     Intensity ≈ 0.125 FLOP/Byte  (independent of k and grid size for large N)
     """
 
-    def __init__(self, px: int = 512, py: int = 512) -> None:
-        self.n = px * py
+    def __init__(self, default_px: int = 512, default_py: int = 512) -> None:
+        self.default_n = default_px * default_py
+
+    def _n(self, row: pd.Series) -> int:
+        """PE count: prefer per-row px/py when available (e.g. 750×994), else fall back to default."""
+        if "px" in row.index and pd.notna(row["px"]) and "py" in row.index and pd.notna(row["py"]):
+            return int(row["px"]) * int(row["py"])
+        return self.default_n
 
     def _k(self, row: pd.Series) -> int:
         return int(row["x"]) // 4   # x is message size in bytes; k = x / 4 for f32
 
     def flops(self, row: pd.Series) -> float:
+        n = self._n(row)
         k = self._k(row)
-        return float((self.n - 1) * k)
+        return float((n - 1) * k)
 
     def bytes_transferred(self, row: pd.Series) -> float:
+        n = self._n(row)
         k = self._k(row)
-        return float((self.n * k + k) * 4) * 2
+        return float((n * k + k) * 4) * 2
 
 
 # ── Visual encoding ───────────────────────────────────────────────────────────
-# Color   → author / source
-# Marker  → problem type  (one marker per dataset, same for every series)
-# Fillstyle → implementation variant within a problem
+# Fill      → source/author   (SpaDA = full, A100 = hollow, HPDC24 = "x" marker)
+# Color     → problem group   (GEMV: one shared color; Reduce: by grid size;
+#                              Stencil: by program type)
+# Marker    → problem type    (square=GEMV, diamond=reduce, triangle=stencil)
+#             HPDC24 always overrides to "x" regardless of problem type.
 
-# Color per author/source (shared across all datasets).
-# Deliberately distinct from the hardware roofline colors
-# (WSE-2 = #C84C09 orange, A100 = #005F73 teal).
-SOURCE_COLOR: dict[str, str] = {
-    "This work": "#2166AC",   # blue  — our WSE-2 results
-    "WSE":       "#2166AC",   # same  — GEMV CSV uses "WSE" instead of "This work"
-    "HPDC24":    "#762A83",   # purple — HPDC24 baseline
-    "A100":      "#1A9641",   # green  — A100 CUBLAS baseline
+# Fillstyle keyed on source column.
+# "full" = filled, "none" = hollow; HPDC24 is overridden to "x" marker anyway.
+SOURCE_FILLSTYLE: dict[str, str] = {
+    "This work": "full",
+    "WSE":       "full",   # GEMV CSV uses "WSE" instead of "This work"
+    "A100":      "none",
+    "HPDC24":    "full",   # shape is overridden to "x" via SOURCE_MARKER_OVERRIDE
+}
+
+# Marker override keyed on source: HPDC24 always renders as "x".
+SOURCE_MARKER_OVERRIDE: dict[str, str] = {
+    "HPDC24": "x",
 }
 
 # Marker per problem type (fixed string passed to load_series)
-GEMV_MARKER   = "o"
+GEMV_MARKER   = "s"
 REDUCE_MARKER = "D"
 
-# Fillstyle per GEMV implementation  (keyed on "series" column)
-# "full" = filled · "none" = hollow · "left" = half-filled
-GEMV_FILLSTYLE_MAP: dict[str, str] = {
-    "WSE-2 GEMV":           "full",
-    "WSE-2 GEMV Two-phase": "left",
-    "A100 GEMV CUBLAS":     "none",
-}
+# Single color for all GEMV series (fill distinguishes SpaDA from A100)
+GEMV_COLOR = "#762A83"   # purple
 
-# Fillstyle per reduce method  (keyed on "method" column)
-REDUCE_FILLSTYLE_MAP: dict[str, str] = {
-    "chain_reduce_2d":    "full",
-    "tree_reduce_2d":     "none",
-    "twophase_reduce_2d": "left",
+# Color per PE-grid size for reduce series (shared across sources/methods)
+REDUCE_GRID_COLOR: dict[str, str] = {
+    "512×512":  "#2166AC",   # blue
+    "750×994":  "#D6604D",   # red-orange
 }
 
 # Human-readable reduce method labels
@@ -683,6 +713,11 @@ def main() -> None:
         help="If set, restrict GEMV data to rows with this block size k",
     )
     parser.add_argument(
+        "--gemv-series", type=str, nargs="+", default=None,
+        metavar="SERIES",
+        help='If set, restrict GEMV data to these series names, e.g. "WSE-2 GEMV Two-phase"',
+    )
+    parser.add_argument(
         "--reduce-csv", type=Path, default=None,
         help="CSV file with reduce measurements (x, method, source, time_us, ...)",
     )
@@ -728,16 +763,21 @@ def main() -> None:
             df = df[df["shape_label"] == "750x994"]
             if args.k is not None:
                 df = df[df["k"] == args.k]
+            if args.gemv_series is not None:
+                df = df[df["series"].isin(args.gemv_series)]
             return df
 
         gemv_series = load_series(
             csv_path=args.gemv_csv,
             metrics=ScaledGEMVMetrics(),
             groupby=["series", "source"],
-            color_map=SOURCE_COLOR,
-            color_key="secondary",
+            color_map={},
+            color_fn=lambda key: GEMV_COLOR,   # all GEMV same color
             marker=GEMV_MARKER,
-            fillstyle_map=GEMV_FILLSTYLE_MAP,
+            marker_map=SOURCE_MARKER_OVERRIDE,
+            marker_index=1,                    # source at key[1]
+            fillstyle_map=SOURCE_FILLSTYLE,
+            fillstyle_index=1,                 # source at key[1]
             label_fn=lambda key: {
                 "WSE-2 GEMV":           "SpaDA GEMV",
                 "WSE-2 GEMV Two-phase": "SpaDA GEMV (Two-phase)",
@@ -757,19 +797,34 @@ def main() -> None:
                 df = df[df["method"].isin(args.reduce_methods)]
             return df
 
+        def _reduce_grid_label(key: tuple) -> str:
+            """Return 'PX×PY' for the given key tuple, falling back to '512×512'."""
+            return (
+                f"{int(key[2])}×{int(key[3])}" if not pd.isna(key[2]) else "512×512"
+            )
+
         reduce_series = load_series(
             csv_path=args.reduce_csv,
-            metrics=ReduceMetrics(px=512, py=512),
-            groupby=["method", "source"],
-            color_map=SOURCE_COLOR,
-            color_key="secondary",
-            marker=REDUCE_MARKER,
-            fillstyle_map=REDUCE_FILLSTYLE_MAP,
+            metrics=ReduceMetrics(),
+            groupby=["method", "source", "px", "py"],
+            color_map={},
+            color_fn=lambda key: REDUCE_GRID_COLOR.get(_reduce_grid_label(key), "#333333"),
+            linestyle_index=1,    # source drives linestyle
             linestyle_map=REDUCE_SOURCE_LINESTYLE,
+            dropna=False,         # keep HPDC24 rows that have NaN px/py
+            marker=REDUCE_MARKER,
+            marker_map=SOURCE_MARKER_OVERRIDE,
+            marker_index=1,       # source at key[1]
+            fillstyle_map=SOURCE_FILLSTYLE,
+            fillstyle_index=1,    # source at key[1]
             label_fn=lambda key: (
-                f"{REDUCE_LABEL_MAP.get(key[0], key[0]).removeprefix('SpaDA ')} ({key[1]})"
+                f"{REDUCE_LABEL_MAP.get(key[0], key[0]).removeprefix('SpaDA ')} ({key[1]}, 512×512)"
                 if key[1] != "This work"
-                else REDUCE_LABEL_MAP.get(key[0], key[0])
+                else (
+                    f"{REDUCE_LABEL_MAP.get(key[0], key[0])} ({int(key[2])}×{int(key[3])})"
+                    if not pd.isna(key[2])
+                    else REDUCE_LABEL_MAP.get(key[0], key[0])
+                )
             ),
             filter_fn=reduce_filter,
         )
