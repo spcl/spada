@@ -261,9 +261,9 @@ class ReduceMetrics(OperationMetrics):
 
     FLOPs  = (N − 1) · k    where N = px · py,  k = x / 4
                ↑ one addition per contributing PE, for each of the k elements
-    Bytes  = (N · k + k) · 4 = k · (N + 1) · 4
-               ↑ read all N input vectors once  +  write result once
-    Intensity ≈ 0.25 FLOP/Byte  (independent of k and grid size for large N)
+    Bytes  = (N · k + N · k) · 4 = k · N · 8
+               ↑ read all N input vectors once + write all input vectors once
+    Intensity ≈ 0.125 FLOP/Byte  (independent of k and grid size for large N)
     """
 
     def __init__(self, px: int = 512, py: int = 512) -> None:
@@ -278,7 +278,7 @@ class ReduceMetrics(OperationMetrics):
 
     def bytes_transferred(self, row: pd.Series) -> float:
         k = self._k(row)
-        return float((self.n * k + k) * 4)
+        return float((self.n * k + k) * 4) * 2
 
 
 # ── Visual encoding ───────────────────────────────────────────────────────────
@@ -376,7 +376,7 @@ HARDWARE: tuple[HardwareSpec, ...] = (
 
 X_MIN, X_MAX = 1e-2, 1e2
 Y_MIN, Y_MAX = 10.0, 1e7
-FIG_W, FIG_H = 5.5, 9.0
+FIG_W, FIG_H = 5.5, 8.1
 X_DECADES = np.log10(X_MAX) - np.log10(X_MIN)   # 4
 Y_DECADES = np.log10(Y_MAX) - np.log10(Y_MIN)   # 6
 
@@ -428,8 +428,8 @@ def plot_roofline(
     ax.set_yscale("log")
     ax.set_xlim(X_MIN, X_MAX)
     ax.set_ylim(Y_MIN, Y_MAX)
-    ax.set_xlabel("FLOP/Byte", fontsize=12, fontweight="bold")
-    ax.set_ylabel("GFLOPs", fontsize=12, fontweight="bold")
+    ax.set_xlabel("Arithmetic Intensity [FLOP/Byte]", fontsize=12, fontweight="bold")
+    ax.set_ylabel("Performance [GFLOP/s]", fontsize=12, fontweight="bold")
     ax.grid(True, which="major", alpha=0.3)
     ax.grid(True, which="minor", alpha=0.1)
 
