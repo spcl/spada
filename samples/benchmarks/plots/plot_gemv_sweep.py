@@ -1,3 +1,44 @@
+"""Plot GEMV benchmark sweep results for WSE-2 and (optionally) A100 baselines.
+
+Usage
+-----
+Plot from a pre-built CSV (skips raw result scanning):
+    python plot_gemv_sweep.py --from-csv samples/benchmarks/plots/gemv_blas_sweep_results/gemv_750_994.csv
+
+Basic plot (WSE-2 only, linear y-axis, scans raw results):
+    python plot_gemv_sweep.py
+
+With A100 baselines and 95% CI bands:
+    python plot_gemv_sweep.py --with-baselines --show-ci
+
+Log y-axis (useful when runtimes span multiple orders of magnitude):
+    python plot_gemv_sweep.py --log-y
+
+Log-log plot (both axes logarithmic):
+    python plot_gemv_sweep.py --log-log
+
+Key flags
+---------
+--from-csv PATH         Load a pre-built CSV saved by this script instead of
+                        scanning --results-root. Mutually exclusive with
+                        --with-baselines.
+--results-root PATH     Directory containing local WSE benchmark results
+                        (default: …/gemv_blas_sweep_results)
+--output-dir PATH       Destination for .png, .pdf, and .csv outputs
+                        (default: ./gemv_plots/)
+--with-baselines        Overlay A100 CUBLAS timings
+--a100-csv PATH         Path to the parsed A100 CSV file
+--a100-column           Time column to use: kernel_median_us (default) or app_median_us
+--show-ci               Shade 95% bootstrap confidence intervals around WSE lines
+--bootstrap-samples N   Bootstrap resamples for CI estimation (default: 2000)
+--log-y                 Log scale on the y-axis only
+--log-log               Log scale on both axes (mutually exclusive with --log-y)
+
+Output filename suffixes encode the scale mode:
+    gemv_750_994.png        -> linear y
+    gemv_750_994_logy.png   -> --log-y
+    gemv_750_994_loglog.png -> --log-log
+"""
 from __future__ import annotations
 
 import argparse
@@ -6,6 +47,7 @@ from pathlib import Path
 
 import matplotlib
 import matplotlib.pyplot as plt
+import matplotlib.ticker
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -146,9 +188,14 @@ def collect_a100_dataframe(csv_path: Path, column: str) -> pd.DataFrame:
     )
 
 
-def plot_shape(df: pd.DataFrame, shape_label: str, output_dir: Path, show_ci: bool) -> None:
+MAX_K = 32
+
+
+def plot_shape(df: pd.DataFrame, shape_label: str, output_dir: Path, show_ci: bool, log_y: bool = False, log_x: bool = True) -> None:
     fig, ax = plt.subplots(figsize=(6.2, 4.0))
-    shape_df = df[df["shape_label"] == shape_label].sort_values("k")
+    shape_df = df[(df["shape_label"] == shape_label) & (df["k"] <= MAX_K)].copy()
+    shape_df["n_elements"] = shape_df["px"] * shape_df["py"] * shape_df["k"] ** 2
+    shape_df = shape_df.sort_values("n_elements")
 
     local_series = ["WSE-2 GEMV", "WSE-2 GEMV Two-phase"]
     for series in local_series:
@@ -158,7 +205,7 @@ def plot_shape(df: pd.DataFrame, shape_label: str, output_dir: Path, show_ci: bo
 
         method_key = "gemv" if series == "WSE-2 GEMV" else "gemv_twophase"
         ax.plot(
-            series_df["k"],
+            series_df["n_elements"],
             series_df["time_us"],
             color=COLORS[method_key],
             marker=MARKERS[method_key],
@@ -168,7 +215,7 @@ def plot_shape(df: pd.DataFrame, shape_label: str, output_dir: Path, show_ci: bo
         )
         if show_ci:
             ax.fill_between(
-                series_df["k"].to_numpy(dtype=float),
+                series_df["n_elements"].to_numpy(dtype=float),
                 series_df["ci_low_us"].to_numpy(dtype=float),
                 series_df["ci_high_us"].to_numpy(dtype=float),
                 color=COLORS[method_key],
@@ -176,10 +223,11 @@ def plot_shape(df: pd.DataFrame, shape_label: str, output_dir: Path, show_ci: bo
                 linewidth=0,
             )
 
-    a100_df = shape_df[shape_df["series"] == "A100 CUBLAS"]
+    a100_df = shape_df[shape_df["source"] == "A100"]
     if not a100_df.empty:
+        a100_label = str(a100_df["series"].iloc[0])
         ax.plot(
-            a100_df["k"],
+            a100_df["n_elements"],
             a100_df["time_us"],
             color=COLORS["a100"],
             marker=MARKERS["a100"],
@@ -187,21 +235,122 @@ def plot_shape(df: pd.DataFrame, shape_label: str, output_dir: Path, show_ci: bo
             linewidth=2.0,
             linestyle="--",
             markersize=7,
-            label="A100 CUBLAS",
+            label=a100_label,
+        )
+
+    def _draw_speedup_arrow(
+        x_annot: float,
+        y_lo: float,
+        y_hi: float,
+        label_side: str = "left",
+        mutation_scale: float = 20,
+        linestyle: str = "dotted",
+    ) -> None:
+        speedup = y_hi / y_lo
+        y_mid = np.sqrt(y_lo * y_hi) if log_y else (y_lo + y_hi) / 2
+        ax.annotate(
+            "",
+            xy=(x_annot, y_hi),
+            xytext=(x_annot, y_lo),
+            arrowprops=dict(
+                arrowstyle="<->",
+                color="#333333",
+                lw=1.5,
+                linestyle=linestyle,
+                mutation_scale=mutation_scale,
+            ),
+        )
+        if label_side == "right":
+            x_text, ha = x_annot * 1.08, "left"
+        else:
+            x_text, ha = x_annot / 1.08, "right"
+        ax.text(
+            x_text,
+            y_mid,
+            f"{speedup:.1f}×",
+            va="center",
+            ha=ha,
+            fontsize=10,
+            color="#333333",
+            fontweight="bold",
+        )
+
+    # Speedup annotation at K=MAX_K between fastest WSE series and A100
+    wse_at_max_k = shape_df[(shape_df["source"] == "WSE") & (shape_df["k"] == MAX_K)]
+    a100_at_max_k = shape_df[(shape_df["source"] == "A100") & (shape_df["k"] == MAX_K)]
+    if not wse_at_max_k.empty and not a100_at_max_k.empty:
+        best_wse_row = wse_at_max_k.loc[wse_at_max_k["time_us"].idxmin()]
+        a100_row = a100_at_max_k.iloc[0]
+        _draw_speedup_arrow(
+            float(best_wse_row["n_elements"]),
+            float(best_wse_row["time_us"]),
+            float(a100_row["time_us"]),
+        )
+
+    # Speedup annotation at K=min_k between the two WSE implementations
+    min_k = int(shape_df[shape_df["source"] == "WSE"]["k"].min())
+    gemv_at_min_k = shape_df[(shape_df["series"] == "WSE-2 GEMV") & (shape_df["k"] == min_k)]
+    twophase_at_min_k = shape_df[(shape_df["series"] == "WSE-2 GEMV Two-phase") & (shape_df["k"] == min_k)]
+    if not gemv_at_min_k.empty and not twophase_at_min_k.empty:
+        y_gemv = float(gemv_at_min_k.iloc[0]["time_us"])
+        y_twophase = float(twophase_at_min_k.iloc[0]["time_us"])
+        x_annot = float(gemv_at_min_k.iloc[0]["n_elements"])
+        _draw_speedup_arrow(x_annot, min(y_gemv, y_twophase), max(y_gemv, y_twophase), label_side="right", mutation_scale=12, linestyle="solid")
+
+    # Speedup annotation at K=min_k between slower WSE implementation and A100
+    a100_at_min_k = shape_df[(shape_df["source"] == "A100") & (shape_df["k"] == min_k)]
+    wse_at_min_k = shape_df[(shape_df["source"] == "WSE") & (shape_df["k"] == min_k)]
+    if not wse_at_min_k.empty and not a100_at_min_k.empty:
+        slower_wse_row = wse_at_min_k.loc[wse_at_min_k["time_us"].idxmax()]
+        a100_row = a100_at_min_k.iloc[0]
+        _draw_speedup_arrow(
+            float(slower_wse_row["n_elements"]),
+            float(slower_wse_row["time_us"]),
+            float(a100_row["time_us"]),
+            label_side="right",
+            mutation_scale=20,
+            linestyle="dotted",
         )
 
     px, py = map(int, shape_label.split("x"))
     # ax.set_title(f"GEMV Sweep, PXxPY={px}x{py}", fontsize=13, fontweight="bold")
-    ax.set_xlabel("K", fontsize=12, fontweight="bold")
+    ax.set_xlabel("# Matrix Elements", fontsize=12, fontweight="bold")
     ax.set_ylabel("Runtime [μs]", fontsize=12, fontweight="bold")
-    ax.set_xscale("log", base=2)
-    ax.set_xticks(sorted(shape_df["k"].unique()))
-    ax.get_xaxis().set_major_formatter(plt.ScalarFormatter())
+    tick_vals = sorted(shape_df["n_elements"].unique())
+    def _sci_label(x: float, _pos: object) -> str:
+        exp = int(np.floor(np.log10(abs(x)))) if x != 0 else 0
+        coeff = x / 10**exp
+        if abs(coeff - round(coeff)) < 1e-9:
+            coeff = int(round(coeff))
+            return rf"${coeff}\times10^{{{exp}}}$"
+        return rf"${coeff:.2g}\times10^{{{exp}}}$"
+
+    if log_x:
+        ax.set_xscale("log", base=10)
+        ax.set_xticks(tick_vals)
+        ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(_sci_label))
+        ax.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
+    else:
+        ax.set_xticks(tick_vals)
+        ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(_sci_label))
+    if log_y:
+        ax.set_yscale("log")
+        ax.yaxis.set_major_locator(matplotlib.ticker.LogLocator(base=10, numticks=15))
+        ax.yaxis.set_major_formatter(matplotlib.ticker.LogFormatterSciNotation(labelOnlyBase=False))
+        ax.yaxis.set_minor_locator(matplotlib.ticker.LogLocator(base=10, subs=np.arange(2, 10) * 0.1, numticks=15))
+        ax.yaxis.set_minor_formatter(matplotlib.ticker.LogFormatterSciNotation(labelOnlyBase=False, minor_thresholds=(2, 0.4)))
     ax.grid(True, which="major", alpha=0.3)
+    ax.grid(True, which="minor", alpha=0.12)
     ax.legend(title_fontsize=10, fontsize=9, loc="best")
 
+    scale_suffix = ""
+    if log_x and log_y:
+        scale_suffix = "_loglog"
+    elif log_y:
+        scale_suffix = "_logy"
+
     plt.tight_layout()
-    base = output_dir / f"gemv_{shape_label.replace('x', '_')}"
+    base = output_dir / f"gemv_{shape_label.replace('x', '_')}{scale_suffix}"
     fig.savefig(base.with_suffix(".png"), dpi=300, bbox_inches="tight")
     fig.savefig(base.with_suffix(".pdf"), bbox_inches="tight")
     plt.close(fig)
@@ -222,17 +371,62 @@ def main() -> None:
         help="Which parsed A100 time column to plot",
     )
     parser.add_argument("--bootstrap-samples", type=int, default=2000, help="Bootstrap samples for local CI estimation")
+    parser.add_argument(
+        "--from-csv",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Load a pre-built CSV (previously saved by this script) instead of scanning "
+            "--results-root.  The file must contain columns: shape_label, px, py, k, "
+            "series, source, time_us, ci_low_us, ci_high_us.  "
+            "Incompatible with --with-baselines and --results-root."
+        ),
+    )
+    scale_group = parser.add_mutually_exclusive_group()
+    scale_group.add_argument("--log-y", action="store_true", help="Use log scale on the y-axis (x remains log base-2)")
+    scale_group.add_argument("--log-log", action="store_true", help="Use log scale on both axes (log-log plot)")
     args = parser.parse_args()
+
+    if args.from_csv is not None and args.with_baselines:
+        parser.error("--from-csv and --with-baselines are mutually exclusive")
+
+    log_y = args.log_y or args.log_log
+    log_x = True  # x is always log base-2; --log-log makes the y label explicit
 
     sns.set_style("whitegrid")
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    local_df = collect_local_dataframe(args.results_root, args.bootstrap_samples)
-    a100_df = collect_a100_dataframe(args.a100_csv, args.a100_column) if args.with_baselines else pd.DataFrame()
-    df = pd.concat([local_df, a100_df], ignore_index=True)
+    if args.from_csv is not None:
+        if not args.from_csv.exists():
+            parser.error(f"--from-csv does not exist: {args.from_csv}")
+        df = pd.read_csv(args.from_csv, index_col=0)
+        required = {"shape_label", "px", "py", "k", "series", "source", "time_us", "ci_low_us", "ci_high_us"}
+        missing = required - set(df.columns)
+        if missing:
+            parser.error(f"--from-csv is missing required columns: {', '.join(sorted(missing))}")
+    else:
+        if not args.results_root.exists():
+            parser.error(f"--results-root does not exist: {args.results_root}")
+
+        if args.with_baselines and not args.a100_csv.exists():
+            parser.error(f"--a100-csv does not exist: {args.a100_csv}  (omit --with-baselines to skip A100 data)")
+
+        local_df = collect_local_dataframe(args.results_root, args.bootstrap_samples)
+        if local_df.empty:
+            parser.error(
+                f"No benchmark results found under {args.results_root}\n"
+                "  Expected subdirectories of the form grid_<PX>_<PY>/<method>/PX_<PX>_PY_<PY>/K_<K>/"
+            )
+
+        a100_df = collect_a100_dataframe(args.a100_csv, args.a100_column) if args.with_baselines else pd.DataFrame()
+        if args.with_baselines and a100_df.empty:
+            print(f"Warning: A100 CSV loaded but contained no rows: {args.a100_csv}")
+
+        df = pd.concat([local_df, a100_df], ignore_index=True)
 
     for shape_label in sorted(df["shape_label"].unique()):
-        plot_shape(df, shape_label, args.output_dir, args.show_ci)
+        plot_shape(df, shape_label, args.output_dir, args.show_ci, log_y=log_y, log_x=log_x)
         print(f"Plotted {shape_label}")
 
 
