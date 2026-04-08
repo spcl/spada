@@ -166,8 +166,8 @@ def test_prints_place_block_bytes_per_rectangle(capsys):
     lower_spatial_ir_to_csl(kernel, disable_benchmarking=True, prune_memory=False)
 
     captured = capsys.readouterr()
-    assert 'Stats P0,0: place block uses 2 bytes/PE' in captured.out
-    assert 'Stats P1,0: place block uses 8 bytes/PE' in captured.out
+    assert 'Stats P0,0: 2 bytes/PE' in captured.out
+    assert 'Stats P1,0: 8 bytes/PE' in captured.out
 
 
 if __name__ == '__main__':
