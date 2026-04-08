@@ -723,6 +723,7 @@ HARDWARE: tuple[HardwareSpec, ...] = (
 X_MIN, X_MAX = 1e-2, 1e2
 Y_MIN, Y_MAX = 10.0, 1e7
 FIG_W, FIG_H = 5.8, 7.5
+FIG_W_SMALL, FIG_H_SMALL = 6.0, 5.0
 X_DECADES = np.log10(X_MAX) - np.log10(X_MIN)   # 4
 Y_DECADES = np.log10(Y_MAX) - np.log10(Y_MIN)   # 6
 
@@ -825,12 +826,12 @@ def plot_roofline(
 ) -> None:
     sns.set_style("whitegrid")
 
-    fig_w, fig_h   = (5.0, 5.0) if small else (FIG_W, FIG_H)
-    legend_fs      = 6   if small else 9
-    axis_label_fs  = 9   if small else 12
-    roof_label_fs  = 6   if small else 8.5
-    peak_label_fs  = 6.5 if small else 9
-    hw_name_fs     = 8   if small else 11
+    fig_w, fig_h   = (FIG_W_SMALL, FIG_H_SMALL) if small else (FIG_W, FIG_H)
+    legend_fs      = 14   if small else 9
+    axis_label_fs  = 16   if small else 12
+    roof_label_fs  = 14   if small else 8.5
+    peak_label_fs  = 14 if small else 9
+    hw_name_fs     = 18   if small else 11
 
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
@@ -859,12 +860,27 @@ def plot_roofline(
 
     rot = diagonal_rotation(ax)
 
+    # In small mode shift roof labels left/down along their diagonal.
+    # A100 labels get a stronger shift than WSE-2.
+    _wse2_scale  = 0.45
+    _a100_scale  = 0.22
+
     for hw in HARDWARE:
+        roof_label_x_scale = (
+            _a100_scale if (small and hw.name == "NVIDIA A100")
+            else _wse2_scale if small
+            else 1.0
+        )
         for roof in hw.roofs:
             lx, ly = label_xy(roof)
+            lx = max(lx * roof_label_x_scale, X_MIN * 1.05)
+            ly = roof.bandwidth_gbs * lx
+            label_text = roof.label
+            if small and "Off/onramp to fabric" in label_text:
+                label_text = label_text.replace("Off/onramp to fabric\n", "Fabric\n")
             ax.text(
                 lx, ly,
-                roof.label,
+                label_text,
                 fontsize=roof_label_fs,
                 rotation=rot,
                 rotation_mode="anchor",
@@ -953,7 +969,15 @@ def plot_roofline(
             )
 
     if data_series:
-        ax.legend(fontsize=legend_fs, loc="best")
+        if small:
+            ax.legend(
+                fontsize=legend_fs,
+                loc="upper left",
+                bbox_to_anchor=(1.01, 1),
+                borderaxespad=0,
+            )
+        else:
+            ax.legend(fontsize=legend_fs, loc="best")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1056,8 +1080,8 @@ def main() -> None:
         help="Annotate each data point with its performance-per-watt (GFLOPs/W).",
     )
     parser.add_argument(
-        "--wse-power-w", type=float, default=20_000.0, metavar="W",
-        help="WSE-2 system TDP in Watts used for GFLOPs/W annotations (default: 20000).",
+        "--wse-power-w", type=float, default=23_000.0, metavar="W",
+        help="WSE-2 system TDP in Watts used for GFLOPs/W annotations (default: 23000).",
     )
     parser.add_argument(
         "--a100-power-w", type=float, default=250.0, metavar="W",
