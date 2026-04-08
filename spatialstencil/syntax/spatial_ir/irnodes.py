@@ -459,10 +459,12 @@ class SubgridExpression(SpatialNode):
             raise TypeError(f'Cannot obtain concrete grid size. y range value "{stop_y.as_ir()}" is not integral')
 
         x_stride, y_stride = self.get_grid_stride()
+
         # Canonicalize: round stop up to the next stride boundary relative to start.
         def _canon(start, stop, stride):
             offset = stop - start
             return start + ((offset + stride - 1) // stride) * stride
+
         return start_x, _canon(start_x, stop_x, x_stride), start_y, _canon(start_y, stop_y, y_stride)
 
     def get_grid_stride(self) -> tuple[int, int]:
@@ -599,10 +601,8 @@ class RoutingDeclaration(SpatialNode):
             return self.channel
         val = self.channel.eval()
         if not isinstance(val, int):
-            raise ValueError(
-                f"Channel expression '{self.channel.as_ir()}' did not evaluate to an integer. "
-                "Ensure all parameters and loop variables are concretized before CSL lowering."
-            )
+            raise ValueError(f"Channel expression '{self.channel.as_ir()}' did not evaluate to an integer. "
+                             "Ensure all parameters and loop variables are concretized before CSL lowering.")
         return val
 
     def as_ir(self, indent: int = 0) -> str:
@@ -736,11 +736,19 @@ class StreamDeclaration(SpatialNode):
     def validate(self) -> None:
         assert isinstance(self.dtype, StreamType)
         assert isinstance(self.stream_name, Identifier)
-        assert isinstance(self.stream, (RelativeStreamDeclaration, MulticastRangeStreamDeclaration, ExternStreamDeclaration))
+        assert isinstance(self.stream,
+                          (RelativeStreamDeclaration, MulticastRangeStreamDeclaration, ExternStreamDeclaration))
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
-        return f'{indent_str}stream<{self.dtype.element_type.as_ir()}> {self.stream_name.as_ir()} = {self.stream.as_ir()}'
+
+        # Properly indent stream contents
+        inner_stream = self.stream.as_ir()
+        inner_stream_lines = inner_stream.splitlines()
+        inner_stream = '\n'.join([inner_stream_lines[0]] +
+                                 [indent_str + line for line in inner_stream_lines[1:]])
+
+        return f'{indent_str}stream<{self.dtype.element_type.as_ir()}> {self.stream_name.as_ir()} = {inner_stream}'
 
 
 ###
@@ -1395,9 +1403,9 @@ class Kernel(SpatialNode):
         phase_id = 1
         for elem in self.body:
             if isinstance(elem, Phase):
-                rectangles.extend([r for a in elem.place     if (r := _make_rect(a, phase_id)) is not None])
-                rectangles.extend([r for a in elem.dataflow  if (r := _make_rect(a, phase_id)) is not None])
-                rectangles.extend([r for a in elem.compute   if (r := _make_rect(a, phase_id)) is not None])
+                rectangles.extend([r for a in elem.place if (r := _make_rect(a, phase_id)) is not None])
+                rectangles.extend([r for a in elem.dataflow if (r := _make_rect(a, phase_id)) is not None])
+                rectangles.extend([r for a in elem.compute if (r := _make_rect(a, phase_id)) is not None])
                 phase_id += 1
             else:
                 assert isinstance(elem, (ComputeBlock, DataflowBlock, PlaceBlock))
