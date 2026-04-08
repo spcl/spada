@@ -279,6 +279,8 @@ class RooflineDataSeries:
     marker: str
     linestyle: str = "-"
     fillstyle: str = "full"   # "full" | "none" (hollow) | "left" (half-filled)
+    power_w: float | None = None  # system TDP in Watts; enables GFLOPs/W annotation
+    annotate_side: str = "right"  # "left" | "right" – side for the GFLOPs/W label
 
 
 # ── Series loader ─────────────────────────────────────────────────────────────
@@ -301,6 +303,7 @@ def load_series(
     marker_map: dict[str, str] | None = None,
     marker_index: int | None = None,
     dropna: bool = True,
+    power_w: float | None = None,
 ) -> list[RooflineDataSeries]:
     """Load a CSV and produce one `RooflineDataSeries` per group.
 
@@ -372,6 +375,7 @@ def load_series(
         result.append(RooflineDataSeries(
             label=label, points=points,
             color=color, marker=mkr, linestyle=linestyle, fillstyle=fillstyle,
+            power_w=power_w,
         ))
 
     return result
@@ -497,6 +501,7 @@ def load_stencil_series(
     scaling_csv: Path,
     stencil_k: int | None = None,
     stencil_programs: list[str] | None = None,
+    power_w: float | None = None,
 ) -> list[RooflineDataSeries]:
     """Load stencil benchmark series for the roofline plot.
 
@@ -570,6 +575,7 @@ def load_stencil_series(
             marker=STENCIL_MARKER,
             linestyle="",   # no connecting line; each k is an independent point
             fillstyle="full",
+            power_w=power_w,
         ))
 
     return result
@@ -581,6 +587,7 @@ def load_a100_stencil_series(
     stencil_k: int | None = None,
     stencil_programs: list[str] | None = None,
     use_streaming_ai: bool = True,
+    power_w: float | None = None,
 ) -> list[RooflineDataSeries]:
     """Load A100 stencil baseline series from a directory of per-stencil CSVs.
 
@@ -662,6 +669,7 @@ def load_a100_stencil_series(
             marker=STENCIL_MARKER,
             linestyle="",
             fillstyle="none",   # hollow = A100
+            power_w=power_w,
         ))
 
     return result
@@ -714,7 +722,7 @@ HARDWARE: tuple[HardwareSpec, ...] = (
 
 X_MIN, X_MAX = 1e-2, 1e2
 Y_MIN, Y_MAX = 10.0, 1e7
-FIG_W, FIG_H = 5.8, 8.1
+FIG_W, FIG_H = 5.8, 7.5
 X_DECADES = np.log10(X_MAX) - np.log10(X_MIN)   # 4
 Y_DECADES = np.log10(Y_MAX) - np.log10(Y_MIN)   # 6
 
@@ -722,8 +730,8 @@ Y_DECADES = np.log10(Y_MAX) - np.log10(Y_MIN)   # 6
 # ── Series CSV I/O ────────────────────────────────────────────────────────────
 
 SERIES_CSV_NAME = "roofline_data.csv"
-_SERIES_CSV_COLS = ["label", "color", "marker", "linestyle", "fillstyle",
-                    "intensity", "gflops", "ci_low", "ci_high"]
+_SERIES_CSV_COLS = ["label", "color", "marker", "linestyle", "fillstyle", "power_w",
+                    "annotate_side", "intensity", "gflops", "ci_low", "ci_high"]
 
 
 def export_series_csv(output_dir: Path, data_series: list[RooflineDataSeries]) -> None:
@@ -737,6 +745,8 @@ def export_series_csv(output_dir: Path, data_series: list[RooflineDataSeries]) -
                 "marker":    s.marker,
                 "linestyle": s.linestyle or "-",
                 "fillstyle": s.fillstyle or "full",
+                "power_w":      s.power_w  if s.power_w  is not None else "",
+                "annotate_side": s.annotate_side,
                 "intensity": p.intensity,
                 "gflops":    p.gflops,
                 "ci_low":    p.ci_low  if p.ci_low  is not None else "",
@@ -770,6 +780,7 @@ def import_series_csv(csv_path: Path) -> list[RooflineDataSeries]:
             )
             for _, r in group.iterrows()
         ]
+        pw = row0["power_w"]
         result.append(RooflineDataSeries(
             label=str(label),
             points=points,
@@ -777,6 +788,8 @@ def import_series_csv(csv_path: Path) -> list[RooflineDataSeries]:
             marker=_str(row0["marker"], "o"),
             linestyle=_str(row0["linestyle"], "-"),
             fillstyle=_str(row0["fillstyle"], "full"),
+            power_w=float(pw) if pd.notna(pw) and str(pw) != "" else None,
+            annotate_side=_str(row0.get("annotate_side", "right"), "right"),
         ))
     return result
 
@@ -808,6 +821,7 @@ def plot_roofline(
     output_dir: Path,
     data_series: list[RooflineDataSeries] = (),
     small: bool = False,
+    annotate_watts: bool = False,
 ) -> None:
     sns.set_style("whitegrid")
 
@@ -882,6 +896,9 @@ def plot_roofline(
         )
 
     # ── Data series ───────────────────────────────────────────────────────────
+    # Collect watt annotations during the loop; render afterwards.
+    _watt_annots: list[tuple[float, float, str, str, str]] = []  # (x, y, text, color, side)
+
     for series in data_series:
         xs = [p.intensity for p in series.points]
         ys = [p.gflops for p in series.points]
@@ -907,6 +924,32 @@ def plot_roofline(
                 color=series.color,
                 alpha=0.18,
                 linewidth=0,
+            )
+
+        if annotate_watts and series.power_w is not None:
+            for p in series.points:
+                _watt_annots.append((
+                    p.intensity, p.gflops,
+                    f"{p.gflops / series.power_w:.2f} GF/W",
+                    series.color,
+                    series.annotate_side,
+                ))
+
+    # ── Watt annotation rendering ─────────────────────────────────────────────
+    if _watt_annots:
+        watts_fs = 5.5 if small else 6.5
+        for ix, iy, text, color, side in _watt_annots:
+            xoff = -4 if side == "left" else 4
+            ax.annotate(
+                text,
+                xy=(ix, iy),
+                xytext=(xoff, 6),
+                textcoords="offset points",
+                fontsize=watts_fs,
+                color=color,
+                ha="right" if side == "left" else "left",
+                va="bottom",
+                bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.75),
             )
 
     if data_series:
@@ -1008,13 +1051,35 @@ def main() -> None:
         help="If set, show only these stencil program names "
              "(e.g. \"2D Laplacian\" \"Vertical Stencil\"). Shows all when omitted.",
     )
+    parser.add_argument(
+        "--annotate-watts", action="store_true", default=False,
+        help="Annotate each data point with its performance-per-watt (GFLOPs/W).",
+    )
+    parser.add_argument(
+        "--wse-power-w", type=float, default=20_000.0, metavar="W",
+        help="WSE-2 system TDP in Watts used for GFLOPs/W annotations (default: 20000).",
+    )
+    parser.add_argument(
+        "--a100-power-w", type=float, default=250.0, metavar="W",
+        help="A100 TDP in Watts used for GFLOPs/W annotations (default: 250).",
+    )
     args = parser.parse_args()
 
     if args.from_csv is not None:
         if not args.from_csv.exists():
             parser.error(f"--from-csv: file not found: {args.from_csv}")
         data_series = import_series_csv(args.from_csv)
-        plot_roofline(args.output_dir, data_series, small=args.small)
+        _ANNOTATE_LEFT_LABELS: tuple[str, ...] = (
+            "SpaDA Chain Reduce",
+            "HPDC24",
+            "A100 UVBKE",
+            "A100 GEMV CUBLAS",
+        )
+        for s in data_series:
+            if any(pat in s.label for pat in _ANNOTATE_LEFT_LABELS):
+                s.annotate_side = "left"
+        plot_roofline(args.output_dir, data_series, small=args.small,
+                      annotate_watts=args.annotate_watts)
         return
 
     data_series: list[RooflineDataSeries] = []
@@ -1053,8 +1118,10 @@ def main() -> None:
             return gemv_filter(df[df["source"] == "A100"])
 
         gemv_series = (
-            load_series(metrics=WSEScaledGEMVMetrics(), filter_fn=wse_filter,  **_gemv_kwargs)
-            + load_series(metrics=ScaledGEMVMetrics(),    filter_fn=a100_gemv_filter, **_gemv_kwargs)
+            load_series(metrics=WSEScaledGEMVMetrics(), filter_fn=wse_filter,
+                        power_w=args.wse_power_w, **_gemv_kwargs)
+            + load_series(metrics=ScaledGEMVMetrics(), filter_fn=a100_gemv_filter,
+                          power_w=args.a100_power_w, **_gemv_kwargs)
         )
         k_desc = f", k={args.k}" if args.k is not None else ""
         print(f"Loaded {len(gemv_series)} GEMV series from {args.gemv_csv}{k_desc}")
@@ -1099,6 +1166,7 @@ def main() -> None:
                 )
             ),
             filter_fn=reduce_filter,
+            power_w=args.wse_power_w,
         )
         k_desc = f", k={args.reduce_k}" if args.reduce_k is not None else ""
         m_desc = f", methods={args.reduce_methods}" if args.reduce_methods else ""
@@ -1118,6 +1186,7 @@ def main() -> None:
             scaling_csv=args.stencil_scaling_csv,
             stencil_k=args.stencil_k,
             stencil_programs=args.stencil_programs,
+            power_w=args.wse_power_w,
         )
         k_desc = f", k={args.stencil_k}" if args.stencil_k is not None else ""
         p_desc = f", programs={args.stencil_programs}" if args.stencil_programs else ""
@@ -1135,11 +1204,24 @@ def main() -> None:
             stencil_k=args.stencil_k,
             stencil_programs=args.stencil_programs,
             use_streaming_ai=not args.a100_stencil_no_streaming_ai,
+            power_w=args.a100_power_w,
         )
         print(f"Loaded {len(a100_stencil_series)} A100 stencil series from {args.a100_stencil_dir}")
         data_series += a100_stencil_series
 
-    plot_roofline(args.output_dir, data_series, small=args.small)
+    # Labels (or substrings) that should have their GFLOPs/W annotation on the left.
+    _ANNOTATE_LEFT_LABELS: tuple[str, ...] = (
+        "SpaDA Chain Reduce",
+        "HPDC24",          # catches "Chain Reduce (HPDC24, …)"
+        "A100 UVBKE",
+        "A100 GEMV CUBLAS",
+    )
+    for s in data_series:
+        if any(pat in s.label for pat in _ANNOTATE_LEFT_LABELS):
+            s.annotate_side = "left"
+
+    plot_roofline(args.output_dir, data_series, small=args.small,
+                  annotate_watts=args.annotate_watts)
 
 
 if __name__ == "__main__":
