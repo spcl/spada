@@ -410,20 +410,20 @@ class ReduceMetrics(OperationMetrics):
         nx = self._nx(row)
         ny = self._ny(row)
         k = self._k(row)
-        row_flops = float((nx - 1)) * ny * k
-        col_flops = float((ny - 1)) * k
-        print(f"row_flops: {row_flops}, col_flops: {col_flops}")
+        row_flops = float(nx - 1) * ny * k
+        col_flops = float(ny - 1) * k
         return row_flops + col_flops
 
     def bytes_transferred(self, row: pd.Series) -> float:
         nx = self._nx(row)
         ny = self._ny(row)
         k = self._k(row)
-        row_elems = float((nx - 1) * 4 * 2) * ny * k
-        col_elems = float((ny - 1) * 4 * 2) * k
-        print(f"nx: {nx}, ny: {ny}")
-        print(f"row_elems: {row_elems}, col_elems: {col_elems}")
-        return (row_elems + col_elems) * 4
+        # Each fabric hop carries K f32 elements in both directions (send + receive).
+        # Phase X: (NX-1) hops per row × NY rows
+        # Phase Y: (NY-1) hops in column 0
+        row_bytes = float(nx - 1) * ny * k * 4 * 2
+        col_bytes = float(ny - 1) * k * 4 * 2
+        return row_bytes + col_bytes
 
 
 # ── Visual encoding ───────────────────────────────────────────────────────────
