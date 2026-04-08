@@ -211,6 +211,55 @@ class ScaledGEMVMetrics(OperationMetrics):
         m, n = self._dims(row)
         return float((m * n + n + 2 * m) * 4)
 
+class WSEScaledGEMVMetrics(OperationMetrics):
+    """Metrics for the WSE-2 scaled GEMV  y = α·A·x + β·y  (BLAS SGEMV, FP32).
+
+    A is distributed across a px×py PE grid where each PE holds a k×k block,
+    so the full matrix dimensions are M = px*k  (rows) and N = py*k  (cols).
+
+    FLOPs  = 2·M·N + 3·M
+               ↑ Ax       ↑ scale α·(Ax), scale β·y, add
+    Bytes  = BCAST + Local Matrix-Vector multiplication + 1D Chain Reduce in parallel + READ Y + WRITE Y
+    """
+
+    def _dims(self, row: pd.Series) -> tuple[int, int]:
+        m = int(row["px"]) * int(row["k"])
+        n = int(row["py"]) * int(row["k"])
+        return m, n
+
+    def _px(self, row: pd.Series) -> int:
+        return int(row["px"])
+
+    def _py(self, row: pd.Series) -> int:
+        return int(row["py"])
+
+    def _k(self, row: pd.Series) -> int:
+        return int(row["k"])
+
+    def flops(self, row: pd.Series) -> float:
+        m, n = self._dims(row)
+        return float(2 * m * n + 3 * m)
+
+    def bytes_transferred(self, row: pd.Series) -> float:
+        m, n = self._dims(row)
+        k = self._k(row)
+        px = self._px(row)
+        py = self._py(row)
+        
+        # BCAST
+        bcast_bytes = float(k * 4) * px * py
+        # READ A
+        read_a_bytes = float(m * n * 4)
+        # READ X
+        read_x_bytes = float(n * 4) * px
+        # READ Y
+        read_y_bytes = float(n * 4) * py
+        # WRITE Y
+        write_y_bytes = float(n * 4) * py
+        # REDUCE (Approximation)
+        reduce_bytes = float(k * 4) * px * py * 2
+        
+        return bcast_bytes + read_a_bytes + read_x_bytes + read_y_bytes + write_y_bytes + reduce_bytes
 
 # ── Plot data types ───────────────────────────────────────────────────────────
 
@@ -329,22 +378,14 @@ def load_series(
 
 
 class ReduceMetrics(OperationMetrics):
-    """Metrics for an element-wise sum reduction across a px×py PE grid.
-
-    Each PE holds k = x/4 f32 elements (x is the message size in bytes from
-    the CSV).  Using x directly means HPDC24 rows (which lack k_count/px/py)
-    are fully supported.  The PE grid dimensions are supplied at construction
-    time (default 512×512).
-
-    FLOPs  = (N − 1) · k    where N = px · py,  k = x / 4
-               ↑ one addition per contributing PE, for each of the k elements
-    Bytes  = (N · k + N · k) · 4 = k · N · 8
-               ↑ read all N input vectors once + write all input vectors once
-    Intensity ≈ 0.125 FLOP/Byte  (independent of k and grid size for large N)
+    """Metrics for an element-wise sum reduction across a px×py 2D PE grid.
+    Using an XY-Chain Reduce implementation.
     """
 
     def __init__(self, default_px: int = 512, default_py: int = 512) -> None:
         self.default_n = default_px * default_py
+        self.default_px = default_px
+        self.default_py = default_py
 
     def _n(self, row: pd.Series) -> int:
         """PE count: prefer per-row px/py when available (e.g. 750×994), else fall back to default."""
@@ -352,18 +393,37 @@ class ReduceMetrics(OperationMetrics):
             return int(row["px"]) * int(row["py"])
         return self.default_n
 
+    def _nx(self, row: pd.Series) -> int:
+        if "px" in row.index and pd.notna(row["px"]):
+            return int(row["px"])
+        return self.default_px
+
+    def _ny(self, row: pd.Series) -> int:
+        if "py" in row.index and pd.notna(row["py"]):
+            return int(row["py"])
+        return self.default_py
+
     def _k(self, row: pd.Series) -> int:
         return int(row["x"]) // 4   # x is message size in bytes; k = x / 4 for f32
 
     def flops(self, row: pd.Series) -> float:
-        n = self._n(row)
+        nx = self._nx(row)
+        ny = self._ny(row)
         k = self._k(row)
-        return float((n - 1) * k)
+        row_flops = float((nx - 1)) * ny * k
+        col_flops = float((ny - 1)) * k
+        print(f"row_flops: {row_flops}, col_flops: {col_flops}")
+        return row_flops + col_flops
 
     def bytes_transferred(self, row: pd.Series) -> float:
-        n = self._n(row)
+        nx = self._nx(row)
+        ny = self._ny(row)
         k = self._k(row)
-        return float((n * k + k) * 4) * 2
+        row_elems = float((nx - 1) * 4 * 2) * ny * k
+        col_elems = float((ny - 1) * 4 * 2) * k
+        print(f"nx: {nx}, ny: {ny}")
+        print(f"row_elems: {row_elems}, col_elems: {col_elems}")
+        return (row_elems + col_elems) * 4
 
 
 # ── Visual encoding ───────────────────────────────────────────────────────────
@@ -876,22 +936,33 @@ def main() -> None:
                 df = df[df["series"].isin(args.gemv_series)]
             return df
 
-        gemv_series = load_series(
+        _gemv_kwargs = dict(
             csv_path=args.gemv_csv,
-            metrics=ScaledGEMVMetrics(),
             groupby=["series", "source"],
             color_map={},
-            color_fn=lambda key: GEMV_COLOR,   # all GEMV same color
+            color_fn=lambda key: GEMV_COLOR,
             marker=GEMV_MARKER,
             marker_map=SOURCE_MARKER_OVERRIDE,
-            marker_index=1,                    # source at key[1]
+            marker_index=1,
             fillstyle_map=SOURCE_FILLSTYLE,
-            fillstyle_index=1,                 # source at key[1]
+            fillstyle_index=1,
             label_fn=lambda key: {
                 "WSE-2 GEMV":           "SpaDA GEMV",
                 "WSE-2 GEMV Two-phase": "SpaDA GEMV (Two-phase)",
             }.get(key[0], key[0]),
-            filter_fn=gemv_filter,
+        )
+
+        # WSE series use the WSE-specific bytes model (broadcast + local GEMV + reduce)
+        def wse_filter(df: pd.DataFrame) -> pd.DataFrame:
+            return gemv_filter(df[df["source"] == "WSE"])
+
+        # A100 uses the standard BLAS SGEMV bytes model (stream A, x, y from DRAM)
+        def a100_gemv_filter(df: pd.DataFrame) -> pd.DataFrame:
+            return gemv_filter(df[df["source"] == "A100"])
+
+        gemv_series = (
+            load_series(metrics=WSEScaledGEMVMetrics(), filter_fn=wse_filter,  **_gemv_kwargs)
+            + load_series(metrics=ScaledGEMVMetrics(),    filter_fn=a100_gemv_filter, **_gemv_kwargs)
         )
         k_desc = f", k={args.k}" if args.k is not None else ""
         print(f"Loaded {len(gemv_series)} GEMV series from {args.gemv_csv}{k_desc}")
