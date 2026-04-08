@@ -2,7 +2,7 @@ import sys
 import os
 from pathlib import Path
 from spatialstencil.syntax.stencil_ir.parser import Parser
-from spatialstencil.syntax.stencil_ir.flop_counter import FLOPCounter
+from spatialstencil.syntax.stencil_ir.flop_counter import FLOPCounter, MemoryCounter
 
 
 def find_spst_files(directory: str) -> list[Path]:
@@ -29,32 +29,37 @@ def find_spst_files(directory: str) -> list[Path]:
     return sorted(spst_files)
 
 
-def analyze_file(filepath: Path, parser: Parser, counter: FLOPCounter) -> tuple[str, int, bool, str]:
+def analyze_file(
+    filepath: Path,
+    parser: Parser,
+    flop_counter: FLOPCounter,
+    mem_counter: MemoryCounter,
+) -> tuple[str, int, int, int, int, float, bool, str]:
     """
     Analyze a single .spst file and return results.
-    
-    Args:
-        filepath: Path to the .spst file
-        parser: Parser instance
-        counter: FLOPCounter instance
-        
+
     Returns:
-        Tuple of (filename, flop_count, success, error_message)
+        (filename, flops, loads, stores, bytes_transferred,
+         arithmetic_intensity, success, error_message)
     """
     try:
-        # Read and parse the file
         with open(filepath, 'r') as f:
             code = f.read()
-        
+
         program = parser.parse(code)
-        
-        # Count FLOPs
-        flop_count = counter.count(program)
-        
-        return (str(filepath), flop_count, True, "")
-        
+
+        flops = flop_counter.count(program)
+        mem = mem_counter.count(program)
+
+        loads = mem['loads']
+        stores = mem['stores']
+        total_bytes = mem['bytes']
+        ai = flops / total_bytes if total_bytes > 0 else float('nan')
+
+        return (str(filepath), flops, loads, stores, total_bytes, ai, True, "")
+
     except Exception as e:
-        return (str(filepath), 0, False, str(e))
+        return (str(filepath), 0, 0, 0, 0, float('nan'), False, str(e))
 
 
 def print_header():
@@ -65,50 +70,66 @@ def print_header():
     print()
 
 
-def print_summary(results: list[tuple[str, int, bool, str]]):
+def print_summary(results: list[tuple]):
     """
-    Print a summary of all analysis results.
-    
-    Args:
-        results: List of (filename, flop_count, success, error_message) tuples
+    Print a summary of all analysis results and write flops.csv.
+
+    Each result tuple:
+        (filename, flops, loads, stores, bytes_transferred,
+         arithmetic_intensity, success, error_message)
     """
-    successful = [r for r in results if r[2]]
-    failed = [r for r in results if not r[2]]
-    
-    print("\n" + "=" * 80)
+    successful = [r for r in results if r[6]]
+    failed = [r for r in results if not r[6]]
+
+    print("\n" + "=" * 100)
     print("SUMMARY")
-    print("=" * 80)
-    
+    print("=" * 100)
+
     import pandas as pd
-    df = pd.DataFrame([{'Program': Path(filename).name[:-5], "Flop": flop_count} for filename, flop_count, _, _, in successful])
-    df.to_csv("flops.csv")
+    rows = []
+    for filename, flops, loads, stores, total_bytes, ai, _, _ in successful:
+        rows.append({
+            'Program': Path(filename).name[:-5],
+            'Flop': flops,
+            'Loads': loads,
+            'Stores': stores,
+            'Bytes': total_bytes,
+            'ArithmeticIntensity': ai,
+        })
+    df = pd.DataFrame(rows)
+    df.to_csv("flops.csv", index=False)
 
     if successful:
         print(f"\nSuccessfully analyzed {len(successful)} file(s):")
-        print("-" * 80)
-        print(f"{'File':<50} {'FLOPs':>20}")
-        print("-" * 80)
-        
-        total_flops = 0
-        for filename, flop_count, _, _ in successful:
-            # Shorten filename for display
+        print("-" * 100)
+        print(f"{'File':<45} {'FLOPs':>14} {'Loads':>12} {'Stores':>10} {'Bytes':>14} {'AI (F/B)':>12}")
+        print("-" * 100)
+
+        total_flops = total_loads = total_stores = total_bytes_sum = 0
+        for filename, flops, loads, stores, total_bytes, ai, _, _ in successful:
             display_name = Path(filename).name
-            print(f"{display_name:<50} {flop_count:>20,}")
-            total_flops += flop_count
-        
-        print("-" * 80)
-        print(f"{'TOTAL':<50} {total_flops:>20,}")
-        print("-" * 80)
-    
+            ai_str = f"{ai:.4f}" if ai == ai else "n/a"  # nan check
+            print(f"{display_name:<45} {flops:>14,} {loads:>12,} {stores:>10,} {total_bytes:>14,} {ai_str:>12}")
+            total_flops += flops
+            total_loads += loads
+            total_stores += stores
+            total_bytes_sum += total_bytes
+
+        print("-" * 100)
+        overall_ai = total_flops / total_bytes_sum if total_bytes_sum > 0 else float('nan')
+        overall_ai_str = f"{overall_ai:.4f}" if overall_ai == overall_ai else "n/a"
+        print(f"{'TOTAL':<45} {total_flops:>14,} {total_loads:>12,} {total_stores:>10,} {total_bytes_sum:>14,} {overall_ai_str:>12}")
+        print("-" * 100)
+
     if failed:
         print(f"\n\nFailed to analyze {len(failed)} file(s):")
-        print("-" * 80)
-        for filename, _, _, error in failed:
+        print("-" * 100)
+        for filename, _, _, _, _, _, _, error in failed:
             display_name = Path(filename).name
             print(f"\n{display_name}:")
             print(f"  Error: {error}")
-        print("-" * 80)
-    
+        print("-" * 100)
+
     print(f"\n\nTotal files processed: {len(results)}")
     print(f"  Success: {len(successful)}")
     print(f"  Failed: {len(failed)}")
@@ -140,20 +161,22 @@ def main():
         # Create parser and counter instances
         print("Initializing parser...")
         parser = Parser()
-        counter = FLOPCounter()
-        
+        flop_counter = FLOPCounter()
+        mem_counter = MemoryCounter()
+
         print("Analyzing files...\n")
-        
+
         # Analyze each file
         results = []
         for i, filepath in enumerate(spst_files, 1):
             print(f"[{i}/{len(spst_files)}] Processing {filepath.name}...", end=" ")
-            
-            result = analyze_file(filepath, parser, counter)
+
+            result = analyze_file(filepath, parser, flop_counter, mem_counter)
             results.append(result)
-            
-            if result[2]:  # Success
-                print(f"✓ {result[1]:,} FLOPs")
+
+            if result[6]:  # Success
+                ai_str = f"{result[5]:.4f}" if result[5] == result[5] else "n/a"
+                print(f"✓ {result[1]:,} FLOPs  {result[4]:,} B  AI={ai_str}")
             else:  # Failed
                 print(f"✗ ERROR")
         

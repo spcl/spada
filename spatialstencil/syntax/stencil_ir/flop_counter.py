@@ -1,13 +1,15 @@
 """
-FLOP Counter for spatial stencil IR computations.
+FLOP and memory-access counters for spatial stencil IR computations.
 
-This visitor counts the total number of floating-point operations (FLOPs)
-in a stencil computation by analyzing statements and their execution domains.
+FLOPCounter counts arithmetic operations per point scaled by domain × extents.
+MemoryCounter counts unique field loads and stores per point, derives bytes
+transferred, and together with FLOPCounter enables arithmetic intensity analysis.
 """
-from spatialstencil.syntax.stencil_ir.irnodes import (FieldType, NodeVisitor, Expression, Identifier, Subscript, 
-                     UnaryOperator, BinaryOperator, TernaryOperator, 
-                     MathCall, StatementBlock, AssignOp, ReturnOp, 
+from spatialstencil.syntax.stencil_ir.irnodes import (FieldType, NodeVisitor, Expression, Identifier, Subscript,
+                     UnaryOperator, BinaryOperator, TernaryOperator,
+                     MathCall, StatementBlock, AssignOp, ReturnOp,
                      ViewType, Cartesian, Program)
+from spatialstencil.syntax.common.types import BIT_WIDTH
 
 
 class FLOPCounter(NodeVisitor):
@@ -176,3 +178,195 @@ class FLOPCounter(NodeVisitor):
         print(f"\nFLOPs per statement:")
         for i, info in enumerate(self.statement_flops, 1):
             print(f"  Statement {i}: {info['flops']:,} FLOPs")
+
+
+class MemoryCounter(NodeVisitor):
+    """
+    A visitor that counts memory accesses in a spatial stencil computation.
+
+    For each StatementBlock the model is:
+      - Loads per point  = number of unique (field_name, offset_tuple) pairs
+                           found in Subscript nodes inside the block body.
+                           Duplicate uses of the same field+offset are counted
+                           once (they map to a single cache line / register).
+      - Stores per point = number of output identifiers (len(node.outputs)),
+                           i.e. one write per output field per domain point.
+      - Bytes per access = BIT_WIDTH[dtype] // 8, taken from the first
+                           destination type in operation_type.
+      - Total bytes      = (loads_per_point + stores_per_point)
+                           × bytes_per_access × domain_size × num_extents
+
+    Arithmetic intensity is computed externally as total_flops / total_bytes.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.total_loads: int = 0
+        self.total_stores: int = 0
+        self.total_bytes: int = 0
+        self.statement_memory: list[dict] = []
+
+    # ------------------------------------------------------------------
+    # Expression-level load collection
+    # ------------------------------------------------------------------
+
+    def count_expression_loads(self, expr) -> set[tuple]:
+        """
+        Recursively collect unique (field_name, offset_tuple) load pairs.
+
+        Each distinct Subscript node that refers to a different
+        (field, offset) combination counts as one load per domain point.
+        Multiple uses of the same field+offset within one expression are
+        deduplicated and counted only once.
+        """
+        if not isinstance(expr, Expression):
+            return set()
+
+        value = expr.value
+
+        if isinstance(value, Subscript):
+            return {(value.value.name, tuple(value.subscript))}
+
+        if isinstance(value, (Identifier, int, float)):
+            return set()
+
+        if isinstance(value, UnaryOperator):
+            return self.count_expression_loads(value.value)
+
+        if isinstance(value, BinaryOperator):
+            return (self.count_expression_loads(value.left) |
+                    self.count_expression_loads(value.right))
+
+        if isinstance(value, TernaryOperator):
+            return (self.count_expression_loads(value.test) |
+                    self.count_expression_loads(value.true_value) |
+                    self.count_expression_loads(value.false_value))
+
+        if isinstance(value, MathCall):
+            result: set[tuple] = set()
+            for arg in value.arguments:
+                result |= self.count_expression_loads(arg)
+            return result
+
+        return set()
+
+    # ------------------------------------------------------------------
+    # Statement-level memory accounting
+    # ------------------------------------------------------------------
+
+    def _dtype_bytes(self, node: StatementBlock) -> int:
+        """Return bytes per element for the primary output type, or 0 if unknown."""
+        if not node.operation_type.destination:
+            return 0
+        dst = node.operation_type.destination[0]
+        dtype = getattr(dst, 'dtype', None)
+        if dtype is None:
+            return 0
+        return BIT_WIDTH.get(dtype, 0) // 8
+
+    def count_statement_memory(self, node: StatementBlock) -> tuple[int, int, int, int, int]:
+        """
+        Count memory accesses for a single StatementBlock.
+
+        Returns:
+            (unique_loads_per_point, stores_per_point, bytes_per_element,
+             domain_size, num_extents)
+        """
+        if not isinstance(node, StatementBlock):
+            return 0, 0, 0, 0, 0
+
+        # Collect all unique loads across every statement in the block
+        all_loads: set[tuple] = set()
+        for stmt in node.walk():
+            if isinstance(stmt, AssignOp):
+                all_loads |= self.count_expression_loads(stmt.value)
+            elif isinstance(stmt, ReturnOp):
+                for expr in stmt.values:
+                    all_loads |= self.count_expression_loads(expr)
+
+        unique_loads_per_point = len(all_loads)
+        stores_per_point = len(node.outputs)
+        bytes_per_element = self._dtype_bytes(node)
+
+        # Reuse the same domain/extent logic as FLOPCounter
+        if not node.operation_type.destination:
+            return unique_loads_per_point, stores_per_point, bytes_per_element, 0, 0
+
+        output_type = node.operation_type.destination[0]
+        if not isinstance(output_type, (ViewType, FieldType)):
+            return unique_loads_per_point, stores_per_point, bytes_per_element, 0, 0
+
+        domain_size = FLOPCounter().calculate_domain_size(output_type.domain)
+        num_extents = len(output_type.extent.extents) if isinstance(output_type, ViewType) else 1
+
+        return unique_loads_per_point, stores_per_point, bytes_per_element, domain_size, num_extents
+
+    # ------------------------------------------------------------------
+    # Visitor
+    # ------------------------------------------------------------------
+
+    def visit_StatementBlock(self, node: StatementBlock):
+        """Visit a StatementBlock and accumulate memory stats."""
+        loads_pp, stores_pp, bpe, domain_size, num_extents = self.count_statement_memory(node)
+
+        total_accesses = (loads_pp + stores_pp) * domain_size * num_extents
+        total_bytes = total_accesses * bpe
+        total_loads = loads_pp * domain_size * num_extents
+        total_stores = stores_pp * domain_size * num_extents
+
+        self.total_loads += total_loads
+        self.total_stores += total_stores
+        self.total_bytes += total_bytes
+        self.statement_memory.append({
+            'node': node,
+            'loads_per_point': loads_pp,
+            'stores_per_point': stores_pp,
+            'bytes_per_element': bpe,
+            'domain_size': domain_size,
+            'num_extents': num_extents,
+            'total_loads': total_loads,
+            'total_stores': total_stores,
+            'total_bytes': total_bytes,
+        })
+
+        self.generic_visit(node)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def count(self, program: Program) -> dict:
+        """
+        Count memory accesses for an entire program.
+
+        Returns a dict with keys:
+          loads, stores, bytes, statement_memory
+        Reset internal state before each call so the instance is reusable.
+        """
+        self.total_loads = 0
+        self.total_stores = 0
+        self.total_bytes = 0
+        self.statement_memory = []
+        self.visit(program)
+        return {
+            'loads': self.total_loads,
+            'stores': self.total_stores,
+            'bytes': self.total_bytes,
+            'statement_memory': self.statement_memory,
+        }
+
+    def print_report(self):
+        """Print a detailed memory access report."""
+        print(f"Total loads : {self.total_loads:,}")
+        print(f"Total stores: {self.total_stores:,}")
+        print(f"Total bytes : {self.total_bytes:,}")
+        print(f"\nPer-statement breakdown:")
+        for i, info in enumerate(self.statement_memory, 1):
+            print(
+                f"  Statement {i}: "
+                f"{info['loads_per_point']} loads/pt, "
+                f"{info['stores_per_point']} stores/pt, "
+                f"{info['bytes_per_element']} B/elem, "
+                f"domain={info['domain_size']}, extents={info['num_extents']} "
+                f"→ {info['total_bytes']:,} B"
+            )

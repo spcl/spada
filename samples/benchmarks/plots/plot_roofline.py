@@ -1,62 +1,117 @@
 """plot_roofline.py — Roofline plot for Cerebras WSE-2 and NVIDIA A100.
 
+Three problem types are supported: scaled GEMV, 2-D reduce collectives,
+and stencils.  All three can be combined in a single plot.  Run from the
+samples/benchmarks/plots/ directory so relative CSV paths resolve correctly.
+
 QUICK START
 -----------
 Empty roofline (hardware ceilings only):
 
     python plot_roofline.py
 
-Add GEMV data (all k values, 750×994 shape):
+All three problem types combined (recommended starting point):
+
+    python plot_roofline.py \\
+        --gemv-csv gemv_750_994.csv --k 32 \\
+        --reduce-csv reduce2d_fixed_pxpy_df.csv --reduce-k 4096 \\
+            --reduce-methods chain_reduce_2d \\
+        --stencil-flops-csv stencil_flops.csv \\
+        --stencil-scaling-csv stencil_scaling_vertical.csv \\
+        --stencil-k 320
+
+GEMV OPTIONS
+------------
+Add GEMV data (all k values, 750×994 PE grid):
 
     python plot_roofline.py --gemv-csv gemv_750_994.csv
 
-Add GEMV data for a single block size k=16:
+Restrict to a single block size k=32:
 
-    python plot_roofline.py --gemv-csv gemv_750_994.csv --k 16
+    python plot_roofline.py --gemv-csv gemv_750_994.csv --k 32
 
+REDUCE OPTIONS
+--------------
 Add 2-D reduce collectives (all k, all methods, both sources):
 
     python plot_roofline.py --reduce-csv reduce2d_fixed_pxpy_df.csv
 
-Filter reduce to k=2048 elements/PE and only two methods:
+Filter to k=4096 elements/PE and a single method:
 
     python plot_roofline.py \\
         --reduce-csv reduce2d_fixed_pxpy_df.csv \\
-        --reduce-k 2048 \\
-        --reduce-methods twophase_reduce_2d tree_reduce_2d
+        --reduce-k 4096 \\
+        --reduce-methods chain_reduce_2d
 
-Combine GEMV and reduce with a custom output directory:
+STENCIL OPTIONS
+---------------
+Add stencil benchmarks (all programs, all z-depths):
 
     python plot_roofline.py \\
-        --gemv-csv gemv_750_994.csv --k 16 \\
-        --reduce-csv reduce2d_fixed_pxpy_df.csv --reduce-k 2048 \\
-        --output-dir my_plots/
+        --stencil-flops-csv stencil_flops.csv \\
+        --stencil-scaling-csv stencil_scaling_vertical.csv
+
+Restrict to z-depth k=320 and specific programs:
+
+    python plot_roofline.py \\
+        --stencil-flops-csv stencil_flops.csv \\
+        --stencil-scaling-csv stencil_scaling_vertical.csv \\
+        --stencil-k 320 \\
+        --stencil-programs "2D Laplacian" "Vertical Stencil"
+
+The stencil flops CSV is generated with:
+
+    python -m spatialstencil.cli.count_flop samples/benchmarks/
+
+GENERAL OPTIONS
+---------------
+--output-dir PATH   Where to write roofline.png and roofline.pdf
+                    (default: roofline_plots/ next to this script)
 
 EXPECTED CSV COLUMNS
 --------------------
 GEMV CSV  (--gemv-csv):
     shape_label, px, py, k, series, source, time_us[, ci_low_us, ci_high_us]
-    - series: "WSE-2 GEMV", "WSE-2 GEMV Two-phase", "A100 GEMV CUBLAS"
-    - Only rows with shape_label=="750x994" are used.
+    - series: "WSE-2 GEMV" | "WSE-2 GEMV Two-phase" | "A100 GEMV CUBLAS"
+    - Only rows with shape_label == "750x994" are used.
+    - Produced by: plot_gemv_sweep.py (saved as <shape>_<px>_<py>.csv)
 
 Reduce CSV  (--reduce-csv):
     x, method, source, time_us[, ci_low_us, ci_high_us]
-    - x: message size in bytes (= k_count × 4 for f32)
+    - x: message size in bytes (= k_elements × 4 for f32)
     - method: chain_reduce_2d | tree_reduce_2d | twophase_reduce_2d
-    - source: "This work" (filled marker) | "HPDC24" (hollow marker, dashed)
-    - PE grid is assumed to be 512×512 (hardcoded in ReduceMetrics).
+    - source: "This work" (filled, solid) | "HPDC24" (hollow, dashed)
+    - PE grid assumed 512×512.
+
+Stencil flops CSV  (--stencil-flops-csv):
+    Program, Flop, Loads, Stores, Bytes, ArithmeticIntensity
+    - Produced by: python -m spatialstencil.cli.count_flop <dir>
+    - Program names follow the pattern {name}_{x}_{y}_{z}
+    - Supported kernels: laplacian, vertical_advection, uvbke
+
+Stencil scaling CSV  (--stencil-scaling-csv):
+    Program, time_us, time_ci_low, time_ci_hi, k, flops, ...
+    - Program display names: "2D Laplacian" | "Vertical Stencil" | "UVBKE"
+    - k: z-dimension (vertical depth); one point per unique k per program
+
+VISUAL ENCODING
+---------------
+    Color    → author / source (blue = This work / WSE, green = A100, purple = HPDC24)
+    Marker   → problem type   (circle = GEMV, diamond = reduce, triangle = stencil)
+    Fillstyle → variant       (full = primary, hollow = baseline, half = two-phase)
+    Linestyle → source        (solid = This work, dashed = HPDC24 / external)
 
 EXTENDING TO NEW OPERATIONS
 ---------------------------
 1. Subclass OperationMetrics and implement flops() and bytes_transferred().
-2. Define COLOR_MAP, MARKER_MAP, and optionally MARKERFACECOLOR_MAP dicts.
-3. Call load_series() with the new metrics instance and add the result to
-   data_series before calling plot_roofline().
+2. Define COLOR_MAP and optionally MARKER_MAP / FILLSTYLE_MAP dicts.
+3. Call load_series() with the new metrics instance and append the result
+   to data_series before calling plot_roofline().
 
 OUTPUT
 ------
 Saves roofline.png (300 dpi) and roofline.pdf to --output-dir
-(default: plots/roofline_plots/ next to this script).
+(default: roofline_plots/ next to this script).
 """
 from __future__ import annotations
 
@@ -317,9 +372,9 @@ REDUCE_FILLSTYLE_MAP: dict[str, str] = {
 
 # Human-readable reduce method labels
 REDUCE_LABEL_MAP: dict[str, str] = {
-    "chain_reduce_2d":    "Chain Reduce 2D",
-    "tree_reduce_2d":     "Tree Reduce 2D",
-    "twophase_reduce_2d": "Two-phase Reduce 2D",
+    "chain_reduce_2d":    "SpaDA Chain Reduce",
+    "tree_reduce_2d":     "SpaDA Tree Reduce",
+    "twophase_reduce_2d": "SpaDA Two-phase Reduce",
 }
 
 # Linestyle per source (secondary distinguisher for multi-point reduce series)
@@ -327,6 +382,103 @@ REDUCE_SOURCE_LINESTYLE: dict[str, str] = {
     "This work": "-",
     "HPDC24":    "--",
 }
+
+# ── Stencil visual encoding ───────────────────────────────────────────────────
+
+STENCIL_MARKER = "^"
+
+# Color per stencil program (triangle marker, one series per program)
+STENCIL_COLOR_MAP: dict[str, str] = {
+    "2D Laplacian":    "#2166AC",   # blue  — consistent with WSE "This work"
+    "Vertical Stencil": "#E08214",  # amber
+    "UVBKE":            "#4DAC26",  # green
+}
+
+# Map from display name (scaling CSV) to program key prefix (flops CSV)
+STENCIL_NAME_MAP: dict[str, str] = {
+    "2D Laplacian":    "laplacian",
+    "Vertical Stencil": "vertical_advection",
+    "UVBKE":           "uvbke",
+}
+
+
+def load_stencil_series(
+    flops_csv: Path,
+    scaling_csv: Path,
+    stencil_k: int | None = None,
+    stencil_programs: list[str] | None = None,
+) -> list[RooflineDataSeries]:
+    """Load stencil benchmark series for the roofline plot.
+
+    Arithmetic intensity is taken from the flops CSV (constant per stencil
+    pattern, independent of domain size).  Performance (GFLOPs/s) is derived
+    from the median runtime in the scaling CSV.  Each (program, k) pair
+    becomes one RooflinePoint; all k-points for the same program are grouped
+    into one RooflineDataSeries.
+
+    Args:
+        flops_csv:        Output of ``python -m spatialstencil.cli.count_flop``.
+                          Must have columns: Program, Flop, Bytes, ArithmeticIntensity.
+        scaling_csv:      Runtime measurements CSV.
+                          Must have columns: Program, time_us, time_ci_low,
+                          time_ci_hi, k, flops.
+        stencil_k:        If given, include only rows with this z-depth (k).
+        stencil_programs: If given, include only these program display names.
+    """
+    flops_df = pd.read_csv(flops_csv)
+    scaling_df = pd.read_csv(scaling_csv)
+
+    # Build AI lookup: strip last three "_x_y_z" parts to recover the base key
+    ai_lookup: dict[str, float] = {}
+    for _, row in flops_df.iterrows():
+        prog = str(row["Program"])
+        parts = prog.split("_")
+        key = "_".join(parts[:-3]) if len(parts) > 3 else prog
+        ai_lookup[key] = float(row["ArithmeticIntensity"])
+
+    if stencil_programs is not None:
+        scaling_df = scaling_df[scaling_df["Program"].isin(stencil_programs)]
+    if stencil_k is not None:
+        scaling_df = scaling_df[scaling_df["k"] == stencil_k]
+
+    result: list[RooflineDataSeries] = []
+
+    for prog_name, prog_group in scaling_df.groupby("Program"):
+        prog_str = str(prog_name)
+        key = STENCIL_NAME_MAP.get(prog_str, prog_str.lower().replace(" ", "_"))
+        if key not in ai_lookup:
+            print(f"Warning: no AI data for '{prog_str}' (key '{key}') in {flops_csv}")
+            continue
+
+        intensity = ai_lookup[key]
+        color = STENCIL_COLOR_MAP.get(prog_str, "#333333")
+
+        points: list[RooflinePoint] = []
+        for k_val, k_group in prog_group.groupby("k"):
+            flops_val = float(k_group["flops"].iloc[0])
+            median_us = float(k_group["time_us"].median())
+            ci_lo_us  = float(k_group["time_ci_low"].median())
+            ci_hi_us  = float(k_group["time_ci_hi"].median())
+
+            gflops      = flops_val / (median_us * 1e-6) / 1e9
+            # Faster time → higher GFLOPs; swap lo/hi when converting
+            ci_lo_gflops = flops_val / (ci_hi_us  * 1e-6) / 1e9
+            ci_hi_gflops = flops_val / (ci_lo_us  * 1e-6) / 1e9
+
+            points.append(RooflinePoint(intensity, gflops, ci_lo_gflops, ci_hi_gflops))
+
+        # Sort by ascending GFLOPs (k increases along the series)
+        points.sort(key=lambda p: p.gflops)
+        result.append(RooflineDataSeries(
+            label=f"SpaDA {prog_str}",
+            points=points,
+            color=color,
+            marker=STENCIL_MARKER,
+            linestyle="",   # no connecting line; each k is an independent point
+            fillstyle="full",
+        ))
+
+    return result
 
 
 # ── Hardware roofline spec ────────────────────────────────────────────────────
@@ -545,6 +697,28 @@ def main() -> None:
              "(e.g. chain_reduce_2d tree_reduce_2d twophase_reduce_2d). "
              "Shows all methods when omitted.",
     )
+    parser.add_argument(
+        "--stencil-flops-csv", type=Path, default=None,
+        metavar="PATH",
+        help="Stencil flops CSV produced by 'python -m spatialstencil.cli.count_flop'. "
+             "Must be paired with --stencil-scaling-csv.",
+    )
+    parser.add_argument(
+        "--stencil-scaling-csv", type=Path, default=None,
+        metavar="PATH",
+        help="Stencil runtime scaling CSV with columns: Program, time_us, k, flops, ...",
+    )
+    parser.add_argument(
+        "--stencil-k", type=int, default=None,
+        metavar="K",
+        help="If set, restrict stencil data to rows with this z-depth (k).",
+    )
+    parser.add_argument(
+        "--stencil-programs", nargs="*", default=None,
+        metavar="PROG",
+        help="If set, show only these stencil program names "
+             "(e.g. \"2D Laplacian\" \"Vertical Stencil\"). Shows all when omitted.",
+    )
     args = parser.parse_args()
 
     data_series: list[RooflineDataSeries] = []
@@ -564,7 +738,10 @@ def main() -> None:
             color_key="secondary",
             marker=GEMV_MARKER,
             fillstyle_map=GEMV_FILLSTYLE_MAP,
-            label_fn=lambda key: key[0],
+            label_fn=lambda key: {
+                "WSE-2 GEMV":           "SpaDA GEMV",
+                "WSE-2 GEMV Two-phase": "SpaDA GEMV (Two-phase)",
+            }.get(key[0], key[0]),
             filter_fn=gemv_filter,
         )
         k_desc = f", k={args.k}" if args.k is not None else ""
@@ -589,13 +766,36 @@ def main() -> None:
             marker=REDUCE_MARKER,
             fillstyle_map=REDUCE_FILLSTYLE_MAP,
             linestyle_map=REDUCE_SOURCE_LINESTYLE,
-            label_fn=lambda key: f"{REDUCE_LABEL_MAP.get(key[0], key[0])} ({key[1]})",
+            label_fn=lambda key: (
+                f"{REDUCE_LABEL_MAP.get(key[0], key[0]).removeprefix('SpaDA ')} ({key[1]})"
+                if key[1] != "This work"
+                else REDUCE_LABEL_MAP.get(key[0], key[0])
+            ),
             filter_fn=reduce_filter,
         )
         k_desc = f", k={args.reduce_k}" if args.reduce_k is not None else ""
         m_desc = f", methods={args.reduce_methods}" if args.reduce_methods else ""
         print(f"Loaded {len(reduce_series)} reduce series from {args.reduce_csv}{k_desc}{m_desc}")
         data_series += reduce_series
+
+    if args.stencil_flops_csv is not None or args.stencil_scaling_csv is not None:
+        if args.stencil_flops_csv is None or args.stencil_scaling_csv is None:
+            parser.error("--stencil-flops-csv and --stencil-scaling-csv must be used together")
+        if not args.stencil_flops_csv.exists():
+            parser.error(f"--stencil-flops-csv does not exist: {args.stencil_flops_csv}")
+        if not args.stencil_scaling_csv.exists():
+            parser.error(f"--stencil-scaling-csv does not exist: {args.stencil_scaling_csv}")
+
+        stencil_series = load_stencil_series(
+            flops_csv=args.stencil_flops_csv,
+            scaling_csv=args.stencil_scaling_csv,
+            stencil_k=args.stencil_k,
+            stencil_programs=args.stencil_programs,
+        )
+        k_desc = f", k={args.stencil_k}" if args.stencil_k is not None else ""
+        p_desc = f", programs={args.stencil_programs}" if args.stencil_programs else ""
+        print(f"Loaded {len(stencil_series)} stencil series from {args.stencil_scaling_csv}{k_desc}{p_desc}")
+        data_series += stencil_series
 
     plot_roofline(args.output_dir, data_series)
 
