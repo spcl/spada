@@ -719,6 +719,68 @@ X_DECADES = np.log10(X_MAX) - np.log10(X_MIN)   # 4
 Y_DECADES = np.log10(Y_MAX) - np.log10(Y_MIN)   # 6
 
 
+# ── Series CSV I/O ────────────────────────────────────────────────────────────
+
+SERIES_CSV_NAME = "roofline_data.csv"
+_SERIES_CSV_COLS = ["label", "color", "marker", "linestyle", "fillstyle",
+                    "intensity", "gflops", "ci_low", "ci_high"]
+
+
+def export_series_csv(output_dir: Path, data_series: list[RooflineDataSeries]) -> None:
+    """Write every data point to *output_dir/roofline_data.csv*."""
+    rows = []
+    for s in data_series:
+        for p in s.points:
+            rows.append({
+                "label":     s.label,
+                "color":     s.color,
+                "marker":    s.marker,
+                "linestyle": s.linestyle or "-",
+                "fillstyle": s.fillstyle or "full",
+                "intensity": p.intensity,
+                "gflops":    p.gflops,
+                "ci_low":    p.ci_low  if p.ci_low  is not None else "",
+                "ci_high":   p.ci_high if p.ci_high is not None else "",
+            })
+    output_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = output_dir / SERIES_CSV_NAME
+    pd.DataFrame(rows, columns=_SERIES_CSV_COLS).to_csv(csv_path, index=False)
+    print(f"Saved data → {csv_path}")
+
+
+def import_series_csv(csv_path: Path) -> list[RooflineDataSeries]:
+    """Reconstruct a list of *RooflineDataSeries* from a previously exported CSV."""
+    df = pd.read_csv(csv_path)
+    missing = [c for c in _SERIES_CSV_COLS if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing columns in {csv_path}: {missing}")
+
+    def _str(val: object, default: str) -> str:
+        return default if (val is None or (isinstance(val, float) and pd.isna(val))) else str(val)
+
+    result: list[RooflineDataSeries] = []
+    for label, group in df.groupby("label", sort=False):
+        row0 = group.iloc[0]
+        points = [
+            RooflinePoint(
+                intensity=float(r["intensity"]),
+                gflops=float(r["gflops"]),
+                ci_low=float(r["ci_low"])  if pd.notna(r["ci_low"])  else None,
+                ci_high=float(r["ci_high"]) if pd.notna(r["ci_high"]) else None,
+            )
+            for _, r in group.iterrows()
+        ]
+        result.append(RooflineDataSeries(
+            label=str(label),
+            points=points,
+            color=_str(row0["color"], "#000000"),
+            marker=_str(row0["marker"], "o"),
+            linestyle=_str(row0["linestyle"], "-"),
+            fillstyle=_str(row0["fillstyle"], "full"),
+        ))
+    return result
+
+
 # ── Plot helpers ──────────────────────────────────────────────────────────────
 
 def roofline(x: np.ndarray, peak: float, bandwidth: float) -> np.ndarray:
@@ -745,10 +807,18 @@ def label_xy(roof: BandwidthRoof) -> tuple[float, float]:
 def plot_roofline(
     output_dir: Path,
     data_series: list[RooflineDataSeries] = (),
+    small: bool = False,
 ) -> None:
     sns.set_style("whitegrid")
 
-    fig, ax = plt.subplots(figsize=(FIG_W, FIG_H))
+    fig_w, fig_h   = (5.0, 5.0) if small else (FIG_W, FIG_H)
+    legend_fs      = 6   if small else 9
+    axis_label_fs  = 9   if small else 12
+    roof_label_fs  = 6   if small else 8.5
+    peak_label_fs  = 6.5 if small else 9
+    hw_name_fs     = 8   if small else 11
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
     x = np.logspace(np.log10(X_MIN), np.log10(X_MAX), 2000)
 
@@ -766,8 +836,8 @@ def plot_roofline(
     ax.set_yscale("log")
     ax.set_xlim(X_MIN, X_MAX)
     ax.set_ylim(Y_MIN, Y_MAX)
-    ax.set_xlabel("Arithmetic Intensity [FLOP/Byte]", fontsize=12, fontweight="bold")
-    ax.set_ylabel("Performance [GFLOP/s]", fontsize=12, fontweight="bold")
+    ax.set_xlabel("Arithmetic Intensity [FLOP/Byte]", fontsize=axis_label_fs, fontweight="bold")
+    ax.set_ylabel("Performance [GFLOP/s]", fontsize=axis_label_fs, fontweight="bold")
     ax.grid(True, which="major", alpha=0.3)
     ax.grid(True, which="minor", alpha=0.1)
 
@@ -781,7 +851,7 @@ def plot_roofline(
             ax.text(
                 lx, ly,
                 roof.label,
-                fontsize=8.5,
+                fontsize=roof_label_fs,
                 rotation=rot,
                 rotation_mode="anchor",
                 va="bottom",
@@ -794,7 +864,7 @@ def plot_roofline(
         ax.text(
             peak_label_x, hw.peak_gflops * 1.1,
             hw.peak_label,
-            fontsize=9,
+            fontsize=peak_label_fs,
             va="bottom",
             ha="left",
             color="black",
@@ -803,7 +873,7 @@ def plot_roofline(
         ax.text(
             *hw.name_xy,
             hw.name,
-            fontsize=11,
+            fontsize=hw_name_fs,
             style="italic",
             color="gray",
             alpha=0.65,
@@ -840,13 +910,18 @@ def plot_roofline(
             )
 
     if data_series:
-        ax.legend(fontsize=9, loc="best")
+        ax.legend(fontsize=legend_fs, loc="best")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_dir / "roofline.png", dpi=300, bbox_inches="tight")
-    fig.savefig(output_dir / "roofline.pdf", bbox_inches="tight")
+
+    if data_series:
+        export_series_csv(output_dir, data_series)
+
+    suffix = "_small" if small else ""
+    fig.savefig(output_dir / f"roofline{suffix}.png", dpi=300, bbox_inches="tight")
+    fig.savefig(output_dir / f"roofline{suffix}.pdf", bbox_inches="tight")
     plt.close(fig)
-    print(f"Saved → {output_dir}/roofline.{{png,pdf}}")
+    print(f"Saved → {output_dir}/roofline{suffix}.{{png,pdf}}")
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -859,6 +934,16 @@ def main() -> None:
     parser.add_argument(
         "--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR,
         help="Output directory for plots",
+    )
+    parser.add_argument(
+        "--small", action="store_true", default=False,
+        help="Small mode: 5×5 inch figure with smaller fonts, suitable for paper insets.",
+    )
+    parser.add_argument(
+        "--from-csv", type=Path, default=None,
+        metavar="PATH",
+        help=f"Load plot data from a previously exported '{SERIES_CSV_NAME}' and skip all "
+             "other data-loading arguments.  Useful for quick re-styling without reprocessing.",
     )
     parser.add_argument(
         "--gemv-csv", type=Path, default=None,
@@ -924,6 +1009,13 @@ def main() -> None:
              "(e.g. \"2D Laplacian\" \"Vertical Stencil\"). Shows all when omitted.",
     )
     args = parser.parse_args()
+
+    if args.from_csv is not None:
+        if not args.from_csv.exists():
+            parser.error(f"--from-csv: file not found: {args.from_csv}")
+        data_series = import_series_csv(args.from_csv)
+        plot_roofline(args.output_dir, data_series, small=args.small)
+        return
 
     data_series: list[RooflineDataSeries] = []
 
@@ -1047,7 +1139,7 @@ def main() -> None:
         print(f"Loaded {len(a100_stencil_series)} A100 stencil series from {args.a100_stencil_dir}")
         data_series += a100_stencil_series
 
-    plot_roofline(args.output_dir, data_series)
+    plot_roofline(args.output_dir, data_series, small=args.small)
 
 
 if __name__ == "__main__":
