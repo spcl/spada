@@ -139,6 +139,37 @@ def test_forward_sum():
         print('=============')
 
 
+def test_prints_place_block_bytes_per_rectangle(capsys):
+    kernel = parser.parse_string(
+        """
+        kernel @test<>() {
+            place u16 i, u16 j in [0:1, 0:1] {
+                i16 a
+            }
+            compute u16 i, u16 j in [0:1, 0:1] {
+                a = 1
+            }
+
+            place u16 i, u16 j in [1:2, 0:1] {
+                f32 b
+                f32 c
+            }
+            compute u16 i, u16 j in [1:2, 0:1] {
+                b = 1.0
+                c = b
+            }
+        }
+        """,
+        "test_place_block_stats.sptl",
+    )
+
+    lower_spatial_ir_to_csl(kernel, disable_benchmarking=True, prune_memory=False)
+
+    captured = capsys.readouterr()
+    assert 'Stats P0,0: 2 bytes/PE' in captured.out
+    assert 'Stats P1,0: 8 bytes/PE' in captured.out
+
+
 if __name__ == '__main__':
     test_non_concrete_program()
     test_add()
