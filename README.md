@@ -190,16 +190,16 @@ Other modes:
 
 ```bash
 # Run a single test
-tests/csl_runtime/run-in-lima.sh --sdk-dir <dir> --test test_add.sh
+tests/csl_runtime/run-in-lima.sh --sdk <dir> --test test_add.sh
 
 # Verify the SDK toolchain only
-tests/csl_runtime/run-in-lima.sh  --sdk-dir <dir> --check
+tests/csl_runtime/run-in-lima.sh  --sdk <dir> --check
 
 # Run the Cerebras SDK smoke test
-tests/csl_runtime/run-in-lima.sh  --sdk-dir <dir> --smoke /path/to/csl-extras-*
+tests/csl_runtime/run-in-lima.sh  --sdk <dir> --smoke /path/to/csl-extras-*
 
 # Drop into an interactive shell inside the VM
-tests/csl_runtime/run-in-lima.sh  --sdk-dir <dir> --shell
+tests/csl_runtime/run-in-lima.sh  --sdk <dir> --shell
 ```
 
  The repository must reside under `$HOME` (Lima mounts the Mac home directory by default). The Lima configuration is in `tests/csl_runtime/lima-ubuntu-x86_64.yaml`.
