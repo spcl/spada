@@ -1,7 +1,7 @@
 import unittest
-from spatialstencil.syntax.gt4py import parser
-from spatialstencil.syntax.stencil_ir import irnodes as sast, analysis
-from spatialstencil.lowering import gt4py_to_stencil_ir
+from spada.syntax.gt4py import parser
+from spada.syntax.stencil_ir import irnodes as sast, analysis
+from spada.lowering import gt4py_to_stencil_ir
 import numpy as np
 import os
 

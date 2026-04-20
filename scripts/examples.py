@@ -1,8 +1,8 @@
 import numpy as np
 import igraph as ig
-from spatialstencil.placement.domain import FieldDomain
-from spatialstencil.placement.stencil import Stencil, StencilDirection
-from spatialstencil.placement.graph import StencilGraph
+from spada.placement.domain import FieldDomain
+from spada.placement.stencil import Stencil, StencilDirection
+from spada.placement.graph import StencilGraph
 
 def horizontal_diffusion():
     """

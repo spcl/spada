@@ -1,5 +1,5 @@
 import pytest
-from spatialstencil.syntax.spatial_ir import canonicalization, irnodes as spir, parser, passes
+from spada.syntax.spatial_ir import canonicalization, irnodes as spir, parser, passes
 
 
 @pytest.mark.parametrize("streaming", (False, True))

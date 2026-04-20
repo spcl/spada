@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from spatialstencil.syntax.csl import benchmarking
+from spada.syntax.csl import benchmarking
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

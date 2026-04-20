@@ -3,19 +3,19 @@ from dataclasses import dataclass
 
 import unittest
 
-from spatialstencil.lowering.stencil_to_spatial_compute import HorizontalStencilTransformer
-from spatialstencil.lowering.stencil_to_spatial_dataflow import ProgramDataflow
-from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
-from spatialstencil.lowering.versioning import Versioning
-from spatialstencil.syntax.common.match_tree import TreeNode, TreeWildcard, MatchTree, MatchingBaseNode
-from spatialstencil.syntax.common.tree_matching import _match_pattern, PatternMatcher, PatternTransformer
+from spada.lowering.stencil_to_spatial_compute import HorizontalStencilTransformer
+from spada.lowering.stencil_to_spatial_dataflow import ProgramDataflow
+from spada.lowering.stencil_to_spatial_place import ProgramPlacement
+from spada.lowering.versioning import Versioning
+from spada.syntax.common.match_tree import TreeNode, TreeWildcard, MatchTree, MatchingBaseNode
+from spada.syntax.common.tree_matching import _match_pattern, PatternMatcher, PatternTransformer
 from typing import Tuple, List, TypeVar, Generic
 
-import spatialstencil.syntax.stencil_ir.irnodes as sast
-from spatialstencil.syntax.common.basenode import Wildcard
-from spatialstencil.syntax.common.types import ScalarType
-import spatialstencil.syntax.spatial_ir.irnodes as spa
-from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
+import spada.syntax.stencil_ir.irnodes as sast
+from spada.syntax.common.basenode import Wildcard
+from spada.syntax.common.types import ScalarType
+import spada.syntax.spatial_ir.irnodes as spa
+from spada.syntax.stencil_ir.domain_collector import DomainCollector
 
 
 # Assume Tree, Node, Wildcard classes are already defined from previous translations.

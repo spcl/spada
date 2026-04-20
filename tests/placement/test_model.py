@@ -1,10 +1,10 @@
 import unittest
 import numpy as np
-from spatialstencil.placement.domain import FieldDomain
-from spatialstencil.placement.model import CostModel
-from spatialstencil.placement.partition import FieldPartition
-from spatialstencil.placement.stencil import Stencil, StencilDirection
-from spatialstencil.placement.graph import StencilGraph
+from spada.placement.domain import FieldDomain
+from spada.placement.model import CostModel
+from spada.placement.partition import FieldPartition
+from spada.placement.stencil import Stencil, StencilDirection
+from spada.placement.graph import StencilGraph
 import igraph as ig
 
 

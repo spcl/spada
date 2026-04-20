@@ -1,8 +1,8 @@
 import os
 import pytest
 import networkx as nx
-from spatialstencil.syntax.spatial_ir import irnodes as spa, analysis, parser, canonicalization, passes
-from spatialstencil.syntax.csl import tasks
+from spada.syntax.spatial_ir import irnodes as spa, analysis, parser, canonicalization, passes
+from spada.syntax.csl import tasks
 
 
 def test_completion_dag_simple():

@@ -13,7 +13,7 @@ input_data = np.arange(1.0, 15.0, dtype=np.float32).reshape(1, 1, 14)
 np.save('input.npy', input_data)
 EOF
 
-timeout -s 9 120 cs_python "$SCRIPT_DIR/../../spatialstencil/runtime/runtime.py" "$FOLDER_NAME" input.npy --benchmark
+timeout -s 9 120 cs_python "$SCRIPT_DIR/../../spada/runtime/runtime.py" "$FOLDER_NAME" input.npy --benchmark
 
 python <<EOF
 import numpy as np

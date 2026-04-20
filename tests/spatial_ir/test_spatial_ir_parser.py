@@ -1,4 +1,4 @@
-from spatialstencil.syntax.spatial_ir import irnodes as spast, parser
+from spada.syntax.spatial_ir import irnodes as spast, parser
 import os
 
 

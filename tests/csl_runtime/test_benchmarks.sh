@@ -10,7 +10,7 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BENCHMARK_DIR="$SCRIPT_DIR/../../samples/benchmarks"
-RUNTIME="$SCRIPT_DIR/../../spatialstencil/runtime/runtime.py"
+RUNTIME="$SCRIPT_DIR/../../spada/runtime/runtime.py"
 OUTPUT_DIR="$SCRIPT_DIR/benchmark"
 
 TOTAL=0

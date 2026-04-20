@@ -1,5 +1,5 @@
 import pytest
-from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, parser, passes, copy_elimination
+from spada.syntax.spatial_ir import irnodes as spir, canonicalization, parser, passes, copy_elimination
 
 
 def test_canonicalize_nochange():

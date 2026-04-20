@@ -1,6 +1,6 @@
 import unittest
 
-from spatialstencil.syntax.spatial_ir.irnodes import Kernel
+from spada.syntax.spatial_ir.irnodes import Kernel
 
 
 class TestSpatialIR(unittest.TestCase):

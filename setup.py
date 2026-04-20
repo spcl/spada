@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Setup script for spatialstencil package."""
+"""Setup script for spada package."""
 
 from setuptools import setup, find_packages
 import os
@@ -11,28 +11,28 @@ def read_readme():
     if os.path.exists(readme_path):
         with open(readme_path, 'r', encoding='utf-8') as f:
             return f.read()
-    return "A spatial stencil compiler for high-performance computing."
+    return "A SpaDA compiler for high-performance computing."
 
 
 # Read version from package
 def get_version():
-    """Get version from spatialstencil package."""
+    """Get version from spada package."""
     try:
-        import spatialstencil
-        return spatialstencil.__version__
+        import spada
+        return spada.__version__
     except (ImportError, AttributeError):
         return "0.1.0"
 
 
 setup(
-    name="spatialstencil",
+    name="spada",
     version=get_version(),
-    author="SpatialStencil Team",
+    author="SpaDA Team",
     author_email="",
-    description="A spatial stencil compiler for high-performance computing",
+    description="A SpaDA compiler for high-performance computing",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
-    url="https://github.com/glukas/spatialstencil",
+    url="https://github.com/glukas/spada",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 3 - Alpha",
@@ -86,11 +86,11 @@ setup(
         ],
     },
     entry_points={
-        "console_scripts": ["sptlc=spatialstencil.cli.compiler:compile_spatial_ir"],
+        "console_scripts": ["sptlc=spada.cli.compiler:compile_spatial_ir"],
     },
     include_package_data=True,
     package_data={
-        "spatialstencil": ["**/*.py", "assets/csl/sync/*.csl"],
+        "spada": ["**/*.py", "assets/csl/sync/*.csl"],
     },
     keywords=[
         "stencil",

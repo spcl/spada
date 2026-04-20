@@ -9,7 +9,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 BENCHMARK_DIR="samples/benchmarks"
-RUNTIME="spatialstencil/runtime/runtime.py"
+RUNTIME="spada/runtime/runtime.py"
 OUTPUT_DIR="benchmark_results"
 
 mkdir $OUTPUT_DIR

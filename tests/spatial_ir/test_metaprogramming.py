@@ -1,6 +1,6 @@
 import pytest
 
-from spatialstencil.syntax.spatial_ir import canonicalization, irnodes as spir, parser, passes
+from spada.syntax.spatial_ir import canonicalization, irnodes as spir, parser, passes
 
 
 class MetaForCounter(spir.NodeVisitor):

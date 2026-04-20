@@ -1,12 +1,12 @@
 import unittest
 from pathlib import Path
 
-from spatialstencil.syntax.stencil_ir import type_inference, parser, canonicalization, extent_inference, \
+from spada.syntax.stencil_ir import type_inference, parser, canonicalization, extent_inference, \
     domain_inference
-from spatialstencil.syntax.stencil_ir.irnodes import ScalarType, Program, Cartesian, Interval, Offset, Extent, \
+from spada.syntax.stencil_ir.irnodes import ScalarType, Program, Cartesian, Interval, Offset, Extent, \
     StatementBlock, MaterializeOp, ComputationBlock, ReturnOp
 
-from spatialstencil.syntax.stencil_ir.ssa import SSAVisitor
+from spada.syntax.stencil_ir.ssa import SSAVisitor
 
 class TestTypeInference(unittest.TestCase):
 

@@ -1,6 +1,6 @@
 import pytest
-from spatialstencil.lowering.spatial_ir_to_csl import lower_spatial_ir_to_csl
-from spatialstencil.syntax.spatial_ir import parser, passes
+from spada.lowering.spatial_ir_to_csl import lower_spatial_ir_to_csl
+from spada.syntax.spatial_ir import parser, passes
 
 
 def create_inline_spatial_ir(code: str):

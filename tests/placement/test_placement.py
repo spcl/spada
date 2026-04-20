@@ -1,8 +1,8 @@
 import unittest
 import numpy as np
 
-from spatialstencil.placement.graph import FieldDomain
-from spatialstencil.placement.partition import FieldPartition
+from spada.placement.graph import FieldDomain
+from spada.placement.partition import FieldPartition
 
 
 class TestPlacement(unittest.TestCase):

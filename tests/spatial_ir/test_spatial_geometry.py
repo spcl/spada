@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle, intersect_ranges, split_rectangle, split_rectangles, group_rectangles_by_domain
+from spada.syntax.spatial_ir.grid_geometry import Rectangle, intersect_ranges, split_rectangle, split_rectangles, group_rectangles_by_domain
 
 RectWithId = Rectangle[int]
 

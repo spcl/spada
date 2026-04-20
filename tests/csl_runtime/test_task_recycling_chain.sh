@@ -14,7 +14,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FOLDER="task_recycling_two_stage_sptl"
-RUNTIME_PY="$(cd "$SCRIPT_DIR/../.." && pwd)/spatialstencil/runtime/runtime.py"
+RUNTIME_PY="$(cd "$SCRIPT_DIR/../.." && pwd)/spada/runtime/runtime.py"
 
 sptlc "$SCRIPT_DIR/samples/task_recycling_two_stage.sptl" "$FOLDER" --disable-task-fusion
 

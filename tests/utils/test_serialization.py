@@ -8,7 +8,7 @@ import json
 import enum
 from dataclasses import dataclass
 from typing import Union, List, Optional, Dict
-from spatialstencil.syntax.common.serialization import (DataclassEncoder, dataclass_decoder, save_to_json,
+from spada.syntax.common.serialization import (DataclassEncoder, dataclass_decoder, save_to_json,
                                                         load_from_json)
 
 

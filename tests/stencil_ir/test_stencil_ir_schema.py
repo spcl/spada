@@ -1,5 +1,5 @@
 import unittest
-from spatialstencil.syntax.stencil_ir.irnodes import Program
+from spada.syntax.stencil_ir.irnodes import Program
 
 class TestStencilIR(unittest.TestCase):
     def test_validate_stencil_schema(self):

@@ -4,7 +4,7 @@
 [ "$(basename "$0")" = "_lib.sh" ] && exit 0
 
 COLLECTIVES_DIR="$(cd "$(dirname "$0")/../../samples/spatial/collectives" && pwd)"
-RUNTIME_PY="$(cd "$(dirname "$0")/../.." && pwd)/spatialstencil/runtime/runtime.py"
+RUNTIME_PY="$(cd "$(dirname "$0")/../.." && pwd)/spada/runtime/runtime.py"
 
 # verify_reduce_sum
 #   Loads a_in.npy, computes np.sum(axis=0, keepdims=True), compares with OUT_out.npy.

@@ -1,5 +1,5 @@
-from spatialstencil.syntax.spatial_ir import irnodes as spa
-from spatialstencil.syntax.spatial_ir import parser, passes, canonicalization, copy_elimination
+from spada.syntax.spatial_ir import irnodes as spa
+from spada.syntax.spatial_ir import parser, passes, canonicalization, copy_elimination
 from typing import TypeVar
 import pytest
 

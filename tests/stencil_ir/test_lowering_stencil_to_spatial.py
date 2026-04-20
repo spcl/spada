@@ -4,21 +4,21 @@ from typing import Tuple
 
 import pytest
 
-from spatialstencil.cli.gt4py_to_spatial import lower_function, lower_gt4py_to_sptl
-from spatialstencil.lowering.stencil_to_spatial_routing import ChannelStrategy
-from spatialstencil.lowering.stencil_to_spatial_compute import HorizontalStencilTransformer
-from spatialstencil.lowering.stencil_to_spatial_dataflow import ProgramDataflow
-from spatialstencil.lowering.stencil_to_spatial_place import ProgramPlacement
-from spatialstencil.lowering.versioning import Versioning
-from spatialstencil.syntax.spatial_ir.grid_geometry import Rectangle
-from spatialstencil.syntax.stencil_ir import type_inference, parser
-from spatialstencil.syntax.stencil_ir.domain_collector import DomainCollector
+from spada.cli.gt4py_to_spatial import lower_function, lower_gt4py_to_sptl
+from spada.lowering.stencil_to_spatial_routing import ChannelStrategy
+from spada.lowering.stencil_to_spatial_compute import HorizontalStencilTransformer
+from spada.lowering.stencil_to_spatial_dataflow import ProgramDataflow
+from spada.lowering.stencil_to_spatial_place import ProgramPlacement
+from spada.lowering.versioning import Versioning
+from spada.syntax.spatial_ir.grid_geometry import Rectangle
+from spada.syntax.stencil_ir import type_inference, parser
+from spada.syntax.stencil_ir.domain_collector import DomainCollector
 
-from spatialstencil.syntax.stencil_ir.irnodes import *
-import spatialstencil.syntax.spatial_ir.irnodes as spa
+from spada.syntax.stencil_ir.irnodes import *
+import spada.syntax.spatial_ir.irnodes as spa
 
-from spatialstencil.lowering.stencil_to_spatial import lower_stencil_to_spatial
-from spatialstencil.syntax.stencil_ir.refactor_forward_backward_stencils import RefactorForwardBackwardStencils
+from spada.lowering.stencil_to_spatial import lower_stencil_to_spatial
+from spada.syntax.stencil_ir.refactor_forward_backward_stencils import RefactorForwardBackwardStencils
 
 
 class DummyProgramPlacement(ProgramPlacement):
@@ -229,7 +229,7 @@ def test_vadv():
 
 
 def test_gt4py_integration():
-    from spatialstencil.syntax.gt4py import parser as gt4py_parser
+    from spada.syntax.gt4py import parser as gt4py_parser
     
     gtfuncs = gt4py_parser.parse_file(str(Path(__file__).parent / Path('../../samples/gt4py_test_instances.py')))
 

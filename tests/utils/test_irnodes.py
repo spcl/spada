@@ -1,7 +1,7 @@
 import unittest
 from dataclasses import dataclass
-from spatialstencil.syntax.common.basenode import BaseNode
-from spatialstencil.syntax.common.visitor import IRNodeTransformer, IRNodeVisitor
+from spada.syntax.common.basenode import BaseNode
+from spada.syntax.common.visitor import IRNodeTransformer, IRNodeVisitor
 
 
 @dataclass

@@ -1,8 +1,8 @@
 import pytest
-from spatialstencil.lowering import spatial_ir_to_csl as s2c
-from spatialstencil.syntax.spatial_ir import parser, passes
-from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock
-from spatialstencil.syntax.csl import dsd_ops
+from spada.lowering import spatial_ir_to_csl as s2c
+from spada.syntax.spatial_ir import parser, passes
+from spada.syntax.spatial_ir.canonicalization import PEBlock
+from spada.syntax.csl import dsd_ops
 
 
 def test_dsd_op_detection():

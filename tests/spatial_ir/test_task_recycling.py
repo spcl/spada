@@ -1,10 +1,10 @@
 import os
 import pytest
 
-from spatialstencil.lowering import spatial_ir_to_csl as s2c
-from spatialstencil.syntax.csl import constants, task_recycling, tasks as tdag
-from spatialstencil.syntax.spatial_ir import analysis, parser, passes
-from spatialstencil.syntax.spatial_ir.canonicalization import PEBlock
+from spada.lowering import spatial_ir_to_csl as s2c
+from spada.syntax.csl import constants, task_recycling, tasks as tdag
+from spada.syntax.spatial_ir import analysis, parser, passes
+from spada.syntax.spatial_ir.canonicalization import PEBlock
 
 
 def _load_sample_kernel():

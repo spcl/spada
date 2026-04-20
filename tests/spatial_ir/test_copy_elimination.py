@@ -1,4 +1,4 @@
-from spatialstencil.syntax.spatial_ir import irnodes as spir, canonicalization, copy_elimination, parser, passes
+from spada.syntax.spatial_ir import irnodes as spir, canonicalization, copy_elimination, parser, passes
 
 
 def _optimize_kernel(kernel: spir.Kernel):

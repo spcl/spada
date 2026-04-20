@@ -9,8 +9,8 @@ Covers:
 """
 import os
 import pytest
-from spatialstencil.syntax.spatial_ir import irnodes as spir, parser, passes, canonicalization
-from spatialstencil.lowering.spatial_ir_to_csl import lower_spatial_ir_to_csl
+from spada.syntax.spatial_ir import irnodes as spir, parser, passes, canonicalization
+from spada.lowering.spatial_ir_to_csl import lower_spatial_ir_to_csl
 
 _TESTING_DIR = os.path.join(os.path.dirname(__file__), 'samples')
 

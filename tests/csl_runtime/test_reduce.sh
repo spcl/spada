@@ -4,7 +4,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Compile the spatial stencil program
+# Compile the SpaDA program
 FOLDER_NAME="reduce_sptl"
 sptlc "$SCRIPT_DIR/../../samples/benchmarks/reduce.sptl" "$FOLDER_NAME" -p N=15 -p K=128
 
@@ -15,7 +15,7 @@ np.save('a.npy', a)
 EOF
 
 # Run the compiled program with the Python runtime and the simulator
-timeout -s 9 120 cs_python "$SCRIPT_DIR/../../spatialstencil/runtime/runtime.py" "$FOLDER_NAME" a.npy --benchmark
+timeout -s 9 120 cs_python "$SCRIPT_DIR/../../spada/runtime/runtime.py" "$FOLDER_NAME" a.npy --benchmark
 
 # Check if the output file matches the expected output
 python <<EOF

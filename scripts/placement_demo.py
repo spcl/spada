@@ -5,12 +5,12 @@ import igraph as ig
 from numpy.typing import NDArray
 
 from scripts import examples
-from spatialstencil.placement.graph import Stencil, StencilDirection, FieldDomain, StencilGraph
-from spatialstencil.placement.placed_graph import PlacedStencilGraph
-from spatialstencil.placement.mla import linearize_with_ck
-from spatialstencil.placement.model import CostModel, PlacementCost
-from spatialstencil.placement.optimizer import best_of_k_placement
-from spatialstencil.placement.partition import FieldPartition
+from spada.placement.graph import Stencil, StencilDirection, FieldDomain, StencilGraph
+from spada.placement.placed_graph import PlacedStencilGraph
+from spada.placement.mla import linearize_with_ck
+from spada.placement.model import CostModel, PlacementCost
+from spada.placement.optimizer import best_of_k_placement
+from spada.placement.partition import FieldPartition
 
 
 def demo_graph():

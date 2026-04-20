@@ -3,8 +3,8 @@ import re
 
 import pytest
 
-from spatialstencil.lowering.spatial_ir_to_csl import lower_spatial_ir_to_csl
-from spatialstencil.syntax.spatial_ir import parser, passes
+from spada.lowering.spatial_ir_to_csl import lower_spatial_ir_to_csl
+from spada.syntax.spatial_ir import parser, passes
 
 _CSL_RUNTIME_TASK_RECYCLING_SAMPLES = os.path.join(
     os.path.dirname(__file__), '..', 'csl_runtime', 'samples')
