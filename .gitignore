@@ -8,7 +8,8 @@ __pycache__/
 
 
 # DS STore
-*.DS_STORE
+.DS_Store
+**/.DS_Store
 
 #
 .idea
@@ -32,6 +33,10 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+
+# SDK
+/tests/csl_runtime/cerebras-sdk/
+/tests/csl_runtime/cerebras-sdk.tar.gz
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
