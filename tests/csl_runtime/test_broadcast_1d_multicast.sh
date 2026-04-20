@@ -34,4 +34,3 @@ run_broadcast_1d_mc 2 2
 run_broadcast_1d_mc 4 2
 run_broadcast_1d_mc 8 4
 run_broadcast_1d_mc 4 8
-run_broadcast_1d_mc 4 2 --sync-benchmarking

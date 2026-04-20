@@ -3,7 +3,6 @@ Converts routed Spatial IR code to Cerebras CSL.
 """
 
 from collections import defaultdict
-from contextlib import nullcontext
 import copy
 import functools
 from io import StringIO
@@ -48,7 +47,6 @@ def canonicalize_kernel(kernel: spir.Kernel) -> spir.Kernel:
 def lower_spatial_ir_to_csl(kernel: spir.Kernel,
                             rect_offset: tuple[int, int] = (0, 0),
                             disable_benchmarking: bool = False,
-                            sync_benchmarking: bool = False,
                             disable_asynchronous: bool = False,
                             disable_dsd: bool = False,
                             task_fusion: bool = True,
@@ -62,7 +60,6 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     :param rect_offset: The offset of the output rectangle to use.
     :param disable_benchmarking: If True, disables benchmarking code generation (and memory overhead).
                                  Use in memory-limited scenarios.
-    :param sync_benchmarking: If True, generate sync-assisted benchmarking support for more accurate cycle counts.
     :param disable_asynchronous: If True, disables asynchronous task code generation.
     :param disable_dsd: If True, disables DSD operation detection and code generation.
     :param task_fusion: If True, enables task fusion to reduce number of tasks.
@@ -85,9 +82,6 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
 
     # Run the shared canonicalization pipeline
     kernel = canonicalize_kernel(kernel)
-
-    if disable_benchmarking and sync_benchmarking:
-        raise ValueError("Sync benchmarking requires benchmarking support to be enabled.")
 
     # Check if we are streaming or using memcpy mode
     use_memcpy_mode = analysis.kernel_uses_memcpy_mode(kernel)
@@ -120,7 +114,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
 
     # Add benchmarking fields
     if not disable_benchmarking:
-        _add_benchmarking_fields(rectangles, sync_benchmarking)
+        _add_benchmarking_fields(rectangles)
 
     # Collect scalar argument types
     scalar_argument_types = []
@@ -135,170 +129,158 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     routing_instructions: list[str] = []
     color_maps = []
 
-    resource_context = cslbench.reserve_codegen_resources(csl) if sync_benchmarking and not disable_benchmarking else nullcontext(None)
-    with resource_context as sync_resources:
-        channel_to_color = _collect_colors_globally(kernel, rectangles, use_memcpy_mode)
+    channel_to_color = _collect_colors_globally(kernel, rectangles, use_memcpy_mode)
 
-        for rect in rectangles:
-            # Create a unique CSL code file based on rectangle offset
-            csl_name = f'code_{rect.x_range[0]}_{rect.y_range[0]}.csl'
-            rect_code, color_map = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode,
-                                                    stream_rects, channel_to_color, disable_benchmarking, sync_benchmarking,
-                                                    disable_asynchronous, disable_dsd, task_fusion,
-                                                    task_id_recycling)
-            color_maps.append(color_map)
-            csl_codes.append(CodeFile(csl_name, rect_code))
+    for rect in rectangles:
+        # Create a unique CSL code file based on rectangle offset
+        csl_name = f'code_{rect.x_range[0]}_{rect.y_range[0]}.csl'
+        rect_code, color_map = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode,
+                                                  stream_rects, channel_to_color, disable_benchmarking,
+                                                  disable_asynchronous, disable_dsd, task_fusion,
+                                                  task_id_recycling)
+        color_maps.append(color_map)
+        csl_codes.append(CodeFile(csl_name, rect_code))
 
-        # Prepare outputs
-        layout_code = StringIO()
+    # Prepare outputs
+    layout_code = StringIO()
 
-        if sync_resources is not None:
-            csl_codes.extend(cslbench.load_sync_assets())
+    ###############################################
+    # Generate main layout file
 
-        ###############################################
-        # Generate main layout file
+    # Compute the tight PE bounding box. kernel.get_grid_rect() now returns tight bounds
+    # (last-contained PE + 1) rather than canonicalized stops.
+    x0, x1, y0, y1 = kernel.get_grid_rect()
+    assert x0 == 0, "PE Grid must start at x=0"
+    assert y0 == 0, "PE Grid must start at y=0"
+    rect_size = x1 - x0, y1 - y0
 
-        # Compute the tight PE bounding box. kernel.get_grid_rect() now returns tight bounds
-        # (last-contained PE + 1) rather than canonicalized stops.
-        x0, x1, y0, y1 = kernel.get_grid_rect()
-        assert x0 == 0, "PE Grid must start at x=0"
-        assert y0 == 0, "PE Grid must start at y=0"
-        rect_size = x1 - x0, y1 - y0
+    # Collect unique routes for all rectangles
+    routes_per_rectangle = _collect_routes(rectangles, color_maps)
 
-        # Collect unique routes for all rectangles
-        routes_per_rectangle = _collect_routes(rectangles, color_maps)
-
-        if use_memcpy_mode:
-            layout_code.write(f'''
+    if use_memcpy_mode:
+        layout_code.write(f'''
 // Memcpy setup
 const memcpy = @import_module("<memcpy/get_params>", .{{
 .width = {rect_size[0]},
 .height = {rect_size[1]},
 }});
 ''')
-        else:
-            input_args = []
-            output_args = []
-            for arg in kernel.arguments:
-                if arg.compiletime:
-                    continue
-                if arg.readonly:
-                    input_args.append(arg)
-                elif arg.writeonly:
-                    output_args.append(arg)
-                else:
-                    input_args.append(arg)
-                    output_args.append(arg)
+    else:
+        input_args = []
+        output_args = []
+        for arg in kernel.arguments:
+            if arg.compiletime:
+                continue
+            if arg.readonly:
+                input_args.append(arg)
+            elif arg.writeonly:
+                output_args.append(arg)
+            else:
+                input_args.append(arg)
+                output_args.append(arg)
 
-            # Only up to 4 streams in each direction are supported (4 input, 4 output streams)
-            if len(input_args) > 4 or len(output_args) > 4:
-                raise ValueError('Too many input/output streams: only 4 input and 4 output streams are supported in CSL')
+        # Only up to 4 streams in each direction are supported (4 input, 4 output streams)
+        if len(input_args) > 4 or len(output_args) > 4:
+            raise ValueError('Too many input/output streams: only 4 input and 4 output streams are supported in CSL')
 
-            # Generate streaming DATA_*_ID parameters for each input/output stream
-            layout_code.write('// Streaming copy setup\n')
-            for i, input_arg in enumerate(input_args):
-                layout_code.write(f'''param MEMCPYH2D_DATA_{i}_ID: i16;
+        # Generate streaming DATA_*_ID parameters for each input/output stream
+        layout_code.write('// Streaming copy setup\n')
+        for i, input_arg in enumerate(input_args):
+            layout_code.write(f'''param MEMCPYH2D_DATA_{i}_ID: i16;
 const MEMCPYH2D_DATA_{i}: color = @get_color(MEMCPYH2D_DATA_{i}_ID);
 ''')
-            for i, output_arg in enumerate(output_args):
-                layout_code.write(f'''param MEMCPYD2H_DATA_{i}_ID: i16;
+        for i, output_arg in enumerate(output_args):
+            layout_code.write(f'''param MEMCPYD2H_DATA_{i}_ID: i16;
 const MEMCPYD2H_DATA_{i}: color = @get_color(MEMCPYD2H_DATA_{i}_ID);
 ''')
 
-            layout_code.write(f'''
+        layout_code.write(f'''
 const memcpy = @import_module("<memcpy/get_params>", .{{
      .width = width,
      .height = height,
 ''')
-            for i, input_arg in enumerate(input_args):
-                layout_code.write(f'''    .MEMCPYH2D_{i} = MEMCPYH2D_DATA_{i}_ID,
+        for i, input_arg in enumerate(input_args):
+            layout_code.write(f'''    .MEMCPYH2D_{i} = MEMCPYH2D_DATA_{i}_ID,
 ''')
-            for i, output_arg in enumerate(output_args):
-                layout_code.write(f'''    .MEMCPYD2H_{i} = MEMCPYD2H_DATA_{i}_ID,
+        for i, output_arg in enumerate(output_args):
+            layout_code.write(f'''    .MEMCPYD2H_{i} = MEMCPYD2H_DATA_{i}_ID,
 ''')
-            layout_code.write(f'''
+        layout_code.write(f'''
 }});
 ''')
 
-        if sync_resources is not None:
-            layout_code.write(cslbench.generate_sync_layout_setup(rect_size[0], rect_size[1], sync_resources))
-
-        layout_code.write(f'''layout {{
+    layout_code.write(f'''layout {{
     // Rectangle and code setup
     @set_rectangle{rect_size};''')
 
-        # First pass: @set_tile_code for every PE.
-        # All tile codes must be established before any @set_color_config call,
-        # because multi-hop routing config may reference neighboring PEs that
-        # belong to a different rectangle (e.g. pass-through relays).
-        sync_tile_binding = cslbench.generate_sync_tile_binding() if sync_resources is not None else ''
-        for rect in rectangles:
-            xb_pre, xe_pre, xs, yb_pre, ye_pre, ys = *rect.x_range, *rect.y_range
-            code_filename = f'code_{xb_pre}_{yb_pre}.csl'
-            xb = xb_pre + rect_offset[0]
-            xe = xe_pre + rect_offset[0]
-            yb = yb_pre + rect_offset[1]
-            ye = ye_pre + rect_offset[1]
+    # First pass: @set_tile_code for every PE.
+    # All tile codes must be established before any @set_color_config call,
+    # because multi-hop routing config may reference neighboring PEs that
+    # belong to a different rectangle (e.g. pass-through relays).
+    for rect in rectangles:
+        xb_pre, xe_pre, xs, yb_pre, ye_pre, ys = *rect.x_range, *rect.y_range
+        code_filename = f'code_{xb_pre}_{yb_pre}.csl'
+        xb = xb_pre + rect_offset[0]
+        xe = xe_pre + rect_offset[0]
+        yb = yb_pre + rect_offset[1]
+        ye = ye_pre + rect_offset[1]
 
-            layout_code.write(f'''
+        layout_code.write(f'''
     for (@range(i16, {xb}, {xe}, {xs})) |pe_x| {{
         for (@range(i16, {yb}, {ye}, {ys})) |pe_y| {{
-            @set_tile_code(pe_x, pe_y, "{code_filename}", .{{ .memcpy_params = memcpy.get_params(pe_x), {sync_tile_binding}}});
+            @set_tile_code(pe_x, pe_y, "{code_filename}", .{{ .memcpy_params = memcpy.get_params(pe_x), }});
         }}
     }}\n''')
 
-        # Second pass: routing (@set_color_config).  By emitting these after all
-        # @set_tile_code calls, every PE referenced by a multi-hop offset is
-        # guaranteed to already have tile code assigned.
-        layout_code.write('\n    // Routes\n')
-        for rect in rectangles:
-            xb_pre, xe_pre, xs, yb_pre, ye_pre, ys = *rect.x_range, *rect.y_range
-            xb = xb_pre + rect_offset[0]
-            xe = xe_pre + rect_offset[0]
-            yb = yb_pre + rect_offset[1]
-            ye = ye_pre + rect_offset[1]
-            route_code = routes_per_rectangle.get((xb_pre, yb_pre), '')
-            if route_code.strip():
-                layout_code.write(f'''
+    # Second pass: routing (@set_color_config).  By emitting these after all
+    # @set_tile_code calls, every PE referenced by a multi-hop offset is
+    # guaranteed to already have tile code assigned.
+    layout_code.write('\n    // Routes\n')
+    for rect in rectangles:
+        xb_pre, xe_pre, xs, yb_pre, ye_pre, ys = *rect.x_range, *rect.y_range
+        xb = xb_pre + rect_offset[0]
+        xe = xe_pre + rect_offset[0]
+        yb = yb_pre + rect_offset[1]
+        ye = ye_pre + rect_offset[1]
+        route_code = routes_per_rectangle.get((xb_pre, yb_pre), '')
+        if route_code.strip():
+            layout_code.write(f'''
     for (@range(i16, {xb}, {xe}, {xs})) |pe_x| {{
         for (@range(i16, {yb}, {ye}, {ys})) |pe_y| {{
 {route_code}
         }}
     }}\n''')
 
-        for rinst in routing_instructions:
-            layout_code.write(rinst + '\n')
+    for rinst in routing_instructions:
+        layout_code.write(rinst + '\n')
 
-        # Emit symbol names for arguments and kernel
-        layout_code.write('\n    // Extern fields\n')
-        # Gather extern fields from kernel arguments
-        extern_fields: list[spir.FieldDeclaration] = []
-        for rect in rectangles:
-            place_block = rect.metadata.place
-            for field in place_block.statements:
-                if field.is_extern:
-                    if any(field.field_name == ef.field_name for ef in extern_fields):
-                        continue
-                    extern_fields.append(field)
+    # Emit symbol names for arguments and kernel
+    layout_code.write('\n    // Extern fields\n')
+    # Gather extern fields from kernel arguments
+    extern_fields: list[spir.FieldDeclaration] = []
+    for rect in rectangles:
+        place_block = rect.metadata.place
+        for field in place_block.statements:
+            if field.is_extern:
+                if any(field.field_name == ef.field_name for ef in extern_fields):
+                    continue
+                extern_fields.append(field)
 
-        for field in extern_fields:
-            dtype = field.dtype
-            if isinstance(field.dtype, spir.ArrayType) and isinstance(field.dtype.base_type, spir.StreamType):
-                pass
-            elif isinstance(field.dtype, spir.StreamType):
-                # Support scalar streams
-                dtype = spir.ArrayType(field.dtype, [1])
+    for field in extern_fields:
+        dtype = field.dtype
+        if isinstance(field.dtype, spir.ArrayType) and isinstance(field.dtype.base_type, spir.StreamType):
+            pass
+        elif isinstance(field.dtype, spir.StreamType):
+            # Support scalar streams
+            dtype = spir.ArrayType(field.dtype, [1])
 
-            layout_code.write(f'    @export_name("{field.field_name.name}", {dtype_as_csl(dtype, export=True)}, true);\n')
+        layout_code.write(f'    @export_name("{field.field_name.name}", {dtype_as_csl(dtype, export=True)}, true);\n')
 
-        if sync_resources is not None:
-            layout_code.write(cslbench.generate_sync_layout_exports())
-
-        layout_code.write(f'''
+    layout_code.write(f'''
     // Kernel
     @export_name("{kernel.name}", fn({", ".join(scalar_argument_types)})void);
 }}''')
-        csl_codes.append(CodeFile('layout.csl', layout_code.getvalue()))
+    csl_codes.append(CodeFile('layout.csl', layout_code.getvalue()))
 
     # Return all generated code files
     return csl_codes
@@ -312,7 +294,6 @@ def generate_rectangle(kernel: spir.Kernel,
                        stream_extents: analysis.StreamExtents,
                        channel_to_color: dict[int, int],
                        disable_benchmarking: bool = False,
-                       sync_benchmarking: bool = False,
                        disable_asynchronous: bool = False,
                        disable_dsd: bool = False,
                        task_fusion: bool = True,
@@ -351,7 +332,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         canonicalization.convert_foreach_data_tasks_to_loops(rect, dtypes)
         dtypes = _collect_identifier_types(rect.metadata, kernel.arguments)
 
-    benchmark_code = _generate_benchmarking_code(header, disable_benchmarking, sync_benchmarking)
+    benchmark_code = _generate_benchmarking_code(header, disable_benchmarking)
 
     # Convert compute block subgraphs into tasks:
     #    * Make task DAG out of computations
@@ -1603,24 +1584,22 @@ def _generate_task_code(rect: PEBlock,
                 current_code.write(f'{indent}@unblock({task_id});\n')
 
 
-def _generate_benchmarking_code(header: StringIO, disable_benchmarking: bool,
-                                sync_benchmarking: bool) -> cslbench.RectangleBenchmarkingCode:
+def _generate_benchmarking_code(header: StringIO, disable_benchmarking: bool) -> cslbench.RectangleBenchmarkingCode:
     """
     Generates benchmarking code in the header and current code.
-    
+
     :param header: A code generator stream for a file's header (where the declarations are).
     :return: Benchmarking code fragments to insert into the generated file.
     """
     if disable_benchmarking:
         return cslbench.RectangleBenchmarkingCode()
 
-    benchmark_code = (
-        cslbench.generate_sync_rectangle_code() if sync_benchmarking else cslbench.generate_basic_rectangle_code())
+    benchmark_code = cslbench.generate_basic_rectangle_code()
     header.write(benchmark_code.header)
     return benchmark_code
 
 
-def _add_benchmarking_fields(rectangles: list[Rectangle[PEBlock]], sync_benchmarking: bool = False):
+def _add_benchmarking_fields(rectangles: list[Rectangle[PEBlock]]):
     """
     Adds benchmarking variables to the code.
     :param rectangles: The rectangles to modify.
@@ -1638,13 +1617,6 @@ def _add_benchmarking_fields(rectangles: list[Rectangle[PEBlock]], sync_benchmar
                 dtype=spir.ArrayType(spir.ScalarType.u16, [3]),
                 is_extern=True,
             ))
-        if sync_benchmarking:
-            rect.metadata.place.statements.append(
-                spir.FieldDeclaration(
-                    field_name=spir.Identifier('__benchmark_refclock', 0),
-                    dtype=spir.ArrayType(spir.ScalarType.u16, [3]),
-                    is_extern=True,
-                ))
 
 
 def _collect_identifier_types(rect: PEBlock,

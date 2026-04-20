@@ -8,8 +8,6 @@ import numpy as np
 import numpy.typing as npt
 import time
 
-SYNC_REQUIRED_SYMBOLS = ("f_sync", "f_tic", "f_toc", "__benchmark_refclock")
-
 if TYPE_CHECKING:
     from spatialstencil.runtime import cerebras_runtime_stub as crt
 else:
@@ -226,52 +224,6 @@ def copy_back_benchmark_cycles(runtime: crt.SdkRuntime, metadata: ProgramMetadat
     return cycle_stop - cycle_start
 
 
-def copy_back_sync_buffer(runtime: crt.SdkRuntime, metadata: ProgramMetadata) -> np.ndarray:
-    """
-    Copy back the reference clock sync-benchmarking buffer.
-
-    :param runtime: The Cerebras SDK runtime object to perform the copy operation
-    :param metadata: Program metadata containing input/output information
-    :return: Numpy array containing the reference clock for each PE
-    """
-    cycle_ref = np.zeros(metadata.kernel_dims + [3], dtype=np.uint32)
-    runtime.memcpy_d2h(
-        cycle_ref.ravel(),
-        runtime.get_id("__benchmark_refclock"),
-        0,
-        0,
-        *cycle_ref.shape,
-        streaming=False,
-        data_type=crt.MemcpyDataType.MEMCPY_16BIT,
-        order=crt.MemcpyOrder.ROW_MAJOR,
-        nonblock=False,
-    )
-    return convert_timestamp(cycle_ref)
-
-
-def copy_back_sync_benchmark_data(runtime: crt.SdkRuntime, metadata: ProgramMetadata) -> np.ndarray:
-    """
-    Copy back sync-benchmarking data and reconstruct the corrected global cycle count.
-
-    :param runtime: The Cerebras SDK runtime object to perform the copy operation
-    :param metadata: Program metadata containing input/output information
-    :return: Numpy scalar containing the total number of cycles spent on the chip
-             for the benchmarked period.
-    """
-    # Compute propagation delay (one cycle per link) to synchronize reference clocks
-    width, height = metadata.kernel_dims
-    propagation_delay = np.arange(width, dtype=np.uint64)[:, None] + np.arange(height, dtype=np.uint64)[None, :]
-
-    time_start, time_end = copy_back_benchmark_data(runtime, metadata)
-    reference = copy_back_sync_buffer(runtime, metadata)
-    reference = reference - propagation_delay
-    time_start = time_start - reference
-    time_end = time_end - reference
-
-    # Return the total time spent on the chip
-    return time_end.max() - time_start.min()
-
-
 def print_cycle_counts(label: str, cycle_counts: np.ndarray) -> None:
     """
     Print benchmark data in a compact form for either scalar or per-PE cycle counts.
@@ -342,13 +294,8 @@ class Program:
         self.inputs = self.metadata.inputs
         self.outputs = self.metadata.outputs
 
-        print("SYNC BENCHMARK?", self.has_sync_benchmarking())
-
     def has_symbol(self, symbol: str) -> bool:
         return self.runtime.get_id(symbol) is not None
-
-    def has_sync_benchmarking(self) -> bool:
-        return all(self.has_symbol(symbol) for symbol in SYNC_REQUIRED_SYMBOLS)
 
     def has_basic_benchmarking(self) -> bool:
         return self.has_symbol("__benchmark_start") and self.has_symbol("__benchmark_stop")
@@ -387,15 +334,8 @@ class Program:
             self.runtime.run()
             print("done.", flush=True)
 
-            sync_benchmarking = False
-            if self.benchmark:
-                sync_benchmarking = self.has_sync_benchmarking()
-                if not sync_benchmarking and not self.has_basic_benchmarking():
-                    raise ValueError("Benchmarking requested but not enabled in the program.")
-
-            if self.benchmark and sync_benchmarking and not self.metadata.memcpy_mode:
-                self.runtime.launch("f_sync", nonblock=False)
-                self.runtime.launch("f_tic", nonblock=False)
+            if self.benchmark and not self.has_basic_benchmarking():
+                raise ValueError("Benchmarking requested but not enabled in the program.")
 
             # Copy data to device
             for name, data in kwargs.items():
@@ -414,28 +354,17 @@ class Program:
                 # Use flatten_copy to copy data to device
                 flatten_copy(name, data, expected_shape, self.runtime, self.metadata, self.benchmark)
 
-            if self.benchmark and sync_benchmarking and self.metadata.memcpy_mode:
-                self.runtime.launch("f_sync", nonblock=False)
-
             # Run the program
             for i in range(self.repetitions):
                 if self.metadata.memcpy_mode:
                     if self.benchmark and not self.simulator and i == 0:
                         time.sleep(5.0)
                     print("Launching kernel...", flush=True, end="")
-                    if self.benchmark and sync_benchmarking:
-                        self.runtime.launch("f_tic", nonblock=False)
                     self.runtime.launch(self.metadata.kernel_name, *scalar_args, nonblock=False)
-                    if self.benchmark and sync_benchmarking:
-                        self.runtime.launch("f_toc", nonblock=False)
                     print("kernel launched.", flush=True)
 
                     if self.benchmark:
-                        cycle_counts = (
-                            copy_back_sync_benchmark_data(self.runtime, self.metadata)
-                            if sync_benchmarking
-                            else copy_back_benchmark_cycles(self.runtime, self.metadata)
-                        )
+                        cycle_counts = copy_back_benchmark_cycles(self.runtime, self.metadata)
                         num_digits = len(str(self.repetitions))
                         np.save(self.output_dir / f"perf_cycles_{i:0{num_digits}d}.npy", cycle_counts)
                         print_cycle_counts(f"Iteration {i} cycle count", cycle_counts)
@@ -460,11 +389,7 @@ class Program:
             print("Copy-back complete.", flush=True)
 
             if self.benchmark and not self.metadata.memcpy_mode:
-                cycle_counts = (
-                    copy_back_sync_benchmark_data(self.runtime, self.metadata)
-                    if sync_benchmarking
-                    else copy_back_benchmark_data(self.runtime, self.metadata)
-                )
+                cycle_counts = copy_back_benchmark_data(self.runtime, self.metadata)
                 np.save(self.output_dir / "perf_cycles.npy", cycle_counts)
                 print_cycle_counts("Cycle count", cycle_counts)
 

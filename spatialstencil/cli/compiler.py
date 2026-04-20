@@ -16,7 +16,6 @@ import subprocess
 @click.option('--offset-y', '-y', default=0, type=int, help='Offset for rectangular region in y direction')
 @click.option('--generate-only', '-g', is_flag=True, help='Only generate the output files without compiling them')
 @click.option('--disable-benchmarking', is_flag=True, help='Disable benchmarking code generation (and memory overhead)')
-@click.option('--sync-benchmarking', is_flag=True, help='Generate sync-assisted benchmarking support')
 @click.option('--disable-asynchronous', is_flag=True, help='Disable asynchronous task code generation')
 @click.option('--disable-dsd', is_flag=True, help='Disable DSD operation detection and code generation')
 @click.option('--disable-map', is_flag=True, help='Disable @map operation detection and code generation')
@@ -24,12 +23,9 @@ import subprocess
 @click.option('--disable-task-recycling', is_flag=True, help='Disable task ID recycling')
 @click.option('--disable-copy-elision', is_flag=True, help='Disable copy elimination optimization pass')
 def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], offset_x: int, offset_y: int,
-                       generate_only: bool, disable_benchmarking: bool, sync_benchmarking: bool,
+                       generate_only: bool, disable_benchmarking: bool,
                        disable_asynchronous: bool, disable_dsd: bool, disable_map: bool,
                        disable_task_fusion: bool, disable_task_recycling: bool, disable_copy_elision: bool):
-    if disable_benchmarking and sync_benchmarking:
-        raise click.UsageError("--sync-benchmarking cannot be used with --disable-benchmarking")
-
     # Parse parameters into dictionary
     kernel_parameters = {}
     for p in param:
@@ -94,7 +90,6 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     csl_files = s2c.lower_spatial_ir_to_csl(
         kernel,
         disable_benchmarking=disable_benchmarking,
-        sync_benchmarking=sync_benchmarking,
         disable_asynchronous=disable_asynchronous,
         disable_dsd=disable_dsd,
         task_fusion=not disable_task_fusion,
