@@ -139,45 +139,12 @@ sys.modules["cerebras.sdk.runtime.sdkruntimepybind"] = mock_crt
 # End of mocking the Cerebras SDK
 
 # Now we can safely import the runtime classes
-from spatialstencil.runtime.runtime import Program, ProgramMetadata, copy_back_sync_benchmark_data
+from spatialstencil.runtime.runtime import Program, ProgramMetadata
 
 
 def mock_kernel(a, b, out):
     """Mock kernel function that adds two arrays."""
     out[:] = a + b
-
-
-class MockSyncBenchmarkRuntime:
-    def __init__(self, time_start_hwe: np.ndarray, time_stop_hwe: np.ndarray, time_ref_hwe: np.ndarray):
-        self.buffer_names = {"__benchmark_start": 1, "__benchmark_stop": 2, "__benchmark_refclock": 3}
-        self.data_buffers = {
-            1: time_start_hwe.transpose(1, 0, 2).ravel(),
-            1: time_stop_hwe.transpose(1, 0, 2).ravel(),
-            2: time_ref_hwe.transpose(1, 0, 2).ravel(),
-        }
-
-    def launch(self, symbol: str, nonblock: bool = False):
-        return None
-
-    def get_id(self, symbol: str) -> int:
-        return self.buffer_names[symbol]
-
-    def memcpy_d2h(
-        self,
-        dest: np.ndarray,
-        src: int,
-        px: int,
-        py: int,
-        w: int,
-        h: int,
-        elem_per_pe: int,
-        *,
-        streaming: bool,
-        data_type,
-        order,
-        nonblock: bool
-    ):
-        dest[:] = self.data_buffers[src]
 
 
 class TestProgramWithMockRuntime(unittest.TestCase):
