@@ -1,3 +1,8 @@
+
+# Generated files
+samples/benchmarks/plots/**/*.csv
+samples/benchmarks/plots/**/*.pdf
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
