@@ -1,17 +1,17 @@
-# Welcome to MkDocs
+# SPADA — Multi-Level Spatial IR Specification
 
-For full documentation visit [mkdocs.org](https://www.mkdocs.org).
+SPADA is a programming language and compiler for spatial dataflow architectures such as the [Cerebras Wafer-Scale Engine](https://www.cerebras.net/). It provides precise control over data placement, communication streams, and asynchronous execution while abstracting architecture-specific routing details.
 
-## Commands
+This site documents the three intermediate representations (IRs) used in the SPADA compilation pipeline:
 
-* `mkdocs new [dir-name]` - Create a new project.
-* `mkdocs serve` - Start the live-reloading docs server.
-* `mkdocs build` - Build the documentation site.
-* `mkdocs -h` - Print help message and exit.
+| IR | Input | Output |
+|---|---|---|
+| **Stencil IR** | GT4Py stencil definitions | Spatial IR |
+| **Spatial IR** | Stencil IR / hand-written SPADA kernels | Dataflow Task IR |
+| **Dataflow Task IR** | Spatial IR | Cerebras CSL |
 
-## Project layout
+For full details on the SPADA language, compiler, and hardware results, see:
 
-    mkdocs.yml    # The configuration file.
-    docs/
-        index.md  # The documentation homepage.
-        ...       # Other markdown pages, images and other files.
+> Lukas Gianinazzi, Tal Ben-Nun, Torsten Hoefler. *SPADA: A Spatial Dataflow Architecture Programming Language.* arXiv:2511.09447, 2025.
+
+

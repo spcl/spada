@@ -1,4 +1,4 @@
-site_name: Multi-Level Spatial IR
+site_name: Spatial Dataflow Abstraction (SpaDA)
 site_url: http://localhost:8000
 theme: material
 nav:
