@@ -183,23 +183,26 @@ brew install lima qemu lima-additional-guestagents   # one-time
 tests/csl_runtime/run-in-lima.sh --sdk-url <url>
 ```
 
-This creates the Lima VM on first use (~5–10 min), downloads and extracts the SDK to `tests/csl_runtime/cerebras-sdk/`, installs Python dependencies inside the VM, and runs the full test suite. Other modes:
+This creates the Lima VM on first use (~5–10 min), downloads and extracts the SDK to `tests/csl_runtime/cerebras-sdk/`, installs Python dependencies inside the VM, and runs the full test suite. 
+If the SDK tarball is already downloaded or extracted, use `--sdk /path/to/cs_sdk` instead of `--sdk-url`.
+
+Other modes:
 
 ```bash
 # Run a single test
-tests/csl_runtime/run-in-lima.sh --sdk-url <url> --test test_add.sh
+tests/csl_runtime/run-in-lima.sh --sdk-dir <dir> --test test_add.sh
 
 # Verify the SDK toolchain only
-tests/csl_runtime/run-in-lima.sh --sdk-url <url> --check
+tests/csl_runtime/run-in-lima.sh  --sdk-dir <dir> --check
 
 # Run the Cerebras SDK smoke test
-tests/csl_runtime/run-in-lima.sh --sdk-url <url> --smoke /path/to/csl-extras-*
+tests/csl_runtime/run-in-lima.sh  --sdk-dir <dir> --smoke /path/to/csl-extras-*
 
 # Drop into an interactive shell inside the VM
-tests/csl_runtime/run-in-lima.sh --sdk-url <url> --shell
+tests/csl_runtime/run-in-lima.sh  --sdk-dir <dir> --shell
 ```
 
-If the SDK tarball is already downloaded or extracted, use `--sdk /path/to/cs_sdk` instead of `--sdk-url`. The repository must reside under `$HOME` (Lima mounts the Mac home directory by default). The Lima configuration is in `tests/csl_runtime/lima-ubuntu-x86_64.yaml`.
+ The repository must reside under `$HOME` (Lima mounts the Mac home directory by default). The Lima configuration is in `tests/csl_runtime/lima-ubuntu-x86_64.yaml`.
 
 **Cleanup** generated test artifacts:
 
