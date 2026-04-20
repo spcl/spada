@@ -153,7 +153,18 @@ class ExpressionTranslator(sast.NodeVisitor):
         assert node.subscript[0] == 0
         assert node.subscript[1] == 0
         z_offset = node.subscript[2]
-        array = self.placement.get_storage(node.value)
+        if z_offset != 0:
+            # For non-zero k-offsets in a FORWARD/BACKWARD stencil, the access
+            # targets the *accumulated* (final) field value at the neighbouring
+            # k-level — i.e. the value after every assignment at that level has
+            # completed.  Local SSA intermediates (e.g. fresh_d before Thomas
+            # elimination) only hold the correct value at the *current* k; using
+            # them at k±1 yields wrong (often uninitialized) results.
+            array = self.placement.get_accumulated_storage(node.value.name)
+            if array is None:
+                array = self.placement.get_storage(node.value)
+        else:
+            array = self.placement.get_storage(node.value)
         if isinstance(array[1], spa.ArrayType):
             if z_offset == 0:
                 access = self.iteration_variable.identifier

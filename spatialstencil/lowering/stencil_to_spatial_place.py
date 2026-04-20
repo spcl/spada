@@ -161,6 +161,24 @@ class ProgramPlacement:
         """
         return self.domain_shift
 
+    def get_accumulated_storage(self,
+                               name: str,
+                               offset: sast.Offset = sast.Offset.zero()) -> tuple[spa.Identifier, spa.ArrayType | spa.ScalarType] | None:
+        """Return program-scope (accumulated) storage for a variable by name.
+
+        Unlike get_storage(), this bypasses SSA-specific storage and resolves
+        through the program scope only, returning the storage associated with
+        the field's accumulated value — i.e. the final value after all
+        assignments at a given k-level have completed.  This is the correct
+        target for stencil accesses with a non-zero k-offset inside a
+        FORWARD or BACKWARD computation body.
+        """
+        if name in self._program_scope_fields:
+            identifier = self._program_scope_fields[name]
+            if offset in self._storage_map[identifier]:
+                return self._storage_map[identifier][offset]
+        return None
+
     def get_storage(self,
                     identifier: sast.Identifier,
                     offset: sast.Offset = sast.Offset.zero()) -> tuple[spa.Identifier, spa.ArrayType | spa.ScalarType] | None:
