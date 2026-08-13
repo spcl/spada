@@ -211,6 +211,24 @@ def _rewrite_stream_declarations(
     return replacements, appended_statements
 
 
+def _ends_with_phase_barrier(statements: list[spir.Statement]) -> bool:
+    """
+    Returns whether a compute block already ends with a phase barrier, so that appending another
+    ``awaitall`` would be redundant.
+
+    ``insert_implicit_closes`` ends every phase with an ``awaitall`` followed by the implicit
+    ``close`` statements, which are awaited and therefore leave nothing outstanding. Scanning back
+    over those closes finds the barrier they belong to.
+    """
+    for statement in reversed(statements):
+        if isinstance(statement, spir.AwaitAllStatement):
+            return True
+        if isinstance(statement, spir.CloseStatement) and statement.completion_name is None:
+            continue
+        return False
+    return False
+
+
 def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
     """
     Inlines phases into their constituent computation and dataflow blocks by adding waits and appending all streams,
@@ -295,7 +313,8 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
             for compute in block.compute:
                 rect = compute.get_grid_rect()
                 if rect in rect_compute:
-                    rect_compute[rect].statements.append(spir.AwaitAllStatement())
+                    if not _ends_with_phase_barrier(rect_compute[rect].statements):
+                        rect_compute[rect].statements.append(spir.AwaitAllStatement())
                     replacements = dict(phase_replacements[rect])
                     replacements.update({
                         oldv.identifier: newv.identifier

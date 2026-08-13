@@ -11,6 +11,7 @@ from spada.syntax.common.types import BIT_WIDTH
 from spada.syntax.spatial_ir import irnodes as spir, canonicalization, analysis, passes
 from spada.syntax.spatial_ir import copy_elimination
 from spada.syntax.spatial_ir import canonical_subgrids
+from spada.syntax.spatial_ir import stream_lifetime
 from spada.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
 from spada.syntax.csl import constants as csl, preprocessing, tasks as tdag, statements as cslstmt, dsd_ops
 from spada.syntax.csl import benchmarking as cslbench
@@ -37,6 +38,7 @@ def canonicalize_kernel(kernel: spir.Kernel) -> spir.Kernel:
     """
     kernel = canonicalization.inline_metaprogramming(kernel)
     kernel = canonicalization.canonicalize_phases(kernel)
+    kernel = stream_lifetime.insert_implicit_closes(kernel)
     kernel = canonicalization.reduce_streams(kernel)
     kernel = canonical_subgrids.canonicalize_subgrids(kernel)
     kernel = canonicalization.resolve_auto_hops(kernel)
@@ -52,7 +54,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
                             task_fusion: bool = True,
                             copy_elision: bool = True,
                             prune_memory: bool = True,
-                            task_id_recycling: bool = True) -> list[CodeFile]:
+                            task_id_recycling: bool = True,
+                            close_elision: bool = True) -> list[CodeFile]:
     """
     Lowers a routed Spatial IR kernel into Cerebras CSL code.
 
@@ -66,6 +69,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     :param copy_elision: If True, enables copy elision optimization pass.
     :param prune_memory: If True, enables unused field pruning optimization pass.
     :param task_id_recycling: If True, enables task ID recycling pass.
+    :param close_elision: If True, removes stream closes that no router has to act on.
     :return: List of code-file objects that can be written to files. See ``write_code_to_files``.
     """
     # PRECONDITION: Rectangles of dataflow/compute/place do not intersect (comes from Spatial IR)
@@ -129,7 +133,15 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     routing_instructions: list[str] = []
     color_maps = []
 
+    # Verify stream lifetimes. This runs after channels have been resolved by
+    # ``_collect_colors_globally``, and before ``elide_redundant_closes`` so that no diagnostic can
+    # be hidden by the elision.
     channel_to_color = _collect_colors_globally(kernel, rectangles, use_memcpy_mode)
+    stream_lifetime.verify_stream_bounds(rectangles)
+    stream_lifetime.check_use_after_close(rectangles)
+    stream_lifetime.check_channel_conflicts(rectangles)
+    if close_elision:
+        stream_lifetime.elide_redundant_closes(rectangles)
 
     for rect in rectangles:
         # Create a unique CSL code file based on rectangle offset

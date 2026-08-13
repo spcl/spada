@@ -22,10 +22,12 @@ import subprocess
 @click.option('--disable-task-fusion', is_flag=True, help='Disable task fusion optimization')
 @click.option('--disable-task-recycling', is_flag=True, help='Disable task ID recycling')
 @click.option('--disable-copy-elision', is_flag=True, help='Disable copy elimination optimization pass')
+@click.option('--disable-close-elision', is_flag=True, help='Disable elision of unnecessary stream closes')
 def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], offset_x: int, offset_y: int,
                        generate_only: bool, disable_benchmarking: bool,
                        disable_asynchronous: bool, disable_dsd: bool, disable_map: bool,
-                       disable_task_fusion: bool, disable_task_recycling: bool, disable_copy_elision: bool):
+                       disable_task_fusion: bool, disable_task_recycling: bool, disable_copy_elision: bool,
+                       disable_close_elision: bool):
     # Parse parameters into dictionary
     kernel_parameters = {}
     for p in param:
@@ -95,6 +97,7 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         task_fusion=not disable_task_fusion,
         copy_elision=not disable_copy_elision,
         task_id_recycling=not disable_task_recycling,
+        close_elision=not disable_close_elision,
     )
 
     # Create output folder if it doesn't exist
