@@ -49,6 +49,10 @@ def generate_csl_statement(statement: spir.Statement,
     elif isinstance(statement, (spir.AwaitCompletionStatement, spir.AwaitAllStatement)):
         # Skip (taken care of when tasks are defined)
         return ""
+    elif isinstance(statement, spir.CloseStatement):
+        # TODO(switching): Lower to a switch advance on the stream's channel.
+        raise NotImplementedError('Closing a stream is not yet supported by the CSL backend.\n'
+                                  f'  In line {statement.lineinfo}')
 
     if op is None:
         return f'// TODO: Convert {statement} to CSL'

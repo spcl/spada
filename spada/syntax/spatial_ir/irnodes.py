@@ -112,17 +112,32 @@ class Identifier(SpatialNode):
 class StreamType(SpatialNode, IRType):
     """
     A stream type that sends elements of type T.
+
+    The optional second template parameter is the stream's *bound*: exactly ``buffer_size`` elements
+    are transferred over the stream, after which the stream closes itself (see
+    ``CloseStatement``). A stream without a bound is unbounded and must be closed explicitly.
+    For kernel arguments, the bound also gives the size of the host-side transfer (which is what
+    enables memcpy mode in CSL), hence the field name.
     """
     element_type: ScalarType
     buffer_size: Optional['Expression'] = None
 
     def validate(self) -> None:
         assert isinstance(self.element_type, ScalarType)
+        assert self.buffer_size is None or isinstance(self.buffer_size, Expression)
 
     def as_ir(self, indent: int = 0) -> str:
         if self.buffer_size is not None:
             return f'stream<{self.element_type.as_ir()}, {self.buffer_size.as_ir()}>'
         return f'stream<{self.element_type.as_ir()}>'
+
+    @property
+    def bound(self) -> Optional['Expression']:
+        """
+        The number of elements transferred over this stream before it closes itself, or ``None`` if
+        the stream is unbounded. An alias of ``buffer_size`` that reads better in lifetime analyses.
+        """
+        return self.buffer_size
 
     @property
     def shape(self) -> list[Union[int, 'Expression']]:
@@ -740,7 +755,7 @@ class StreamDeclaration(SpatialNode):
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
-        return f'{indent_str}stream<{self.dtype.element_type.as_ir()}> {self.stream_name.as_ir()} = {self.stream.as_ir()}'
+        return f'{indent_str}{self.dtype.as_ir()} {self.stream_name.as_ir()} = {self.stream.as_ir()}'
 
 
 ###
@@ -894,6 +909,32 @@ class ReceiveGenerator(SpatialNode):
 
     def as_ir(self, indent: int = 0) -> str:
         return f'receive({self.stream_name.as_ir()})'
+
+
+# Close Statement
+@dataclass
+class CloseStatement(Statement):
+    """
+    Close statement that ends the lifetime of a stream on the PE that executes it.
+
+    Closing a stream releases its channel, which may then be reused by another stream (see the
+    routing specification). It is collective: every PE that sends on or receives from a stream must
+    close it. Bounded streams (``stream<T, BOUND>``) close themselves once ``BOUND`` elements have
+    been transferred, and every stream in scope is implicitly closed at the end of its phase.
+    """
+    stream_name: Union[Identifier, ArraySlice]
+    completion_name: Optional[Completion] = None
+
+    def validate(self) -> None:
+        assert isinstance(self.stream_name, (Identifier, ArraySlice))
+        if self.completion_name:
+            assert isinstance(self.completion_name, Completion)
+
+    def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
+        if self.completion_name:
+            return f'{indent_str}{self.completion_name.as_ir()} = {self.stream_name.as_ir()}.close()'
+        return f'{indent_str}await {self.stream_name.as_ir()}.close()'
 
 
 # Foreach Loop (asynchronous)

@@ -159,6 +159,17 @@ class TreeToSpatialIR(lark.Transformer):
             return irnodes.ReceiveStatement(*arguments, completion_name=completion)
         raise SyntaxError(f'Unrecognized free function call to "{func}"')
 
+    # Method call on a stream object
+    def method_call(self, args, meta=None):
+        completion, stream, func, arguments = args
+
+        if func == 'close':
+            if arguments:
+                raise SyntaxError(f'"close" takes no arguments, but {len(arguments)} were given in '
+                                  f'"{stream.as_ir()}.close(...)"')
+            return irnodes.CloseStatement(stream, completion_name=completion)
+        raise SyntaxError(f'Unrecognized method call to "{func}" on stream "{stream.as_ir()}"')
+
     subscript = irnodes.ArraySlice.from_lark
     subscript_expr = irnodes.ArraySlice.from_lark
 
