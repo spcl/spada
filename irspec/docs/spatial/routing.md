@@ -145,9 +145,10 @@ Next, we describe the condition under which the routing behavior is undefined:
     and write $(S_1, (i_1, j_1), S_2, (i_2, j_2)) \mapsto (S_3, (i_3, j_3), S_4, (i_4, j_4))$
     if $S_2, (i_2, j_2) \longmapsto S_3, (i_3, j_3)$.
 
-!!! danger "Error: Undefined Behavior"
-    If two paths $P_1$ and $P_1$ in the routing graph use the same channel, share a PE, and
+!!! danger "Error: Concurrent Channel Use"
+    If two paths $P_1$ and $P_2$ in the routing graph use the same channel, share a PE, and
     their corresponding stream edges are not ordered by empties-before, then the behavior is undefined.
+    *This raises a compile error whenever the missing ordering can be established statically.*
 
 
 This is because the two messages may interfere with each other
@@ -155,6 +156,29 @@ and the order in which they are processed may become nondeterministic.
 Recall that sending onto the same stream [must be synchronized using completions
 to avoid data races](../spatial#streaming-data-with-send). Hence, sending through the same stream multiple times
 in the same phases is ok as long as the sends (and receives) are correctly synchronized.
+
+The constructive way to establish the ordering between two streams that share a channel is to
+[close](../spatial#closing-streams-with-close) the earlier one. Closing a stream ends its *epoch*:
+on every PE of the path, the channel is released and may be taken over by the next stream.
+
+!!! abstract "Definition: Channel Epoch"
+    An *epoch* of a channel $C$ at PE $(i, j)$ is a maximal interval during which a single stream
+    that uses $C$ occupies $(i, j)$. It begins at the first use of that stream and ends at its
+    `close` (which, for a [bounded](../spatial#streams) stream, is implicit after its `BOUND`
+    elements have been transferred, and, for any stream, is implicit at the end of its phase).
+
+!!! abstract "Lemma: Sufficient Condition for Channel Reuse"
+    Let $F_1$ and $F_2$ be two streams that use the same channel $C$, and let $(i, j)$ be a PE
+    shared by their paths. Let $S_c$ be the `close` of $F_1$ at $(i, j)$ and $S_u$ the first use of
+    $F_2$ at $(i, j)$. If $S_c, (i, j) \longmapsto S_u, (i, j)$ for every shared PE $(i, j)$,
+    then the stream edges of $F_1$ empty-before those of $F_2$ and the reuse of $C$ is well-defined.
+
+Note that a phase boundary satisfies the condition of the lemma at every PE, which is why streams
+in different phases may share a channel without an explicit `close`.
+
+Within a single epoch, a stream may not be used in two different route configurations at the same
+PE. In particular, a PE that both receives from and sends on the same channel must close the
+channel in between, since the two uses require incompatible router configurations.
 
 Keep in mind that PEs transition between phases asynchronously,
 that is, a PE may advance to the next phase before another PE has completed the current phase.
@@ -167,3 +191,48 @@ to receive.
     where all streams are point-to-point paths.
     If multicasting is used, the correctness conditions must be adapted accordingly, 
     especially when considering multiple phases.
+
+
+## Lowering to Switches
+
+Channels are a scarce resource: each channel that is live at a PE occupies one of the hardware's
+routing colors. Epochs are what makes it possible to reuse a channel, and hence a color, for
+several streams.
+
+A stream induces, at each PE of its path, a *route configuration*: the set of directions the PE
+receives from and the set of directions it transmits to (where `RAMP` denotes the PE's own compute
+element). Consider a fixed channel $C$ and a fixed PE $(i, j)$. Ordering the streams that use $C$
+at $(i, j)$ by their epochs yields a sequence of route configurations
+$R_0, R_1, \dotsc, R_{n-1}$, which is realized by the PE's *switch* for the color assigned to $C$:
+$R_0$ is the initial configuration and the router *advances* to $R_{k+1}$ at the epoch boundary.
+
+!!! danger "Error: Too Many Route Configurations"
+    A router holds a bounded number of route configurations per color (four on both WSE-2 and
+    WSE-3). *If the streams sharing a channel require more configurations than that at a single PE,
+    a compile error is raised.* Assigning a different channel to some of the streams resolves it,
+    at the cost of an additional color.
+
+Consecutive configurations that are equal do not consume a position and do not require an advance.
+This is a common case: two streams declared as `relative_stream(-2, 0)` in successive phases induce
+the same configuration at every PE of their paths, so their shared channel needs no switching at
+all.
+
+An advance is driven by the `close` that ends the epoch, and is emitted only at those PEs whose
+next configuration differs. Two lowerings are available:
+
+- The sending PE marks the last transfer of a bounded stream so that its router advances once the
+  stream's `BOUND` elements have left the fabric. This adds no traffic to the channel.
+- The sending PE emits a *switch-advance control message* on the channel. It follows the stream's
+  path using the configuration that is being retired, and advances the router of each PE it
+  traverses, after all data of the epoch. PEs on the path whose configuration does not change are
+  skipped.
+
+Because the control message travels the path of the retired configuration in order behind the data,
+a receiving PE needs to emit nothing to advance its own router: the ordering required by the
+[lemma above](#undefined-behavior) is provided by the fabric. A receiver's `close` therefore has no
+runtime effect; it exists so that the lifetime of the stream — and hence the number of elements it
+carries — is stated by every participant and can be checked.
+
+!!! note "Note: Number of Control Messages"
+    A single control message can carry advance commands for a bounded number of consecutive routers
+    (eight on both WSE-2 and WSE-3). *A path that would require more raises a compile error.*
