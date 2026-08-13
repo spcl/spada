@@ -47,10 +47,10 @@ class StreamUse:
 
     @property
     def name(self) -> spir.Identifier:
-        return _underlying_stream(self.expression)
+        return underlying_stream(self.expression)
 
 
-def _underlying_stream(expression: StreamExpression) -> spir.Identifier:
+def underlying_stream(expression: StreamExpression) -> spir.Identifier:
     """
     Returns the stream identifier behind a stream expression, unwrapping array slices.
     """
@@ -59,7 +59,7 @@ def _underlying_stream(expression: StreamExpression) -> spir.Identifier:
     return expression
 
 
-def _stream_references(statement: spir.Statement) -> list[tuple[str, StreamExpression]]:
+def stream_references(statement: spir.Statement) -> list[tuple[str, StreamExpression]]:
     """
     Returns every stream reference in a statement (including nested ones) as ``(kind, expression)``
     pairs, where ``kind`` is one of ``'send'``, ``'receive'``, or ``'close'``.
@@ -87,8 +87,8 @@ def collect_stream_uses(compute: spir.ComputeBlock) -> dict[spir.Identifier, Str
     """
     result: dict[spir.Identifier, StreamUse] = {}
     for index, statement in enumerate(compute.statements):
-        for kind, expression in _stream_references(statement):
-            name = _underlying_stream(expression)
+        for kind, expression in stream_references(statement):
+            name = underlying_stream(expression)
             use = result.get(name)
             if use is None:
                 use = StreamUse(expression=expression, first_use=index, last_use=index)
@@ -205,8 +205,8 @@ def check_use_after_close(rectangles: list[Rectangle]) -> None:
         compute = rect.metadata.compute
         closed: dict[spir.Identifier, spir.CloseStatement] = {}
         for statement in compute.statements:
-            for kind, expression in _stream_references(statement):
-                name = _underlying_stream(expression)
+            for kind, expression in stream_references(statement):
+                name = underlying_stream(expression)
                 if name in closed:
                     what = 'closed again' if kind == 'close' else f'used in a `{kind}`'
                     raise SyntaxError(
@@ -260,7 +260,7 @@ def _transferred_elements(statement: spir.Statement, stream: spir.Identifier,
     cannot be determined statically.
     """
     if isinstance(statement, (spir.SendStatement, spir.ReceiveStatement)):
-        if _underlying_stream(statement.stream_name) != stream:
+        if underlying_stream(statement.stream_name) != stream:
             return 0
         try:
             dimensions = statement.get_size(identifier_sizes)
@@ -272,7 +272,7 @@ def _transferred_elements(statement: spir.Statement, stream: spir.Identifier,
         return count
 
     if isinstance(statement, spir.ForeachStatement):
-        if _underlying_stream(statement.receive_stream.stream_name) != stream:
+        if underlying_stream(statement.receive_stream.stream_name) != stream:
             return None if _uses_stream(statement, stream) else 0
         if not statement.parameter_range:
             return None  # Receives until the sender is done
@@ -316,7 +316,7 @@ def _transferred_elements(statement: spir.Statement, stream: spir.Identifier,
 
 
 def _uses_stream(statement: spir.Statement, stream: spir.Identifier) -> bool:
-    return any(_underlying_stream(expression) == stream for kind, expression in _stream_references(statement)
+    return any(underlying_stream(expression) == stream for kind, expression in stream_references(statement)
                if kind != 'close')
 
 
@@ -603,12 +603,22 @@ def _empties_before(first: str, second: str, uses_per_rect: list[dict[spir.Ident
 ###
 
 
-def elide_redundant_closes(rectangles: list[Rectangle]) -> int:
+def elide_redundant_closes(rectangles: list[Rectangle], needs_advance=None) -> int:
     """
-    Removes every close whose channel is never taken over by another stream, since no router has to
-    advance in that case.
+    Removes every close that no router has to act on.
+
+    Without ``needs_advance``, a close survives only when its channel carries more than one stream
+    group, which is the cheapest sound approximation and is what makes kernels with ``auto``
+    channels come out exactly as they did before this feature existed.
+
+    Code generation passes the precise predicate instead: a close survives only if some router on
+    the stream's path actually changes configuration at that epoch boundary. That also covers a
+    single stream whose own configuration changes at a PE, as in a systolic forwarding chain, which
+    the channel-level approximation would wrongly drop.
 
     :param rectangles: The consolidated PE rectangles of the kernel, modified in place.
+    :param needs_advance: Optional predicate taking a ``CloseStatement`` and returning whether it
+                          has to be kept.
     :return: The number of closes that were removed.
     """
     streams_per_channel = groups_per_channel(rectangles)
@@ -619,9 +629,12 @@ def elide_redundant_closes(rectangles: list[Rectangle]) -> int:
         keep = []
         for statement in rect.metadata.compute.statements:
             if isinstance(statement, spir.CloseStatement):
-                name = _underlying_stream(statement.stream_name)
-                declaration = declarations.get(name)
-                if _is_redundant_close(declaration, streams_per_channel):
+                if needs_advance is not None:
+                    redundant = not needs_advance(statement)
+                else:
+                    name = underlying_stream(statement.stream_name)
+                    redundant = _is_redundant_close(declarations.get(name), streams_per_channel)
+                if redundant:
                     removed += 1
                     continue
             keep.append(statement)

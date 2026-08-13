@@ -53,3 +53,19 @@ _HARDWARE_FABRIC_DIMS = {
     'wse3': (762, 1172),
 }
 HARDWARE_FABRIC_DIMS = _HARDWARE_FABRIC_DIMS[ARCH]
+
+# Router switches. Each router holds one base route configuration (``.routes``) plus up to three
+# switch positions (``.pos1``, ``.pos2``, ``.pos3``) per color.
+# See https://sdk.cerebras.ai/csl/language/builtins#switching-configuration-semantics
+SWITCH_POSITIONS = 4
+
+# Maximum number of switching commands that fit in one control wavelet (``<control>``'s MAX_CMDS).
+# One command is consumed per router the wavelet traverses.
+MAX_CONTROL_COMMANDS = 8
+
+# Colors whose routers support switches. WSE-3 only implements switches on a subset of colors.
+_SWITCHABLE_COLORS = {
+    'wse2': list(range(0, 21)),
+    'wse3': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 16, 17, 20],
+}
+SWITCHABLE_COLORS = [color for color in _SWITCHABLE_COLORS[ARCH] if color in COLORS]

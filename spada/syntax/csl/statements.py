@@ -2,6 +2,7 @@ from io import StringIO
 from typing import Optional
 from spada.syntax.csl.structures import DataStructureDescriptor
 from spada.syntax.csl import dsd_ops
+from spada.syntax.csl import switching
 from spada.syntax.spatial_ir import irnodes as spir
 
 UniqueDSDDict = dict[str, list[tuple[str, DataStructureDescriptor]]]
@@ -50,9 +51,13 @@ def generate_csl_statement(statement: spir.Statement,
         # Skip (taken care of when tasks are defined)
         return ""
     elif isinstance(statement, spir.CloseStatement):
-        # TODO(switching): Lower to a switch advance on the stream's channel.
-        raise NotImplementedError('Closing a stream is not yet supported by the CSL backend.\n'
-                                  f'  In line {statement.lineinfo}')
+        # Retiring a route configuration is a control wavelet that advances the routers along the
+        # stream's path, or nothing at all when none of them has to move.
+        if not statement.switch_advance:
+            return ""
+        stream = statement.stream_name
+        name = name_to_csl(stream.array if isinstance(stream, spir.ArraySlice) else stream)
+        return '@mov32(%s_switch_dsd, %s);' % (name, switching.switch_advance_payload(statement.switch_advance))
 
     if op is None:
         return f'// TODO: Convert {statement} to CSL'
