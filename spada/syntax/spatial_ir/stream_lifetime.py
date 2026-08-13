@@ -253,14 +253,21 @@ def _constant_range_length(rng: spir.RangeExpression) -> Optional[int]:
     return max(0, -(-(stop - start) // step))
 
 
-def _transferred_elements(statement: spir.Statement, stream: spir.Identifier,
+def _transferred_elements(statement: spir.Statement, stream: spir.Identifier, kind: str,
                           identifier_sizes: dict[spir.Identifier, list[int]]) -> Optional[int]:
     """
-    Returns how many elements a top-level statement transfers over a stream, or ``None`` if that
-    cannot be determined statically.
+    Returns how many elements a top-level statement transfers over a stream in one direction, or
+    ``None`` if that cannot be determined statically.
+
+    Sends and receives are counted separately because they are different stream edges: a PE in a
+    systolic chain receives a stream's ``BOUND`` elements from upstream and sends ``BOUND`` elements
+    downstream, and neither edge carries more than the bound.
+
+    :param kind: Either ``'send'`` or ``'receive'``.
     """
     if isinstance(statement, (spir.SendStatement, spir.ReceiveStatement)):
-        if underlying_stream(statement.stream_name) != stream:
+        wanted = spir.SendStatement if kind == 'send' else spir.ReceiveStatement
+        if not isinstance(statement, wanted) or underlying_stream(statement.stream_name) != stream:
             return 0
         try:
             dimensions = statement.get_size(identifier_sizes)
@@ -272,8 +279,15 @@ def _transferred_elements(statement: spir.Statement, stream: spir.Identifier,
         return count
 
     if isinstance(statement, spir.ForeachStatement):
-        if underlying_stream(statement.receive_stream.stream_name) != stream:
-            return None if _uses_stream(statement, stream) else 0
+        receives_here = underlying_stream(statement.receive_stream.stream_name) == stream
+        if kind == 'receive' and not receives_here:
+            return 0 if not _uses_stream(statement, stream, kind) else None
+        if kind == 'send':
+            # A nested send repeats once per received element, which is only known when the loop
+            # carries an explicit range.
+            if not _uses_stream(statement, stream, 'send'):
+                return 0
+            return None
         if not statement.parameter_range:
             return None  # Receives until the sender is done
         count = 1
@@ -285,7 +299,7 @@ def _transferred_elements(statement: spir.Statement, stream: spir.Identifier,
         return count
 
     if isinstance(statement, (spir.ForStatement, spir.MapStatement)):
-        if not _uses_stream(statement, stream):
+        if not _uses_stream(statement, stream, kind):
             return 0
         trips = 1
         for rng in statement.range_expression:
@@ -295,35 +309,39 @@ def _transferred_elements(statement: spir.Statement, stream: spir.Identifier,
             trips *= length
         inner = 0
         for inner_statement in statement.body:
-            count = _transferred_elements(inner_statement, stream, identifier_sizes)
+            count = _transferred_elements(inner_statement, stream, kind, identifier_sizes)
             if count is None:
                 return None
             inner += count
         return trips * inner
 
     if isinstance(statement, spir.AsyncBlock):
-        if not _uses_stream(statement, stream):
+        if not _uses_stream(statement, stream, kind):
             return 0
         total = 0
         for inner_statement in statement.body:
-            count = _transferred_elements(inner_statement, stream, identifier_sizes)
+            count = _transferred_elements(inner_statement, stream, kind, identifier_sizes)
             if count is None:
                 return None
             total += count
         return total
 
-    return None if _uses_stream(statement, stream) else 0
+    return None if _uses_stream(statement, stream, kind) else 0
 
 
-def _uses_stream(statement: spir.Statement, stream: spir.Identifier) -> bool:
-    return any(underlying_stream(expression) == stream for kind, expression in stream_references(statement)
-               if kind != 'close')
+def _uses_stream(statement: spir.Statement, stream: spir.Identifier, kind: Optional[str] = None) -> bool:
+    return any(underlying_stream(expression) == stream
+               for reference_kind, expression in stream_references(statement)
+               if reference_kind != 'close' and (kind is None or reference_kind == kind))
 
 
 def verify_stream_bounds(rectangles: list[Rectangle]) -> None:
     """
     Raises a ``SyntaxError`` if the number of elements transferred over a bounded stream can be
     determined statically and does not match the stream's bound.
+
+    Each direction is checked on its own: a PE that forwards a stream receives its bound from
+    upstream and sends its bound downstream, which are two stream edges of the same size.
 
     Streams whose element count cannot be analyzed are silently accepted.
 
@@ -343,20 +361,25 @@ def verify_stream_bounds(rectangles: list[Rectangle]) -> None:
             if not isinstance(bound, int):
                 continue
 
-            total = 0
-            for index in use.uses:
-                count = _transferred_elements(rect.metadata.compute.statements[index], name, identifier_sizes)
-                if count is None:
-                    total = None
-                    break
-                total += count
-            if total is None or total == bound:
-                continue
+            for kind in ('send', 'receive'):
+                if not (use.sent if kind == 'send' else use.received):
+                    continue
+                total = 0
+                for index in use.uses:
+                    count = _transferred_elements(rect.metadata.compute.statements[index], name, kind,
+                                                  identifier_sizes)
+                    if count is None:
+                        total = None
+                        break
+                    total += count
+                if total is None or total == bound:
+                    continue
 
-            raise SyntaxError(f"Stream '{name.as_ir()}' is declared with bound {bound}, but {total} "
-                              f"element(s) are transferred over it{_location(declaration)}.\n"
-                              "  note: the bound of a stream is the exact number of elements it carries "
-                              "before it closes itself")
+                direction = 'sent over' if kind == 'send' else 'received from'
+                raise SyntaxError(f"Stream '{name.as_ir()}' is declared with bound {bound}, but {total} "
+                                  f"element(s) are {direction} it{_location(declaration)}.\n"
+                                  "  note: the bound of a stream is the exact number of elements each of "
+                                  "its stream edges carries before it closes itself")
 
 
 def _identifier_sizes(place: spir.PlaceBlock) -> dict[spir.Identifier, list[int]]:

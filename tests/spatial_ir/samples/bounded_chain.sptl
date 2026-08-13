@@ -1,0 +1,48 @@
+/**
+ * Bounded systolic chain over a single channel.
+ *
+ * PE 0 sends its K input values east; PE 1 receives them, adds its own input, and forwards the
+ * result east on the *same* stream; PE 2 receives and writes the result out.
+ *
+ * The stream is bounded, so it closes itself after K elements without any explicit `close`. That
+ * close is what advances PE 1's router from its receiving configuration to its sending one: both
+ * directions share channel 0, so the router needs two switch positions.
+ *
+ * Reference: out == inp[0] + inp[1]
+ **/
+kernel @bounded_chain<K>(stream<f32, K>[3] readonly inp, stream<f32, K> writeonly out) {
+
+    place u16 i, u16 j in [0:3, 0:1] {
+        f32[K] a
+    }
+
+    dataflow u16 i, u16 j in [0:3, 0:1] {
+        stream<f32, K> eastwards = relative_stream(1, 0) {
+            hops = [(1, 0)],
+            channel = 0
+        }
+    }
+
+    // Head of the chain
+    compute u16 i, u16 j in [0:1, 0:1] {
+        await receive(a, inp[i])
+        await send(a, eastwards)
+    }
+
+    // Middle: receive, accumulate, forward on the same stream
+    compute u16 i, u16 j in [1:2, 0:1] {
+        await receive(a, inp[i])
+        await foreach i32 k, f32 x in [0:K], receive(eastwards) {
+            a[k] = a[k] + x
+        }
+        await send(a, eastwards)
+    }
+
+    // Tail of the chain
+    compute u16 i, u16 j in [2:3, 0:1] {
+        await foreach i32 k, f32 x in [0:K], receive(eastwards) {
+            a[k] = x
+        }
+        await send(a, out)
+    }
+}

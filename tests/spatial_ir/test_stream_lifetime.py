@@ -202,7 +202,7 @@ def test_matching_bound_is_accepted():
 
 
 def test_mismatched_bound_is_rejected():
-    with pytest.raises(SyntaxError, match='declared with bound 8, but 4 element'):
+    with pytest.raises(SyntaxError, match='bound 8, but 4 element'):
         stream_lifetime.verify_stream_bounds(_rectangles(_bounded_kernel('8', '4'), K=4))
 
 

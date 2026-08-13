@@ -257,6 +257,35 @@ def test_systolic_forwarding_gets_two_positions():
     assert any('switch_dsd' in code for name, code in files.items() if name == 'code_0_0.csl')
 
 
+def test_bounded_chain_sample_lowers_with_switches():
+    """
+    ``bounded_chain.sptl`` backs ``tests/csl_runtime/test_bounded_chain.sh``: a bounded stream that
+    closes itself after its bound, which is what advances the forwarding PE's router.
+    """
+    files = _lower('bounded_chain.sptl', K=4)
+    layout = files['layout.csl']
+    switched = [line for line in layout.splitlines() if '@set_color_config' in line and '.switches' in line]
+    assert len(switched) == 1, layout
+    assert '.rx = .{WEST}, .tx = .{RAMP} }, .switches = .{ .pos1 = .{ .rx = RAMP, .tx = .{EAST} } }' in switched[0]
+
+    # The head of the chain retires the incoming configuration for the PE that forwards
+    assert 'ctrl.opcode.NOP, ctrl.opcode.SWITCH_ADV' in files['code_0_0.csl']
+    assert not any('switch_dsd' in code for name, code in files.items() if name == 'code_2_0.csl')
+
+
+def test_scalar_reduce_1d_sample_lowers_with_switches():
+    """
+    ``scalar_reduce_1D.sptl`` used to carry a warning that the CSL backend could not lower it: every
+    middle PE receives and sends on one channel. It backs
+    ``tests/csl_runtime/test_scalar_reduce_1d.sh``.
+    """
+    path = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'collectives')
+    kernel = parser.parse_file(os.path.join(path, 'scalar_reduce_1D.sptl'))
+    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, N=4))
+    files = {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel)}
+    assert '.switches' in files['layout.csl']
+
+
 ###
 # Capacity stress
 ###
