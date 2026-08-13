@@ -4,7 +4,6 @@ Converts routed Spatial IR code to Cerebras CSL.
 
 from collections import defaultdict
 import copy
-from dataclasses import dataclass
 import functools
 from io import StringIO
 import textwrap
@@ -17,7 +16,7 @@ from spada.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
 from spada.syntax.csl import constants as csl, preprocessing, tasks as tdag, statements as cslstmt, dsd_ops
 from spada.syntax.csl import benchmarking as cslbench
 from spada.syntax.csl import structures as cslstruct
-from spada.syntax.csl import switching as cslswitch
+from spada.syntax.csl import routing as cslrouting
 from spada.syntax.csl import task_recycling, prune_unused_fields as csl_pruning
 from spada.syntax.csl.codefile import CodeFile
 from spada.syntax.csl.statements import name_to_csl, dtype_as_csl, expr_to_csl
@@ -147,7 +146,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     stream_lifetime.check_channel_conflicts(rectangles)
 
     # Plan the router switch advances, then drop every close no router has to act on
-    plan_switch_advances(rectangles)
+    cslrouting.plan_switch_advances(rectangles)
     if close_elision:
         stream_lifetime.elide_redundant_closes(rectangles, needs_advance=lambda stmt: bool(stmt.switch_advance))
 
@@ -175,7 +174,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     rect_size = x1 - x0, y1 - y0
 
     # Collect unique routes for all rectangles
-    routes_per_rectangle = _collect_routes(rectangles, color_maps, disable_switching)
+    routes_per_rectangle = cslrouting.collect_routes(rectangles, color_maps, disable_switching)
 
     if use_memcpy_mode:
         layout_code.write(f'''
@@ -345,7 +344,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     #     * Generate routing instructions from dataflow blocks
     #     * Make unique colors out of streams, reduce number of streams
     color_map = _allocate_colors(rect, header, kernel, use_memcpy_mode, stream_extents, channel_to_color)
-    _declare_switch_advances(rect, header, color_map)
+    cslrouting.declare_switch_advances(rect, header, color_map)
     dtypes = _collect_identifier_types(rect.metadata, kernel.arguments)
 
     # Preprocess potential data tasks to convert to loops if possible
@@ -668,32 +667,6 @@ def _collect_colors_globally(kernel: spir.Kernel, rectangles: list[Rectangle[PEB
                 color_offset += 1
 
     return channel_to_color
-
-
-def _declare_switch_advances(rect: Rectangle[PEBlock], header: StringIO, color_map: dict[str, int]) -> None:
-    """
-    Declares the fabric output descriptors that carry a stream's switch-advance control wavelet.
-
-    The wavelet itself is emitted by ``statements.generate_csl_statement`` from the close's
-    ``switch_advance`` field; this only has to provide the descriptor it is sent through, because
-    that is where the color is known.
-    """
-    kept = [
-        statement for statement in rect.metadata.compute.statements
-        if isinstance(statement, spir.CloseStatement) and statement.switch_advance
-    ]
-    if not kept:
-        return
-
-    header.write('\nconst ctrl = @import_module("<control>");\n')
-    queue = csl.OUTPUT_QUEUE_IDS[0]
-    for statement in kept:
-        name = name_to_csl(stream_lifetime.underlying_stream(statement.stream_name))
-        dsd_name = f'{name}_switch_dsd'
-        if f'const {dsd_name}' not in header.getvalue():
-            header.write(f'const {dsd_name} = @get_dsd(fabout_dsd, .{{ .extent = 1, '
-                         f'.fabric_color = @get_color({color_map[name + "_OUT"]}), .control = true, '
-                         f'.output_queue = @get_output_queue({queue}) }});\n')
 
 
 def _allocate_colors(rect: Rectangle[PEBlock], header: StringIO, kernel: spir.Kernel, use_memcpy_mode: bool,
@@ -1232,415 +1205,6 @@ class DSDVisitor(spir.NodeVisitor):
             self.generic_visit(node)
         self.in_assignment = old_assignment
         return
-
-
-def _route_dir(dx: int, dy: int):
-    """
-    Helper function that returns directions for routing: (source, target).
-    """
-    assert abs(dx + dy) == 1
-    if dx == -1:
-        return ('EAST', 'WEST')
-    elif dx == 1:
-        return ('WEST', 'EAST')
-    elif dy == -1:
-        return ('SOUTH', 'NORTH')
-    elif dy == 1:
-        return ('NORTH', 'SOUTH')
-
-
-@dataclass(frozen=True)
-class _RouteSite:
-    """
-    One ``@set_color_config`` target: the rectangle of PEs (already shifted by the relay offset) that
-    receive a route configuration for one color.
-    """
-    color: int
-    x_range: tuple[int, int, int]
-    y_range: tuple[int, int, int]
-
-    def as_rectangle(self) -> Rectangle:
-        return Rectangle(self.x_range, self.y_range, None)
-
-    def describe(self) -> str:
-        return (f'PEs [{self.x_range[0]}:{self.x_range[1]}, {self.y_range[0]}:{self.y_range[1]}]')
-
-
-@dataclass
-class _RouteEntry:
-    """
-    One route configuration contributed to a site, with the key that orders it against the other
-    configurations of the same site.
-    """
-    config: cslswitch.RouteConfig
-    order: tuple[int, int]
-    origin_rect: int
-    origin_offset: tuple[int, int]
-    stream: spir.Identifier
-    #: Routing identity of the stream; stable across the per-rectangle renaming of ``inline_phases``
-    group: str = ''
-
-
-def _stream_use_order(compute: spir.ComputeBlock) -> dict[spir.Identifier, dict[str, tuple[int, int]]]:
-    """
-    Returns, per stream, the order key of its first receive and of its first send in a compute block.
-
-    The key is ``(barrier index, statement index)``: statements are ordered first by how many phase
-    barriers precede them, then by their position in the block. This is what sequences the route
-    configurations of a router into switch positions.
-    """
-    result: dict[spir.Identifier, dict[str, tuple[int, int]]] = {}
-    barrier = 0
-    for index, statement in enumerate(compute.statements):
-        if isinstance(statement, spir.AwaitAllStatement):
-            barrier += 1
-            continue
-        for kind, expression in stream_lifetime.stream_references(statement):
-            if kind == 'close':
-                continue
-            name = stream_lifetime.underlying_stream(expression)
-            orders = result.setdefault(name, {})
-            orders.setdefault(kind, (barrier, index))
-    return result
-
-
-def _offset_expression(axis: str, offset: int) -> str:
-    return axis if offset == 0 else f'{axis} + {offset}'
-
-
-def _collect_routes(rectangles: list[Rectangle[PEBlock]],
-                    color_maps: list[dict[str, int]],
-                    disable_switching: bool = False) -> dict[tuple[int, int], str]:
-    """
-    Creates a parametric version of the Routing Graph (see the Spatial IR specification for more information) and
-    returns a dictionary of code segements to add to the layout CSL file based on the streams.
-
-    Route configurations are collected per *site* -- a rectangle of PEs and a color -- and merged
-    across rectangles, because a multi-hop stream configures its relay PEs from the sending
-    rectangle's loop. A site that ends up with more than one configuration is lowered to router
-    switch positions, ordered by the local order of the statements that use the streams.
-
-    :param rectangles: All rectangles involved in this kernel.
-    :param color_maps: Per-rectangle mapping of stream names to colors.
-    :param disable_switching: If True, emit each configuration as its own ``@set_color_config``
-                              instead of merging them into switch positions.
-    :return: A dictionary mapping the starting point of each rectangle to a string representing the layout instructions.
-    """
-    INDENT = 12 * ' '
-
-    entries: dict[_RouteSite, list[_RouteEntry]] = {}
-    for rect_index, (rect, color_map) in enumerate(zip(rectangles, color_maps)):
-        for site, entry in _rectangle_route_entries(rect_index, rect, color_map):
-            entries.setdefault(site, []).append(entry)
-
-    _check_site_overlap(entries)
-
-    result = {(rect.x_range[0], rect.y_range[0]): '' for rect in rectangles}
-    for site, site_entries in entries.items():
-        site_entries.sort(key=lambda entry: entry.order)
-
-        # The site is configured from the loop of one rectangle: the one that owns these PEs if
-        # there is one, otherwise the first relay that reaches them.
-        owner = min(site_entries, key=lambda entry: (entry.origin_offset != (0, 0), entry.origin_rect))
-        owner_rect = rectangles[owner.origin_rect]
-        key = (owner_rect.x_range[0], owner_rect.y_range[0])
-        x = _offset_expression('pe_x', owner.origin_offset[0])
-        y = _offset_expression('pe_y', owner.origin_offset[1])
-        color = f'@get_color({site.color})'
-
-        if disable_switching:
-            for entry in site_entries:
-                plan = cslswitch.ColorSwitchPlan([entry.config])
-                text = cslswitch.set_color_config(x, y, color, plan, INDENT)
-                if text not in result[key]:
-                    result[key] += text
-            continue
-
-        plan = cslswitch.ColorSwitchPlan()
-        for entry in site_entries:
-            plan.add(entry.config)
-        plan.validate(site.color, site.describe())
-        result[key] += cslswitch.set_color_config(x, y, color, plan, INDENT)
-
-    return result
-
-
-def _route_sites(rectangles: list[Rectangle[PEBlock]],
-                 color_maps: list[dict[str, int]]) -> dict['_RouteSite', list['_RouteEntry']]:
-    """
-    Collects the route configurations of every site, sorted into switch-position order.
-    """
-    entries: dict[_RouteSite, list[_RouteEntry]] = {}
-    for rect_index, (rect, color_map) in enumerate(zip(rectangles, color_maps)):
-        for site, entry in _rectangle_route_entries(rect_index, rect, color_map):
-            entries.setdefault(site, []).append(entry)
-    for site_entries in entries.values():
-        site_entries.sort(key=lambda entry: entry.order)
-    return entries
-
-
-def _channel_color_maps(rectangles: list[Rectangle[PEBlock]]) -> list[dict[str, int]]:
-    """
-    Builds color maps that use the stream's *channel* in place of its color.
-
-    Switch planning has to run before colors are allocated per rectangle, and the shape of a
-    router's configuration sequence only depends on the channel (a channel maps to exactly one
-    color).
-    """
-    color_maps = []
-    for rect in rectangles:
-        color_map = {}
-        for declaration in rect.metadata.dataflow.statements:
-            if declaration.stream.routing is None:
-                continue
-            channel = declaration.stream.routing.resolved_channel
-            if channel == 'auto':
-                continue
-            name = name_to_csl(declaration.stream_name)
-            color_map[name + '_IN'] = channel
-            color_map[name + '_OUT'] = channel
-        color_maps.append(color_map)
-    return color_maps
-
-
-def plan_switch_advances(rectangles: list[Rectangle[PEBlock]]) -> int:
-    """
-    Determines, for every ``close`` statement, which routers along the stream's path must advance
-    their switch.
-
-    A close only produces code on a PE that *sends* the stream: the control message it emits travels
-    the path being retired and advances each router it traverses. Routers whose configuration does
-    not change are given a no-op so that they stay where they are. A close on a receiving PE emits
-    nothing; its router is advanced by the sender's message.
-
-    The result is recorded on each ``CloseStatement`` as its ``switch_advance`` field; a close that
-    needs no advance keeps ``None`` there and generates no code.
-
-    :param rectangles: The consolidated PE rectangles of the kernel, annotated in place.
-    :return: The number of closes that retire a route configuration.
-    """
-    sites = _route_sites(rectangles, _channel_color_maps(rectangles))
-
-    # Per site, the switch position of every configuration, and how many positions the site holds
-    position_of: dict[_RouteSite, list[tuple[_RouteEntry, int]]] = {}
-    positions_at: dict[_RouteSite, int] = {}
-    for site, site_entries in sites.items():
-        configs: list[cslswitch.RouteConfig] = []
-        placed = []
-        for entry in site_entries:
-            if not configs or configs[-1] != entry.config:
-                configs.append(entry.config)
-            placed.append((entry, len(configs) - 1))
-        position_of[site] = placed
-        positions_at[site] = len(configs)
-
-    planned = 0
-    for rect in rectangles:
-        declarations = {d.stream_name: d for d in rect.metadata.dataflow.statements}
-        uses = stream_lifetime.collect_stream_uses(rect.metadata.compute)
-        for statement in rect.metadata.compute.statements:
-            if not isinstance(statement, spir.CloseStatement):
-                continue
-            statement.switch_advance = None
-            name = stream_lifetime.underlying_stream(statement.stream_name)
-            declaration = declarations.get(name)
-            if declaration is None or name not in uses or not uses[name].sent:
-                continue  # Not sent here: the sending PE's control message advances this router
-            channel = declaration.stream.routing.resolved_channel if declaration.stream.routing else 'auto'
-            offsets = stream_lifetime._stream_path_offsets(declaration)
-            if channel == 'auto' or offsets is None:
-                continue
-            group = stream_lifetime.stream_group_key(declaration)
-
-            commands = []
-            for dx, dy in offsets:
-                site = _find_site(position_of, channel,
-                                  (rect.x_range[0] + dx, rect.x_range[1] + dx, rect.x_range[2]),
-                                  (rect.y_range[0] + dy, rect.y_range[1] + dy, rect.y_range[2]))
-                if site is None:
-                    commands.append(False)
-                    continue
-                position = _traffic_position(position_of[site], group, is_sender=(dx == 0 and dy == 0))
-                commands.append(position is not None and position + 1 < positions_at.get(site, 0))
-
-            if any(commands):
-                statement.switch_advance = commands
-                planned += 1
-
-    return planned
-
-
-def _find_site(sites, color: int, x_range: tuple[int, int, int], y_range: tuple[int, int, int]):
-    """
-    Finds the site that configures a shifted rectangle of PEs for a color.
-
-    An exact match is the common case, but a stream whose sender and receiver live in the *same*
-    rectangle shifts that rectangle onto itself: PE ``(i, j)`` sends to ``(i, j+1)``, which the same
-    parametric loop configures. Those lookups are resolved by intersection.
-    """
-    exact = _RouteSite(color=color, x_range=x_range, y_range=y_range)
-    if exact in sites:
-        return exact
-    shifted = Rectangle(x_range, y_range, None)
-    for site in sites:
-        if site.color == color and site.as_rectangle().intersects(shifted):
-            return site
-    return None
-
-
-def _traffic_position(placed: list[tuple['_RouteEntry', int]], group: str, is_sender: bool):
-    """
-    Returns the switch position that a stream's traffic occupies at one router.
-
-    The sending PE injects from its own ramp, so its configuration is the one with ``rx = RAMP``;
-    every router further along the path forwards traffic that arrives from the fabric. Picking the
-    right one matters when a PE both receives and sends the same stream, as in a systolic chain:
-    the message that retires the incoming configuration has to advance that router onto the
-    outgoing one.
-    """
-    for entry, position in placed:
-        if entry.group != group:
-            continue
-        if is_sender == (entry.config.rx == ('RAMP', )):
-            return position
-    return None
-
-
-def _check_site_overlap(entries: dict['_RouteSite', list['_RouteEntry']]) -> None:
-    """
-    Raises a ``SyntaxError`` if two sites of the same color cover overlapping but different sets of
-    PEs, which cannot be expressed as a single parametric ``@set_color_config`` loop.
-    """
-    sites = list(entries)
-    for index, first in enumerate(sites):
-        for second in sites[index + 1:]:
-            if first.color != second.color:
-                continue
-            if not first.as_rectangle().intersects(second.as_rectangle()):
-                continue
-            raise SyntaxError(
-                f'Color {first.color} is configured differently on overlapping but distinct PE '
-                f'regions {first.describe()} and {second.describe()}.\n'
-                '  note: the two regions would need separate switch sequences; split the compute '
-                'blocks so that the regions coincide or are disjoint')
-
-
-def _rectangle_route_entries(rect_index: int, rect: Rectangle[PEBlock],
-                             color_map: dict[str, int]) -> list[tuple['_RouteSite', '_RouteEntry']]:
-    """
-    Collects every route configuration a single rectangle contributes, as ``(site, entry)`` pairs.
-    """
-    # Test whether a receive/send statement are called for creating inbound/outbound routes
-    sends_recvs = analysis.sends_and_receives(rect.metadata.compute)
-    use_order = _stream_use_order(rect.metadata.compute)
-    collected: list[tuple[_RouteSite, _RouteEntry]] = []
-
-    def add(offset: tuple[int, int], color: int, rx: tuple[str, ...], tx: tuple[str, ...],
-            order: tuple[int, int], stream_name: spir.Identifier, group: str) -> None:
-        site = _RouteSite(
-            color=color,
-            x_range=(rect.x_range[0] + offset[0], rect.x_range[1] + offset[0], rect.x_range[2]),
-            y_range=(rect.y_range[0] + offset[1], rect.y_range[1] + offset[1], rect.y_range[2]))
-        collected.append((site,
-                          _RouteEntry(cslswitch.RouteConfig(rx, tx), order, rect_index, offset, stream_name, group)))
-
-    # For each hop, make a color WEST-EAST/NORTH-SOUTH pair. For the first and last hop, pair with RAMP
-    for stream in rect.metadata.dataflow.statements:
-        if stream.stream_name not in sends_recvs:  # Skip unused streams
-            continue
-        sent, received = sends_recvs[stream.stream_name]
-        group = stream_lifetime.stream_group_key(stream)
-        orders = use_order.get(stream.stream_name, {})
-        receive_order = orders.get('receive', (0, 0))
-        send_order = orders.get('send', (0, 0))
-        if received:
-            color_inbound = color_map[name_to_csl(stream.stream_name) + "_IN"]
-        if sent:
-            color_outbound = color_map[name_to_csl(stream.stream_name) + "_OUT"]
-
-        if isinstance(stream.stream, spir.ExternStreamDeclaration):
-            continue  # Extern streams do not have on-chip routing
-
-        if isinstance(stream.stream, spir.MulticastRangeStreamDeclaration):
-            if sent and received:
-                raise ValueError(
-                    f"Multicast stream '{stream.stream_name.as_ir()}' is both sent and received "
-                    f"within the same compute rectangle [{rect.x_range[0]}:{rect.x_range[1]}, "
-                    f"{rect.y_range[0]}:{rect.y_range[1]}]. "
-                    "Sender and receiver compute blocks must be in separate rectangles for multicast streams.")
-            if not sent:
-                # All multicast routing is emitted by the rectangle that sends this stream.
-                continue
-            rng = stream.stream.multicast_range
-            start = int(rng.start.eval())
-            stop = int(rng.stop.eval())
-            axis = stream.stream.multicast_axis
-            is_negative = start < 0
-
-            if axis == 'y':
-                tx_dir, rx_dir = ('NORTH', 'SOUTH') if is_negative else ('SOUTH', 'NORTH')
-
-                def _coord(k):  # noqa: E731
-                    return (0, k)
-            else:
-                tx_dir, rx_dir = ('WEST', 'EAST') if is_negative else ('EAST', 'WEST')
-
-                def _coord(k):  # noqa: E731
-                    return (k, 0)
-
-            # Sender: inject into fabric toward receivers.
-            add((0, 0), color_outbound, ('RAMP', ), (tx_dir, ), send_order, stream.stream_name, group)
-
-            if is_negative:
-                # Negative multicast: receivers at start, start-1, …, stop+1 (stop exclusive).
-                k_last = stop + 1  # farthest receiver
-                gap = range(-1, start, -1)
-                intermediate = range(start, k_last, -1)
-            else:
-                # Positive multicast: receivers at start, start+1, …, stop-1 (stop exclusive).
-                k_last = stop - 1
-                gap = range(1, start)
-                intermediate = range(start, stop - 1)
-
-            # Gap relay-only PEs between the sender and the first receiver.
-            for k in gap:
-                add(_coord(k), color_outbound, (rx_dir, ), (tx_dir, ), send_order, stream.stream_name, group)
-
-            # Intermediate receivers: forward toward the farthest one and deliver to RAMP.
-            for k in intermediate:
-                add(_coord(k), color_outbound, (rx_dir, ), (tx_dir, 'RAMP'), send_order, stream.stream_name, group)
-
-            # Last (farthest) receiver: deliver to RAMP only, no forwarding.
-            add(_coord(k_last), color_outbound, (rx_dir, ), ('RAMP', ), send_order, stream.stream_name, group)
-            continue
-
-        if len(stream.stream.routing.hops) == 1:  # Inbound and outbound generated together
-            route = _route_dir(*stream.stream.routing.hops[0].offset)
-            if sent:
-                add((0, 0), color_outbound, ('RAMP', ), (route[1], ), send_order, stream.stream_name, group)
-            if received:
-                add((0, 0), color_inbound, (route[0], ), ('RAMP', ), receive_order, stream.stream_name, group)
-        else:  # Multi-hop
-            if sent:
-                first_hop = stream.stream.routing.hops[0]
-                add((0, 0), color_outbound, ('RAMP', ), (_route_dir(*first_hop.offset)[1], ), send_order,
-                    stream.stream_name, group)
-                cur_offx = 0
-                cur_offy = 0
-                for hop in stream.stream.routing.hops[1:]:
-                    route = _route_dir(*hop.offset)
-                    cur_offx += hop.offset[0]
-                    cur_offy += hop.offset[1]
-                    add((cur_offx, cur_offy), color_outbound, (route[0], ), (route[1], ), send_order,
-                        stream.stream_name, group)
-            if received:
-                # The receiver only configures itself. Intermediate PEs are configured by the sender
-                # block above, which walks forward through hops[1:] relative to the sender PE.
-                last_hop = stream.stream.routing.hops[-1]
-                add((0, 0), color_inbound, (_route_dir(*last_hop.offset)[0], ), ('RAMP', ), receive_order,
-                    stream.stream_name, group)
-
-    return collected
 
 
 def _write_indented_block(current_code: StringIO, block: str, indent: str) -> None:

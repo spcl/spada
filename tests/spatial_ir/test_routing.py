@@ -7,7 +7,7 @@ import os
 import pytest
 
 from spada.lowering import spatial_ir_to_csl as s2c
-from spada.syntax.csl import constants as csl, switching as cslswitch
+from spada.syntax.csl import constants as csl, routing as cslrouting
 from spada.syntax.spatial_ir import canonicalization, parser, passes
 
 SAMPLES = os.path.join(os.path.dirname(__file__), 'samples')
@@ -44,42 +44,42 @@ def _rectangles(code: str, **parameters):
 
 
 def test_single_configuration_emits_no_switches():
-    plan = cslswitch.ColorSwitchPlan()
-    plan.add(cslswitch.RouteConfig(('EAST', ), ('RAMP', )))
+    plan = cslrouting.ColorSwitchPlan()
+    plan.add(cslrouting.RouteConfig(('EAST', ), ('RAMP', )))
     assert plan.as_csl() == '.{ .routes = .{ .rx = .{EAST}, .tx = .{RAMP} } }'
     assert not plan.uses_switches
 
 
 def test_identical_configurations_collapse():
     """Two streams that route identically through a PE consume a single switch position."""
-    plan = cslswitch.ColorSwitchPlan()
-    config = cslswitch.RouteConfig(('EAST', ), ('RAMP', ))
+    plan = cslrouting.ColorSwitchPlan()
+    config = cslrouting.RouteConfig(('EAST', ), ('RAMP', ))
     plan.add(config)
-    plan.add(cslswitch.RouteConfig(('EAST', ), ('RAMP', )))
+    plan.add(cslrouting.RouteConfig(('EAST', ), ('RAMP', )))
     assert len(plan.positions) == 1
     assert not plan.uses_switches
 
 
 def test_switch_positions_are_emitted():
-    plan = cslswitch.ColorSwitchPlan()
-    plan.add(cslswitch.RouteConfig(('RAMP', ), ('WEST', )))
-    plan.add(cslswitch.RouteConfig(('EAST', ), ('WEST', )))
+    plan = cslrouting.ColorSwitchPlan()
+    plan.add(cslrouting.RouteConfig(('RAMP', ), ('WEST', )))
+    plan.add(cslrouting.RouteConfig(('EAST', ), ('WEST', )))
     assert plan.as_csl() == ('.{ .routes = .{ .rx = .{RAMP}, .tx = .{WEST} }, '
                              '.switches = .{ .pos1 = .{ .rx = EAST, .tx = .{WEST} } } }')
 
 
 def test_too_many_configurations_is_rejected():
-    plan = cslswitch.ColorSwitchPlan()
+    plan = cslrouting.ColorSwitchPlan()
     for direction in ('NORTH', 'SOUTH', 'EAST', 'WEST', 'RAMP'):
-        plan.add(cslswitch.RouteConfig((direction, ), ('RAMP', )))
+        plan.add(cslrouting.RouteConfig((direction, ), ('RAMP', )))
     with pytest.raises(SyntaxError, match='requires 5 route configurations'):
         plan.validate(0, 'PEs [2:3, 0:1]')
 
 
 def test_exactly_four_configurations_is_accepted():
-    plan = cslswitch.ColorSwitchPlan()
+    plan = cslrouting.ColorSwitchPlan()
     for direction in ('NORTH', 'SOUTH', 'EAST', 'WEST'):
-        plan.add(cslswitch.RouteConfig((direction, ), ('RAMP', )))
+        plan.add(cslrouting.RouteConfig((direction, ), ('RAMP', )))
     plan.validate(0, 'PEs [2:3, 0:1]')
     assert plan.as_csl().count('.pos') == 3
 
@@ -87,9 +87,9 @@ def test_exactly_four_configurations_is_accepted():
 def test_non_switchable_color_is_rejected(monkeypatch):
     """WSE-3 only implements switches on a subset of colors."""
     monkeypatch.setattr(csl, 'SWITCHABLE_COLORS', [0, 1, 2])
-    plan = cslswitch.ColorSwitchPlan()
-    plan.add(cslswitch.RouteConfig(('RAMP', ), ('WEST', )))
-    plan.add(cslswitch.RouteConfig(('EAST', ), ('WEST', )))
+    plan = cslrouting.ColorSwitchPlan()
+    plan.add(cslrouting.RouteConfig(('RAMP', ), ('WEST', )))
+    plan.add(cslrouting.RouteConfig(('EAST', ), ('WEST', )))
     plan.validate(1, 'PEs [0:1, 0:1]')
     with pytest.raises(SyntaxError, match='needs router switches'):
         plan.validate(7, 'PEs [0:1, 0:1]')
@@ -101,19 +101,19 @@ def test_non_switchable_color_is_rejected(monkeypatch):
 
 
 def test_single_router_advance_uses_the_single_payload_helper():
-    assert cslswitch.switch_advance_payload([True]) == \
+    assert cslrouting.switch_advance_payload([True]) == \
         'ctrl.encode_single_payload(ctrl.opcode.SWITCH_ADV, true, {}, 0)'
 
 
 def test_routers_that_keep_their_configuration_get_a_nop():
-    payload = cslswitch.switch_advance_payload([False, True])
+    payload = cslrouting.switch_advance_payload([False, True])
     assert '.opcodes = .{ctrl.opcode.NOP, ctrl.opcode.SWITCH_ADV}' in payload
 
 
 def test_path_longer_than_the_control_wavelet_is_rejected():
     commands = [True] * (csl.MAX_CONTROL_COMMANDS + 1)
     with pytest.raises(SyntaxError, match='at most 8'):
-        cslswitch.switch_advance_payload(commands)
+        cslrouting.switch_advance_payload(commands)
 
 
 ###

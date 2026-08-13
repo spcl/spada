@@ -926,7 +926,7 @@ class CloseStatement(Statement):
     completion_name: Optional[Completion] = None
     #: Which routers along the stream's path advance their switch when this close retires the
     #: stream's route configuration, starting at the sending PE. Filled in during lowering by
-    #: ``spatial_ir_to_csl.plan_switch_advances``; ``None`` means no router has to act, in which
+    #: ``csl.routing.plan_switch_advances``; ``None`` means no router has to act, in which
     #: case the close generates no code. Not part of the surface syntax.
     switch_advance: Optional[list[bool]] = None
 

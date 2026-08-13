@@ -2,7 +2,7 @@ from io import StringIO
 from typing import Optional
 from spada.syntax.csl.structures import DataStructureDescriptor
 from spada.syntax.csl import dsd_ops
-from spada.syntax.csl import switching
+from spada.syntax.csl import routing
 from spada.syntax.spatial_ir import irnodes as spir
 
 UniqueDSDDict = dict[str, list[tuple[str, DataStructureDescriptor]]]
@@ -57,7 +57,7 @@ def generate_csl_statement(statement: spir.Statement,
             return ""
         stream = statement.stream_name
         name = name_to_csl(stream.array if isinstance(stream, spir.ArraySlice) else stream)
-        return '@mov32(%s_switch_dsd, %s);' % (name, switching.switch_advance_payload(statement.switch_advance))
+        return '@mov32(%s_switch_dsd, %s);' % (name, routing.switch_advance_payload(statement.switch_advance))
 
     if op is None:
         return f'// TODO: Convert {statement} to CSL'
