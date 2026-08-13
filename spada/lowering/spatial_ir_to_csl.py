@@ -603,7 +603,7 @@ task exit_task() void {{
 
 
 def _collect_colors_globally(kernel: spir.Kernel, rectangles: list[Rectangle[PEBlock]],
-                             use_memcpy_mode: bool) -> dict[str, int]:
+                             use_memcpy_mode: bool) -> dict[int, int]:
     """
     Returns a mapping of each channel to a CSL color.
 
@@ -623,6 +623,7 @@ def _collect_colors_globally(kernel: spir.Kernel, rectangles: list[Rectangle[PEB
         for stream_decl in rect.metadata.dataflow.statements:
             if stream_decl.stream_name not in sends_recvs:
                 continue  # Unused stream
+            assert stream_decl.stream.routing is not None
             outbound, inbound = sends_recvs[stream_decl.stream_name]
             if stream_decl.stream.routing.resolved_channel == "auto":
                 if outbound:
@@ -640,6 +641,7 @@ def _collect_colors_globally(kernel: spir.Kernel, rectangles: list[Rectangle[PEB
     # Assign all "auto" channels
     for rect in rectangles:
         for stream_decl in rect.metadata.dataflow.statements:
+            assert stream_decl.stream.routing is not None
             if stream_decl.stream.routing.resolved_channel == "auto":
                 stream_decl.stream.routing.channel = max_channel + 1
                 if stream_decl.stream_name in auto_stream_is_written:
@@ -814,8 +816,8 @@ def _dsd_from_array(array_candidates: dict[str, tuple[spir.FieldDeclaration, lis
         extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
 
     # Find the index in the array
-    def _find_index(ind: spir.Expression) -> spir.Identifier:
-        candidates = []
+    def _find_index(ind: spir.Expression | spir.RangeExpression) -> spir.Identifier | None:
+        candidates: list[spir.Identifier] = []
         for n in ind.walk():
             if isinstance(n, spir.Identifier):
                 candidates.append(n)
@@ -828,7 +830,8 @@ def _dsd_from_array(array_candidates: dict[str, tuple[spir.FieldDeclaration, lis
 
     if isinstance(node, spir.ArraySlice):
         # Find and replace index with __index
-        idxvars = [_find_index(ind) for ind in node.indices if _find_index(ind) is not None]
+        idxvars = [_find_index(ind) for ind in node.indices]
+        idxvars = [ind for ind in idxvars if ind is not None]
         if use_index:
             assert len(
                 idxvars) == 1, f'Expected one index variable for 1D array, got {idxvars}.\n  In line {node.lineinfo}'

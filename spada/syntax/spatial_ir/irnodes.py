@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
-from typing import Union, Tuple, Optional, Literal
+from typing import Union, Optional, Literal
 from spada.syntax.common import visitor
-from spada.syntax.common.basenode import BaseNode
+from spada.syntax.common.basenode import BaseNode, LineInfo
 from spada.syntax.common.types import ScalarType, IRType
 from spada.syntax.spatial_ir.grid_geometry import Rectangle
 
@@ -14,6 +14,7 @@ class SpatialNode(BaseNode):
     """
     Base class for all spatial IR nodes.
     """
+    lineinfo: Optional[LineInfo] = field(default=None, init=False, repr=False, compare=False)
 
     @classmethod
     def from_lark(cls, args):
@@ -25,19 +26,6 @@ class SpatialNode(BaseNode):
 
     def as_ir(self, indent: int = 0) -> str:
         raise NotImplementedError()
-
-
-@dataclass
-class LineInfo:
-    """
-    Represents source line information for a node in the IR.
-    """
-    filename: str
-    line: int
-    column: int
-
-    def __str__(self) -> str:
-        return f"{self.filename}:{self.line}:{self.column}"
 
 
 # Constant Literals
@@ -378,8 +366,8 @@ class RangeExpression(SpatialNode):
     A range expression (start:stop or start:stop:step).
     """
     start: Expression
-    stop: Expression = None
-    step: Expression = None
+    stop: Optional[Expression] = None
+    step: Optional[Expression] = None
 
     def validate(self) -> None:
         assert isinstance(self.start, Expression)
@@ -390,7 +378,7 @@ class RangeExpression(SpatialNode):
             assert isinstance(self.step, Expression)
 
     def as_ir(self, indent: int = 0) -> str:
-        if self.step:
+        if self.step and self.stop:
             return f'{self.start.as_ir()}:{self.stop.as_ir()}:{self.step.as_ir()}'
         elif self.stop:
             return f'{self.start.as_ir()}:{self.stop.as_ir()}'
@@ -398,7 +386,7 @@ class RangeExpression(SpatialNode):
             return self.start.as_ir()
 
     @staticmethod
-    def from_args(start: int, stop: int, step: int = None) -> 'RangeExpression':
+    def from_args(start: int, stop: int, step: Optional[int] = None) -> 'RangeExpression':
         start_expr = Expression(ConstantLiteral(start, ScalarType.i32))
         stop_expr = Expression(ConstantLiteral(stop, ScalarType.i32))
         step_expr = Expression(ConstantLiteral(step if step else 1, ScalarType.i32))

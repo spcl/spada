@@ -9,8 +9,20 @@ from dataclasses import dataclass
 from collections import deque
 import pprint
 from enum import Enum
-from typing import Generic
+from typing import Generic, Optional
 
+
+@dataclass
+class LineInfo:
+    """
+    Represents source line information for a node in the IR.
+    """
+    filename: str
+    line: int
+    column: int
+
+    def __str__(self) -> str:
+        return f"{self.filename}:{self.line}:{self.column}"
 
 
 @dataclass
@@ -36,7 +48,7 @@ class BaseNode:
     """
 
     @classmethod
-    def validate_schema(cls, visited: set[type['BaseNode']] = None):
+    def validate_schema(cls, visited: Optional[set[type['BaseNode']]] = None):
         """
         Validates that the node type and all its child node types abide by
         the rules defined on ``BaseNode``.
@@ -62,7 +74,7 @@ class BaseNode:
                     _check_union(item, field_name)
                 elif issubclass(item, BaseNode):
                     item.validate_schema(visited)
-                elif not isinstance(item, type) or not issubclass(item, (int, float, str, type(None), Enum)):
+                elif not isinstance(item, type) or not issubclass(item, (int, float, str, type(None), Enum, LineInfo)):
                     raise TypeError(f'Unsupported sequence content {item} for field {f_name} of {cls}')
 
         def _check_union(union, f_name):
@@ -80,7 +92,7 @@ class BaseNode:
                     subtype.validate_schema(visited)
                 # Raise error for unsupported types
                 elif not isinstance(subtype, type) or not issubclass(subtype,
-                                                                   (BaseNode, int, float, str, type(None), Enum)):
+                                                                   (BaseNode, int, float, str, type(None), Enum, LineInfo)):
                     raise TypeError(f'Unsupported union type {subtype} for field {f_name} of {cls}')
 
         # Use get_type_hints to resolve forward references
@@ -101,7 +113,7 @@ class BaseNode:
                 # Check contents of sequences
                 _check_sequence(field_type, field_name)
             else:
-                if not isinstance(field_type, type) or not issubclass(field_type, (int, float, str, type(None), Enum)):
+                if not isinstance(field_type, type) or not issubclass(field_type, (int, float, str, type(None), Enum, LineInfo)):
                     raise TypeError(f'Unsupported terminator type {field_type} for field {field_name} of {cls}')
         return True
 
@@ -154,7 +166,7 @@ class BaseNode:
         (including the node itself), in breadth-first order. This function is
         based on ``ast.walk``.
         """
-        todo = deque([self])
+        todo: deque[BaseNode] = deque([self])
         while todo:
             node = todo.popleft()
             todo.extend(node.iter_child_nodes())
@@ -203,8 +215,7 @@ class Wildcard(Generic[T], BaseNode):
 
         :return: The type restriction of the wildcard.
         """
-
-        if hasattr(self, '__orig_class__'):
-            return self.__orig_class__.__args__[0]
-        else:
-            return typing.Any  # Fallback to Any if no type argument is provided
+        orig_class = getattr(self, '__orig_class__', None)
+        if orig_class:
+            return orig_class.__args__[0]
+        return typing.Any  # Fallback to Any if no type argument is provided
