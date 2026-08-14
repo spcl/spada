@@ -1,11 +1,9 @@
 from io import StringIO
 from typing import Optional
-from spada.syntax.csl.structures import DataStructureDescriptor
+from spada.syntax.csl.structures import UniqueDSDDict
 from spada.syntax.csl import dsd_ops
 from spada.syntax.csl import routing
 from spada.syntax.spatial_ir import irnodes as spir
-
-UniqueDSDDict = dict[str, list[tuple[str, DataStructureDescriptor]]]
 
 
 def generate_csl_statement(statement: spir.Statement,

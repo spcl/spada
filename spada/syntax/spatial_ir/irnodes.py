@@ -735,11 +735,21 @@ class StreamDeclaration(SpatialNode):
     dtype: StreamType
     stream_name: Identifier
     stream: RelativeStreamDeclaration | MulticastRangeStreamDeclaration | ExternStreamDeclaration
+    #: Index of the phase this stream is declared in, counted over the whole kernel. Filled in by
+    #: ``canonicalization.number_stream_phases`` while phases are still explicit, and used
+    #: afterwards to order a router's configurations: once phases are inlined, a compute block only
+    #: carries barriers for the phases *it* takes part in, so its local barrier count is not
+    #: comparable with another block's. A relay PE has no statements at all, and its configuration
+    #: is contributed by the sending rectangle, so only a kernel-wide index orders the two.
+    #: ``None`` on streams that never went through the pass. Not part of the surface syntax.
+    phase: Optional[int] = None
 
     def validate(self) -> None:
         assert isinstance(self.dtype, StreamType)
         assert isinstance(self.stream_name, Identifier)
         assert isinstance(self.stream, (RelativeStreamDeclaration, MulticastRangeStreamDeclaration, ExternStreamDeclaration))
+        if self.phase is not None:
+            assert isinstance(self.phase, int) and self.phase >= 0
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent

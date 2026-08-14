@@ -10,7 +10,7 @@ from typing import Any, Literal, Optional
 from spada.syntax.spatial_ir import irnodes as spir, analysis
 from spada.syntax.csl import constants, dsd_ops, structures as cslstruct
 
-UniqueDSDDict = dict[str, list[tuple[str, cslstruct.DataStructureDescriptor]]]
+UniqueDSDDict = cslstruct.UniqueDSDDict
 
 
 class TaskCreationBehavior(Enum):

@@ -21,7 +21,7 @@ from spada.syntax.csl import task_recycling, prune_unused_fields as csl_pruning
 from spada.syntax.csl.codefile import CodeFile
 from spada.syntax.csl.statements import name_to_csl, dtype_as_csl, expr_to_csl
 
-UniqueDSDDict = dict[str, list[tuple[str, cslstruct.DataStructureDescriptor]]]
+UniqueDSDDict = cslstruct.UniqueDSDDict
 
 
 def canonicalize_kernel(kernel: spir.Kernel) -> spir.Kernel:
@@ -39,7 +39,9 @@ def canonicalize_kernel(kernel: spir.Kernel) -> spir.Kernel:
     """
     kernel = canonicalization.inline_metaprogramming(kernel)
     kernel = canonicalization.canonicalize_phases(kernel)
+    kernel = canonicalization.uniquify_stream_names(kernel)
     kernel = stream_lifetime.insert_implicit_closes(kernel)
+    kernel = canonicalization.number_stream_phases(kernel)
     kernel = canonicalization.reduce_streams(kernel)
     kernel = canonical_subgrids.canonicalize_subgrids(kernel)
     kernel = canonicalization.resolve_auto_hops(kernel)
@@ -344,7 +346,6 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     #     * Generate routing instructions from dataflow blocks
     #     * Make unique colors out of streams, reduce number of streams
     color_map = _allocate_colors(rect, header, kernel, use_memcpy_mode, stream_extents, channel_to_color)
-    cslrouting.declare_switch_advances(rect, header, color_map)
     dtypes = _collect_identifier_types(rect.metadata, kernel.arguments)
 
     # Preprocess potential data tasks to convert to loops if possible
@@ -382,6 +383,9 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         if e.args and isinstance(e.args[0], spir.Identifier):
             raise ValueError(f"Error in {e.args[0].lineinfo}. Undefined identifier \"{e.args[0].as_ir()}\".")
         raise
+
+    cslrouting.declare_switch_advances(rect, header, color_map, dsds)
+    _declare_queue_initialization(dsds, rect, footer, color_map)
 
     # Fuse tasks as much as possible to reduce number of resources
     if task_fusion:
@@ -879,6 +883,45 @@ def _dsd_from_stream(stream_candidates: dict[str, tuple[spir.StreamDeclaration |
         name = name_to_csl(node)
 
     return cslstruct.MemoryDSD(dsd_type, name, extents, idxvars, indices)
+
+
+def _declare_queue_initialization(dsds: UniqueDSDDict, rect: PEBlock, footer: StringIO,
+                                  color_map: dict[str, int]) -> None:
+    """
+    Binds every fabric queue this PE uses to its color, which WSE-3 requires.
+
+    On WSE-2 a fabric queue picks its color up from the descriptor that uses it. WSE-3 does not:
+    a queue must be tied to a color with ``@initialize_queue`` before any transfer over it will
+    proceed, and a program that omits it simply hangs. Queues are handed out per channel (see
+    ``_collect_unique_dsds``), so each one is named by exactly one color here.
+
+    :param dsds: The descriptors collected for this rectangle.
+    :param rect: The PE block being generated, used for the switch-advance descriptors.
+    :param footer: The ``comptime`` block to write the bindings into.
+    :param color_map: Stream name to color number, for the switch-advance descriptors.
+    """
+    if not csl.ARCH == 'wse3':
+        return
+
+    # (queue kind, queue id) -> color expression. Both the data descriptors and the control
+    # descriptors that carry switch advances need their queue bound.
+    bindings: dict[tuple[str, int], str] = {}
+    for entries in dsds.values():
+        for _, dsd in entries:
+            if not isinstance(dsd, cslstruct.FabricDSD) or not dsd.color:
+                continue
+            direction = 'in' if dsd.dsd_type == cslstruct.DSDType.fabin else 'out'
+            kind = 'input_queue' if dsd.dsd_type == cslstruct.DSDType.fabin else 'output_queue'
+            bindings.setdefault((kind, dsd.queue), f'{dsd.color}_{direction}')
+
+    for statement in rect.metadata.compute.statements:
+        if isinstance(statement, spir.CloseStatement) and statement.switch_advance:
+            name = cslstmt.name_to_csl(stream_lifetime.underlying_stream(statement.stream_name))
+            queue = csl.OUTPUT_QUEUE_IDS[0]
+            bindings.setdefault(('output_queue', queue), f'@get_color({color_map[name + "_OUT"]})')
+
+    for (kind, queue), color in sorted(bindings.items()):
+        footer.write(f'    @initialize_queue(@get_{kind}({queue}), .{{ .color = {color} }});\n')
 
 
 def _collect_unique_dsds(

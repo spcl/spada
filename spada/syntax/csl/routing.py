@@ -24,6 +24,7 @@ from io import StringIO
 
 from spada.syntax.csl import constants
 from spada.syntax.csl import statements as cslstmt
+from spada.syntax.csl import structures as cslstruct
 from spada.syntax.spatial_ir import analysis, stream_lifetime
 from spada.syntax.spatial_ir import irnodes as spir
 from spada.syntax.spatial_ir.canonicalization import PEBlock
@@ -248,13 +249,21 @@ def switch_advance_statements(dsd_name: str, advances: int) -> str:
     return '\n'.join(line for _ in range(advances))
 
 
-def declare_switch_advances(rect: Rectangle[PEBlock], header: StringIO, color_map: dict[str, int]) -> None:
+def declare_switch_advances(rect: Rectangle[PEBlock], header: StringIO, color_map: dict[str, int],
+                            dsds: cslstruct.UniqueDSDDict) -> None:
     """
     Declares the fabric output descriptors that carry a stream's switch-advance control wavelet.
 
     The wavelet itself is emitted by ``statements.generate_csl_statement`` from the close's
-    ``switch_advance`` field; this only has to provide the descriptor it is sent through, because
-    that is where the color is known.
+    ``switch_advance`` field; this only has to provide the descriptor it is sent through.
+
+    The descriptor reuses the *same* output queue as the stream's data, which is mandatory rather
+    than tidy: a queue is bound to one color on WSE-3 (see ``_declare_queue_initialization``), and
+    queues are handed out per channel, so sending a control wavelet for one color through the queue
+    that belongs to another silently fails to advance anything. A close only ever runs on a PE that
+    sends the stream, so the outgoing descriptor always exists.
+
+    :param dsds: The descriptors collected for this rectangle, to take the stream's queue from.
     """
     kept = [
         statement for statement in rect.metadata.compute.statements
@@ -264,14 +273,22 @@ def declare_switch_advances(rect: Rectangle[PEBlock], header: StringIO, color_ma
         return
 
     header.write('\nconst ctrl = @import_module("<control>");\n')
-    queue = constants.OUTPUT_QUEUE_IDS[0]
     for statement in kept:
-        name = cslstmt.name_to_csl(stream_lifetime.underlying_stream(statement.stream_name))
+        stream = stream_lifetime.underlying_stream(statement.stream_name)
+        name = cslstmt.name_to_csl(stream)
         dsd_name = f'{name}_switch_dsd'
-        if f'const {dsd_name}' not in header.getvalue():
-            header.write(f'const {dsd_name} = @get_dsd(fabout_dsd, .{{ .extent = 1, '
-                         f'.fabric_color = @get_color({color_map[name + "_OUT"]}), .control = true, '
-                         f'.output_queue = @get_output_queue({queue}) }});\n')
+        if f'const {dsd_name}' in header.getvalue():
+            continue
+        queue = None
+        for _, dsd in dsds.get(stream.as_ir(), ()):
+            if isinstance(dsd, cslstruct.FabricDSD) and dsd.dsd_type == cslstruct.DSDType.fabout:
+                queue = dsd.queue
+                break
+        if queue is None:
+            queue = constants.OUTPUT_QUEUE_IDS[0]
+        header.write(f'const {dsd_name} = @get_dsd(fabout_dsd, .{{ .extent = 1, '
+                     f'.fabric_color = @get_color({color_map[name + "_OUT"]}), .control = true, '
+                     f'.output_queue = @get_output_queue({queue}) }});\n')
 
 
 def route_dir(dx: int, dy: int):
@@ -313,7 +330,12 @@ class _RouteEntry:
     configurations of the same site.
     """
     config: RouteConfig
-    order: tuple[int, int]
+    #: ``(phase index, barrier index, statement index)``. The phase index is kernel-wide, which is
+    #: what makes entries from different rectangles -- notably a relay configuration contributed by
+    #: the sending rectangle -- comparable with each other. The other two come from
+    #: :func:`_stream_use_order` and only separate uses *within* one rectangle, which is what
+    #: sequences a receive before the send that forwards it.
+    order: tuple[int, int, int]
     origin_rect: int
     origin_offset: tuple[int, int]
     stream: spir.Identifier
@@ -614,7 +636,7 @@ def _rectangle_route_entries(rect_index: int, rect: Rectangle[PEBlock],
     collected: list[tuple[_RouteSite, _RouteEntry]] = []
 
     def add(offset: tuple[int, int], color: int, rx: tuple[str, ...], tx: tuple[str, ...],
-            order: tuple[int, int], stream_name: spir.Identifier, group: str) -> None:
+            order: tuple[int, int, int], stream_name: spir.Identifier, group: str) -> None:
         site = _RouteSite(
             color=color,
             x_range=(rect.x_range[0] + offset[0], rect.x_range[1] + offset[0], rect.x_range[2]),
@@ -629,8 +651,12 @@ def _rectangle_route_entries(rect_index: int, rect: Rectangle[PEBlock],
         sent, received = sends_recvs[stream.stream_name]
         group = stream_lifetime.stream_group_key(stream)
         orders = use_order.get(stream.stream_name, {})
-        receive_order = orders.get('receive', (0, 0))
-        send_order = orders.get('send', (0, 0))
+        # A stream's epoch is fixed kernel-wide by the phase it is declared in; within that phase
+        # the local statement order separates a receive from a send of the same stream, which is
+        # what sequences a systolic forward.
+        epoch = stream.phase if stream.phase is not None else 0
+        receive_order = (epoch, ) + orders.get('receive', (0, 0))
+        send_order = (epoch, ) + orders.get('send', (0, 0))
         if received:
             color_inbound = color_map[cslstmt.name_to_csl(stream.stream_name) + "_IN"]
         if sent:

@@ -211,6 +211,69 @@ def _rewrite_stream_declarations(
     return replacements, appended_statements
 
 
+def uniquify_stream_names(kernel: spir.Kernel) -> spir.Kernel:
+    """
+    Gives every stream declaration in the kernel a name of its own.
+
+    Reusing a name across phases is normal in metaprogrammed kernels: each phase a compile-time
+    ``for`` block generates repeats the same declaration verbatim, so a kernel of a hundred phases
+    can hold a hundred streams all called ``east``. Those are distinct streams -- each is scoped to
+    its phase and dies at the phase boundary -- but nothing in the IR says so, and a pass that keys
+    on the stream name sees one long-lived stream where there are many.
+
+    This pass settles the scoping once, up front: a redeclaration is renamed to a fresh version and
+    the uses that follow are rewritten to match, up to the next redeclaration of that name.
+    Afterwards a stream name identifies exactly one declaration kernel-wide, so keying on it is
+    safe -- which is what lets ``insert_implicit_closes`` decide where a stream is last used by
+    name alone. ``inline_phases`` performs the same rewriting for the names it merges into one
+    rectangle; running it here as well leaves it nothing to rename.
+
+    Must run after ``canonicalize_phases`` (so that every dataflow block sits in a phase, which is
+    what puts the declarations in order) and before ``insert_implicit_closes``.
+
+    :param kernel: The kernel to transform, modified in place.
+    :return: The transformed kernel.
+    """
+    used_versions: dict[str, set[int]] = defaultdict(set)
+    # The streams currently in scope, mapping the name a declaration was written with to the name it
+    # carries now. A phase's own declarations are folded in before its uses are rewritten, so a
+    # redeclaration shadows the stream it replaces from that phase onwards.
+    in_scope: dict[spir.Identifier, spir.Identifier] = {}
+
+    for phase in kernel.body:
+        if not isinstance(phase, spir.Phase):
+            continue
+
+        # The phase is the unit of scope, not the declaration: one stream is declared once per
+        # subgrid that takes part in it, so the repeats *within* a phase are the same stream and
+        # have to keep sharing a name. Only a redeclaration in a later phase is a new stream.
+        phase_names: dict[spir.Identifier, spir.Identifier] = {}
+        for dataflow in phase.dataflow:
+            statements = []
+            for statement in dataflow.statements:
+                stream_name = statement.stream_name
+                if stream_name not in phase_names:
+                    if stream_name.version in used_versions[stream_name.name]:
+                        phase_names[stream_name] = _make_fresh_identifier(used_versions, stream_name)
+                    else:
+                        phase_names[stream_name] = stream_name
+                    _register_identifier(used_versions, phase_names[stream_name])
+
+                rewritten_statement = copy.deepcopy(statement)
+                rewritten_statement.stream_name = copy.deepcopy(phase_names[stream_name])
+                statements.append(rewritten_statement)
+            dataflow.statements = statements
+
+        in_scope.update({old: new for old, new in phase_names.items() if old != new})
+        if not in_scope:
+            continue
+
+        replacer = passes.FindAndReplace(in_scope)
+        phase.compute = [replacer.visit(compute) for compute in phase.compute]
+
+    return kernel
+
+
 def _ends_with_phase_barrier(statements: list[spir.Statement]) -> bool:
     """
     Returns whether a compute block already ends with a phase barrier, so that appending another
@@ -227,6 +290,34 @@ def _ends_with_phase_barrier(statements: list[spir.Statement]) -> bool:
             continue
         return False
     return False
+
+
+def number_stream_phases(kernel: spir.Kernel) -> spir.Kernel:
+    """
+    Stamps every stream declaration with the index of the phase it belongs to.
+
+    Router configurations have to be ordered by the epoch they serve, and after ``inline_phases``
+    that order is no longer recoverable: a compute block only carries barriers for the phases it
+    takes part in, so counting them gives a per-rectangle numbering that cannot be compared across
+    rectangles -- and a PE that merely relays a stream has no statements at all, its configuration
+    being contributed by the sending rectangle. Numbering the declarations here, while phases are
+    still explicit, gives routing a kernel-wide order to sort by.
+
+    Must run after ``canonicalize_phases`` and before ``inline_phases``.
+
+    :param kernel: The kernel to annotate, modified in place.
+    :return: The annotated kernel.
+    """
+    phase_index = 0
+    for block in kernel.body:
+        if not isinstance(block, spir.Phase):
+            continue
+        for dataflow in block.dataflow:
+            for statement in dataflow.statements:
+                if isinstance(statement, spir.StreamDeclaration):
+                    statement.phase = phase_index
+        phase_index += 1
+    return kernel
 
 
 def inline_phases(kernel: spir.Kernel) -> spir.Kernel:

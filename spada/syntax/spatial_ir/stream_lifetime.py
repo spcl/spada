@@ -136,7 +136,8 @@ def insert_implicit_closes(kernel: spir.Kernel) -> spir.Kernel:
     waiting on operations that are still using those very streams.
 
     Must run after ``canonicalize_phases`` (so that ``kernel.body`` contains only phases and place
-    blocks) and before ``inline_phases``.
+    blocks) and ``uniquify_stream_names`` (so that a stream name means one stream), and before
+    ``inline_phases``.
 
     :param kernel: The kernel to transform, modified in place.
     :return: The transformed kernel.
@@ -147,9 +148,10 @@ def insert_implicit_closes(kernel: spir.Kernel) -> spir.Kernel:
 
     phases = [block for block in kernel.body if isinstance(block, spir.Phase)]
 
-    # Find, for each (rectangle, stream), the last phase in which the rectangle uses the stream.
-    # A stream declared at kernel level stays in scope across phases, so it may only be closed
-    # after its final use.
+    # Find, for each (rectangle, stream), the last phase in which the rectangle uses the stream: a
+    # stream that outlives the phase it was declared in may only be closed after its final use.
+    # ``uniquify_stream_names`` has already given every declaration a name of its own, so a name
+    # that recurs across phases really is one stream and not a redeclaration wearing the same name.
     last_phase: dict[tuple[tuple[int, int, int, int], spir.Identifier], int] = {}
     uses_per_block: list[list[tuple[spir.ComputeBlock, dict[spir.Identifier, StreamUse]]]] = []
     for phase_index, phase in enumerate(phases):
@@ -167,8 +169,8 @@ def insert_implicit_closes(kernel: spir.Kernel) -> spir.Kernel:
         for compute, uses in blocks:
             rect = compute.get_grid_rect()
             to_close = [
-                use for name, use in uses.items()
-                if name in declared and use.uses and use.close is None and last_phase[(rect, name)] == phase_index
+                use for name, use in uses.items() if name in declared and use.uses and use.close is None and
+                last_phase.get((rect, name), phase_index) == phase_index
             ]
             if not to_close:
                 continue
@@ -542,14 +544,17 @@ def check_channel_conflicts(rectangles: list[Rectangle]) -> None:
     :param rectangles: The consolidated PE rectangles of the kernel.
     """
     uses_per_rect = [collect_stream_uses(rect.metadata.compute) for rect in rectangles]
-    # Per rectangle, the local name each stream group goes by
-    groups_per_rect: list[dict[str, spir.Identifier]] = []
+    # Per rectangle, every local name a stream group goes by. A group generally has more than one:
+    # ``inline_phases`` freshens colliding names, so a channel reused by the same routing signature
+    # in several phases shows up as ``east``, ``east#1``, ... within one compute block.
+    groups_per_rect: list[dict[str, list[spir.Identifier]]] = []
     for rect, uses in zip(rectangles, uses_per_rect):
         declarations = _stream_declarations(rect)
-        groups_per_rect.append({
-            stream_group_key(declarations[name]): name
-            for name in uses if name in declarations
-        })
+        names_by_group: dict[str, list[spir.Identifier]] = defaultdict(list)
+        for name in uses:
+            if name in declarations:
+                names_by_group[stream_group_key(declarations[name])].append(name)
+        groups_per_rect.append(dict(names_by_group))
 
     reported: set[tuple[str, str]] = set()
     for (channel, pe), occupants in sorted(channel_occupancy(rectangles).items()):
@@ -560,8 +565,7 @@ def check_channel_conflicts(rectangles: list[Rectangle]) -> None:
         for first, second in _ordered_pairs(groups):
             if (first, second) in reported:
                 continue
-            if _empties_before(first, second, uses_per_rect, groups_per_rect) or \
-                    _empties_before(second, first, uses_per_rect, groups_per_rect):
+            if _never_concurrent(first, second, uses_per_rect, groups_per_rect):
                 continue
             reported.add((first, second))
             first_decl = _find_declaration(rectangles, first)
@@ -591,32 +595,45 @@ def _find_declaration(rectangles: list[Rectangle], group: str) -> Optional[spir.
     return None
 
 
-def _empties_before(first: str, second: str, uses_per_rect: list[dict[spir.Identifier, StreamUse]],
-                    groups_per_rect: list[dict[str, spir.Identifier]]) -> bool:
+def _never_concurrent(first: str, second: str, uses_per_rect: list[dict[spir.Identifier, StreamUse]],
+                      groups_per_rect: list[dict[str, list[spir.Identifier]]]) -> bool:
     """
-    Returns whether the stream group ``first`` provably empties before the stream group ``second``.
+    Returns whether two stream groups provably never occupy their shared channel at the same time.
 
-    This requires ``first`` to be closed on every PE that uses it, and, wherever both streams are
-    used on the same PE, for that close to precede the first use of ``second`` in local order.
+    Each use of a stream opens an epoch that runs until its close, so a group contributes one
+    interval ``[first use, close]`` per local name it goes by. The groups are safely ordered when
+
+    * every one of those epochs is closed -- an unclosed stream holds the channel indefinitely, so
+      nothing can be said about what follows it, on this PE or on any relay further along its path;
+      and
+    * no epoch of one group overlaps an epoch of the other in local order.
+
+    The two groups may alternate any number of times, which is what a channel reused by successive
+    phases does: ``east``, close, ``west``, close, ``east#1``, close, ...
+
+    This is best-effort in the sense of the specification: it establishes the ordering where it can
+    and does not reject what it cannot decide.
     """
     used_anywhere = False
     for uses, groups in zip(uses_per_rect, groups_per_rect):
-        first_name = groups.get(first)
-        if first_name is None:
-            continue
-        first_use = uses[first_name]
-        if not first_use.uses:
-            continue
-        used_anywhere = True
-        if first_use.close is None:
-            return False
+        epochs: list[tuple[int, int, str]] = []
+        for group in (first, second):
+            for name in groups.get(group, ()):
+                use = uses[name]
+                if not use.uses:
+                    continue  # Declared and closed but never actually used here
+                if use.close is None:
+                    return False
+                used_anywhere = True
+                epochs.append((use.first_use, use.close, group))
 
-        second_name = groups.get(second)
-        if second_name is None:
-            continue
-        second_use = uses[second_name]
-        if second_use.uses and first_use.close > second_use.first_use:
-            return False
+        epochs.sort()
+        for index, (start, end, group) in enumerate(epochs):
+            for other_start, _, other_group in epochs[index + 1:]:
+                if other_group == group:
+                    continue
+                if other_start < end:
+                    return False
 
     return used_anywhere
 

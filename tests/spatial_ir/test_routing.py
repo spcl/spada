@@ -3,6 +3,7 @@ Tests for router switch planning: route configuration merging, switch positions,
 wavelets that retire a configuration, and the hardware capacity limits.
 """
 import os
+import re
 
 import pytest
 
@@ -416,6 +417,56 @@ def test_switch_positions_beyond_capacity_are_rejected():
     """One configuration too many on a color has nowhere to go."""
     with pytest.raises(SyntaxError, match='switch positions'):
         _lower_string(_stress_kernel(_MAX_STRESS_PHASES + 1), K=4)
+
+
+###
+# bitonic_sort_1D: the heaviest channel reuse in the samples
+###
+
+_BITONIC = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sorting',
+                        'bitonic_sort_1D.sptl')
+
+
+def _lower_bitonic(L: int, K: int = 4) -> dict[str, str]:
+    kernel = parser.parse_file(_BITONIC)
+    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, L=L, K=K))
+    return {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel)}
+
+
+@pytest.mark.skipif(not csl.SWITCH_POSITION_ALLOWS_BOTH,
+                    reason=f'{csl.ARCH} cannot reverse a router within four switch positions')
+def test_bitonic_sort_uses_one_channel_per_distance():
+    """
+    A bitonic network on 2^L keys needs L(L+1)/2 exchange steps but only L channels: one per
+    exchange distance, reused by every lane, every stage and both directions of travel.
+
+    L is 2 here because that is what the router budget allows: at distance 2^d the channel is
+    reused by 2^d lanes in two directions each, so an interior router cycles through 2^(d+1)
+    configurations, and four positions run out at d = 2.
+    """
+    files = _lower_bitonic(2)
+    colors = set(re.findall(r'@get_color\((\d+)\)', files['layout.csl']))
+    assert len(colors) <= 2, sorted(colors)
+
+    layout = files['layout.csl']
+    assert '.switches' in layout
+    # The lane pattern repeats, so the configuration sequence closes into a ring.
+    assert 'ring_mode' in layout
+    # Every router stays inside its four positions.
+    for line in layout.splitlines():
+        if '.switches' in line:
+            assert len(re.findall(r'\.pos\d', line)) < csl.SWITCH_POSITIONS, line
+
+
+@pytest.mark.skipif(csl.SWITCH_POSITION_ALLOWS_BOTH,
+                    reason='this architecture can reverse a router in a single switch position')
+def test_bitonic_sort_is_rejected_on_wse2():
+    """
+    Reversing a router costs two positions where a position carries one direction, and the interior
+    routers of the network reverse often enough to exhaust them.
+    """
+    with pytest.raises(SyntaxError, match='switch positions'):
+        _lower_bitonic(2)
 
 
 if __name__ == '__main__':
