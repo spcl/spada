@@ -931,6 +931,39 @@ def _collect_unique_dsds(
     # TODO: Infer input/output queue ID based on concurrency
     input_queue_id_ctr = 0
     output_queue_id_ctr = 0
+
+    # Streams that share a channel share a color, and a color binds to exactly one fabric queue per
+    # PE -- the hardware rejects "two master input queues for the same color". Queues are therefore
+    # handed out per channel; streams on ``auto`` channels get a color to themselves, so they key on
+    # their own name.
+    channel_of_stream = {
+        declaration.stream_name.as_ir(): declaration.stream.routing.resolved_channel
+        for declaration in rect.dataflow.statements
+        if getattr(declaration.stream, 'routing', None) is not None
+    }
+
+    def queue_key(stream: spir.Identifier) -> str:
+        channel = channel_of_stream.get(stream.as_ir(), 'auto')
+        return stream.as_ir() if channel == 'auto' else f'channel {channel}'
+
+    input_queue_of: dict[str, int] = {}
+    output_queue_of: dict[str, int] = {}
+
+    def allocate_input_queue(stream: spir.Identifier) -> int:
+        nonlocal input_queue_id_ctr
+        key = queue_key(stream)
+        if key not in input_queue_of:
+            input_queue_of[key] = csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)]
+            input_queue_id_ctr += 1
+        return input_queue_of[key]
+
+    def allocate_output_queue(stream: spir.Identifier) -> int:
+        nonlocal output_queue_id_ctr
+        key = queue_key(stream)
+        if key not in output_queue_of:
+            output_queue_of[key] = csl.OUTPUT_QUEUE_IDS[output_queue_id_ctr % len(csl.OUTPUT_QUEUE_IDS)]
+            output_queue_id_ctr += 1
+        return output_queue_of[key]
     for stmt in rect.compute.statements:
         # Find out if compute block uses this stream for receive/send
         if isinstance(stmt, (spir.ReceiveStatement, spir.SendStatement)):
@@ -955,9 +988,7 @@ def _collect_unique_dsds(
                             lambda a, b: a * b,
                             [s.eval() if not isinstance(s, int) else s for s in dtypes[stmt.local_array].shape], 1)
                 fabric_color = f'{name_to_csl(stream_name)}_color'
-                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
-                                          csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)])
-                input_queue_id_ctr += 1
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_input_queue(stream_name))
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
             elif isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
                 dsd_type = cslstruct.DSDType.fabout
@@ -975,9 +1006,7 @@ def _collect_unique_dsds(
                             lambda a, b: a * b,
                             [s.eval() if not isinstance(s, int) else s for s in dtypes[stmt.local_array].shape], 1)
                 fabric_color = f'{name_to_csl(stream_name)}_color'
-                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
-                                          csl.OUTPUT_QUEUE_IDS[output_queue_id_ctr % len(csl.OUTPUT_QUEUE_IDS)])
-                output_queue_id_ctr += 1
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_output_queue(stream_name))
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
             if isinstance(stmt, spir.SendStatement):
@@ -1038,9 +1067,8 @@ def _collect_unique_dsds(
                             extents = (end.eval() - start.eval()) // (step.eval() if step is not None else 1)
                         fabric_color = f'{name_to_csl(stream_name)}_color'
                         dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents,
-                                                  csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)])
+                                                  allocate_input_queue(stream_name))
                         dsds[stream_name.as_ir()].append((dsd_name, dsd))
-                        input_queue_id_ctr += 1
 
         def _visit_nested_send(substmt: spir.SendStatement):
             if substmt.stream_name.as_ir() not in stream_candidates:
@@ -1062,10 +1090,7 @@ def _collect_unique_dsds(
                         lambda a, b: a * b,
                         [s.eval() if not isinstance(s, int) else s for s in dtypes[substmt.local_array].shape], 1)
             fabric_color = f'{name_to_csl(stream_name)}_color'
-            nonlocal output_queue_id_ctr
-            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
-                                      csl.OUTPUT_QUEUE_IDS[output_queue_id_ctr % len(csl.OUTPUT_QUEUE_IDS)])
-            output_queue_id_ctr += 1
+            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_output_queue(stream_name))
             dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
         def _visit_nested_receive(substmt: spir.ReceiveStatement):
@@ -1091,10 +1116,7 @@ def _collect_unique_dsds(
                         lambda a, b: a * b,
                         [s.eval() if not isinstance(s, int) else s for s in dtypes[local_array].shape], 1)
             fabric_color = f'{name_to_csl(stream_name)}_color'
-            nonlocal input_queue_id_ctr
-            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
-                                      csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)])
-            input_queue_id_ctr += 1
+            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_input_queue(stream_name))
             dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
         def _visit_dsd(substmt, in_scope, in_assignment):

@@ -43,14 +43,88 @@ class RouteConfig:
     def as_csl(self) -> str:
         return '.{ .rx = .{%s}, .tx = .{%s} }' % (', '.join(self.rx), ', '.join(self.tx))
 
-    def as_switch_position(self) -> str:
+    def as_switch_position(self, previous: 'RouteConfig') -> str:
         """
-        Renders this configuration as a ``.posN`` struct. The ``rx`` field of a switch position only
-        accepts a single direction, unlike the base configuration.
+        Renders this configuration as a ``.posN`` struct, relative to the configuration it replaces.
+
+        Only the side that changes is written: whatever a position leaves out keeps the value it
+        currently has, so positions compose incrementally. The ``rx`` of a switch position also
+        accepts a single direction only, unlike the base configuration.
         """
-        if len(self.rx) != 1:
-            raise ValueError(f'A switch position can only receive from a single direction, got {self.rx}')
-        return '.{ .rx = %s, .tx = .{%s} }' % (self.rx[0], ', '.join(self.tx))
+        parts = []
+        if self.rx != previous.rx:
+            if len(self.rx) != 1:
+                raise ValueError(f'A switch position can only receive from a single direction, got {self.rx}')
+            parts.append('.rx = %s' % self.rx[0])
+        if self.tx != previous.tx or not parts:
+            parts.append('.tx = .{%s}' % ', '.join(self.tx))
+        return '.{ %s }' % ', '.join(parts)
+
+    def changes_both_sides(self, previous: 'RouteConfig') -> bool:
+        return self.rx != previous.rx and self.tx != previous.tx
+
+
+def logical_positions(configs: list[RouteConfig]) -> tuple[list[RouteConfig], bool]:
+    """
+    Reduces a router's configuration sequence to one period, reporting whether it repeats.
+
+    A PE that alternates between sending and receiving on one channel -- a halo exchange reusing a
+    channel across phases, for instance -- produces ``A, B, A, B``. Storing all four would exhaust
+    the router; storing ``A, B`` and letting the switch wrap around from the last position back to
+    the base one expresses the same thing, which is what ``.ring_mode`` is for.
+
+    :param configs: The configurations in the order the router takes them.
+    :return: ``(period, ring_mode)``.
+    """
+    count = len(configs)
+    for period in range(1, count):
+        if count % period:
+            continue
+        if all(configs[index] == configs[index % period] for index in range(count)):
+            return configs[:period], True
+    return configs, False
+
+
+def expand_positions(configs: list[RouteConfig], ring: bool = False) -> tuple[list[RouteConfig], list[int]]:
+    """
+    Turns a router's logical sequence of route configurations into the switch positions it holds.
+
+    On WSE-2 a switch position carries either an input or an output, never both: the compiler
+    rejects ``.pos1 = .{ .rx = RAMP, .tx = .{EAST} }`` outright. A transition that changes both sides
+    is therefore split into two positions -- first the new output while the old input is kept, then
+    the new input -- and costs two switch advances instead of one. The intermediate configuration is
+    a pure relay, occupied only between the two wavelets that a ``close`` emits back to back.
+    Architectures that accept both sides in one position (see
+    ``constants.SWITCH_POSITION_ALLOWS_BOTH``) keep the transition as a single position.
+
+    The intermediate keeps the *old* input direction, so a switch-advance wavelet arriving from the
+    same neighbour as before is still accepted once the router has taken the intermediate position;
+    the second wavelet would never reach the router otherwise.
+
+    :param configs: The logical configurations, in the order the router takes them.
+    :param ring: Whether the router wraps from the last configuration back to the first, which may
+                 need a trailing intermediate of its own.
+    :return: ``(positions, index_of)``, where ``positions`` are the hardware switch positions and
+             ``index_of[i]`` is the position that ``configs[i]`` ends up at.
+    """
+    if not configs:
+        return [], []
+
+    def split(previous: RouteConfig, config: RouteConfig) -> bool:
+        return not constants.SWITCH_POSITION_ALLOWS_BOTH and config.changes_both_sides(previous)
+
+    positions = [configs[0]]
+    index_of = [0]
+    for config in configs[1:]:
+        previous = positions[-1]
+        if split(previous, config):
+            positions.append(RouteConfig(previous.rx, config.tx))
+        positions.append(config)
+        index_of.append(len(positions) - 1)
+
+    if ring and len(configs) > 1 and split(positions[-1], configs[0]):
+        positions.append(RouteConfig(positions[-1].rx, configs[0].tx))
+    return positions, index_of
 
 
 @dataclass
@@ -71,25 +145,36 @@ class ColorSwitchPlan:
         self.positions.append(config)
 
     @property
-    def uses_switches(self) -> bool:
-        return len(self.positions) > 1
+    def cycle(self) -> tuple[list[RouteConfig], bool]:
+        """
+        The router's configurations reduced to one period, and whether the switch wraps around.
+        """
+        configs, ring = logical_positions(self.positions)
+        return configs, ring or self.ring_mode
 
-    def index_of_epoch(self, epoch: int) -> int:
+    @property
+    def hardware_positions(self) -> list[RouteConfig]:
         """
-        Returns the switch position an epoch maps to, given that identical configurations collapse.
+        The switch positions the router actually holds, with both-sided transitions split in two.
         """
-        return min(epoch, len(self.positions) - 1)
+        configs, ring = self.cycle
+        return expand_positions(configs, ring)[0]
+
+    @property
+    def uses_switches(self) -> bool:
+        return len(self.cycle[0]) > 1
 
     def as_csl(self) -> str:
         base = self.positions[0].as_csl()
         if not self.uses_switches:
             return '.{ .routes = %s }' % base
 
+        hardware = self.hardware_positions
         switches = [
-            '.pos%d = %s' % (index, config.as_switch_position())
-            for index, config in enumerate(self.positions[1:], start=1)
+            '.pos%d = %s' % (index, config.as_switch_position(hardware[index - 1]))
+            for index, config in enumerate(hardware[1:], start=1)
         ]
-        if self.ring_mode:
+        if self.cycle[1]:
             switches.append('.ring_mode = true')
         return '.{ .routes = %s, .switches = .{ %s } }' % (base, ', '.join(switches))
 
@@ -100,13 +185,20 @@ class ColorSwitchPlan:
         :param color: The color the plan is for, used for the diagnostic and for the WSE-3 check.
         :param location: A human-readable description of the PE the plan belongs to.
         """
-        if len(self.positions) > constants.SWITCH_POSITIONS:
+        hardware = self.hardware_positions
+        if len(hardware) > constants.SWITCH_POSITIONS:
+            extra = ''
+            if len(hardware) > len(self.positions):
+                extra = (f' ({len(self.positions)} route configurations, {len(hardware) - len(self.positions)} '
+                         'of which change both the input and the output direction and so take two '
+                         'positions each)')
             raise SyntaxError(
-                f'Color {color} at {location} requires {len(self.positions)} route configurations, '
+                f'Color {color} at {location} requires {len(hardware)} switch positions{extra}, '
                 f'but a router holds at most {constants.SWITCH_POSITIONS} per color on '
                 f'{constants.ARCH}.\n'
                 '  note: assign a different channel to some of the streams, at the cost of an '
                 'additional color')
+
         if self.uses_switches and color not in constants.SWITCHABLE_COLORS:
             raise SyntaxError(
                 f'Color {color} at {location} needs router switches, but {constants.ARCH} only '
@@ -127,32 +219,33 @@ def set_color_config(x: str, y: str, color: str, plan: ColorSwitchPlan, indent: 
     return indent + '@set_color_config(%s, %s, %s, %s);\n' % (x, y, color, plan.as_csl())
 
 
-def switch_advance_payload(commands: list[bool]) -> str:
+def switch_advance_payload() -> str:
     """
     Returns the ``<control>`` expression for a switch-advance control wavelet.
 
-    One command is consumed per router the wavelet traverses, in order, so ``commands[i]`` says
-    whether the ``i``-th router on the path advances. Routers whose configuration does not change
-    are given a ``NOP`` so that they stay on their current position.
-
-    :param commands: Per-router advance flags, starting at the sending PE's own router.
+    The wavelet carries a single command, and every switch-configured router it passes through
+    applies it: the hardware does not index the command array by hop, so a wavelet cannot advance
+    one router while leaving another on the path where it is. ``ce_ignore`` keeps the wavelet from
+    reaching any compute element, so no task fires when it is delivered.
     """
-    if not commands:
-        raise ValueError('A switch advance needs at least one router command')
-    if len(commands) > constants.MAX_CONTROL_COMMANDS:
-        raise SyntaxError(
-            f'A switch advance along this path needs {len(commands)} router commands, but a control '
-            f'wavelet carries at most {constants.MAX_CONTROL_COMMANDS}.\n'
-            '  note: shorten the routing path, or split it across two channels')
+    return 'ctrl.encode_single_payload(ctrl.opcode.SWITCH_ADV, true, {}, 0)'
 
-    if len(commands) == 1:
-        opcode = 'ctrl.opcode.SWITCH_ADV' if commands[0] else 'ctrl.opcode.NOP'
-        return f'ctrl.encode_single_payload({opcode}, true, {{}}, 0)'
 
-    opcodes = ', '.join('ctrl.opcode.SWITCH_ADV' if advance else 'ctrl.opcode.NOP' for advance in commands)
-    ce_ignore = ', '.join('true' for _ in commands)
-    return ('ctrl.encode_payload(.{ .opcodes = .{%s}, .ce_ignore = .{%s}, '
-            '.ce_ignore_remaining = true })' % (opcodes, ce_ignore))
+def switch_advance_statements(dsd_name: str, advances: int) -> str:
+    """
+    Returns the statements that retire a route configuration by advancing switches ``advances`` times.
+
+    A transition that changes both the input and the output direction of a router occupies two
+    switch positions (see :func:`expand_positions`), and therefore needs two wavelets sent back to
+    back; the router is a pure relay in between.
+
+    :param dsd_name: The fabric output descriptor the wavelets are sent through.
+    :param advances: How many switch positions the routers on the path move forward.
+    """
+    if advances <= 0:
+        raise ValueError(f'A switch advance must move at least one position, got {advances}')
+    line = '@mov32(%s, %s);' % (dsd_name, switch_advance_payload())
+    return '\n'.join(line for _ in range(advances))
 
 
 def declare_switch_advances(rect: Rectangle[PEBlock], header: StringIO, color_map: dict[str, int]) -> None:
@@ -352,25 +445,30 @@ def _channel_color_maps(rectangles: list[Rectangle[PEBlock]]) -> list[dict[str, 
 
 def plan_switch_advances(rectangles: list[Rectangle[PEBlock]]) -> int:
     """
-    Determines, for every ``close`` statement, which routers along the stream's path must advance
-    their switch.
+    Determines, for every ``close`` statement, how many switch advances it has to emit.
 
-    A close only produces code on a PE that *sends* the stream: the control message it emits travels
-    the path being retired and advances each router it traverses. Routers whose configuration does
-    not change are given a no-op so that they stay where they are. A close on a receiving PE emits
-    nothing; its router is advanced by the sender's message.
+    A close only produces code on a PE that *sends* the stream: the control wavelets it emits travel
+    the path being retired. Every switch-configured router such a wavelet reaches advances -- the
+    hardware applies the wavelet's single command at each of them rather than indexing a per-router
+    command array -- so a close cannot move one router while leaving another on its path behind.
+    All routers on the path that hold switch positions must therefore advance by the same amount,
+    and that amount is how many wavelets are sent. A close on a receiving PE emits nothing; its
+    router is advanced by the sending PE's wavelets.
 
     The result is recorded on each ``CloseStatement`` as its ``switch_advance`` field; a close that
     needs no advance keeps ``None`` there and generates no code.
 
     :param rectangles: The consolidated PE rectangles of the kernel, annotated in place.
     :return: The number of closes that retire a route configuration.
+    :raises SyntaxError: If the routers along one path would have to advance by different amounts.
     """
     sites = _route_sites(rectangles, _channel_color_maps(rectangles))
 
-    # Per site, the switch position of every configuration, and how many positions the site holds
+    # Per site, where each contributed configuration sits in the router's logical sequence, and the
+    # hardware switch position each of those configurations maps to.
     position_of: dict[_RouteSite, list[tuple[_RouteEntry, int]]] = {}
-    positions_at: dict[_RouteSite, int] = {}
+    hardware_index: dict[_RouteSite, list[int]] = {}
+    wraps: dict[_RouteSite, tuple[bool, int]] = {}
     for site, site_entries in sites.items():
         configs: list[RouteConfig] = []
         placed = []
@@ -379,7 +477,14 @@ def plan_switch_advances(rectangles: list[Rectangle[PEBlock]]) -> int:
                 configs.append(entry.config)
             placed.append((entry, len(configs) - 1))
         position_of[site] = placed
-        positions_at[site] = len(configs)
+        cycle, ring = logical_positions(configs)
+        positions, indices = expand_positions(cycle, ring)
+        if len(positions) > constants.SWITCH_POSITIONS:
+            continue  # Over capacity: ``collect_routes`` reports it, planning advances is moot
+        # A router that wraps around returns to its base position, so every configuration has a
+        # successor; otherwise the last one is final and never advances again.
+        hardware_index[site] = indices
+        wraps[site] = (ring, len(positions))
 
     planned = 0
     for rect in rectangles:
@@ -392,27 +497,53 @@ def plan_switch_advances(rectangles: list[Rectangle[PEBlock]]) -> int:
             name = stream_lifetime.underlying_stream(statement.stream_name)
             declaration = declarations.get(name)
             if declaration is None or name not in uses or not uses[name].sent:
-                continue  # Not sent here: the sending PE's control message advances this router
+                continue  # Not sent here: the sending PE's wavelets advance this router
             channel = declaration.stream.routing.resolved_channel if declaration.stream.routing else 'auto'
             offsets = stream_lifetime._stream_path_offsets(declaration)
             if channel == 'auto' or offsets is None:
                 continue
             group = stream_lifetime.stream_group_key(declaration)
 
-            commands = []
+            # How far each switch-configured router on the path has to move, keyed by the router so
+            # that a disagreement can name it.
+            advances: dict[str, int] = {}
             for dx, dy in offsets:
                 site = _find_site(position_of, channel,
                                   (rect.x_range[0] + dx, rect.x_range[1] + dx, rect.x_range[2]),
                                   (rect.y_range[0] + dy, rect.y_range[1] + dy, rect.y_range[2]))
                 if site is None:
-                    commands.append(False)
                     continue
+                indices = hardware_index.get(site)
+                if indices is None or len(indices) < 2:
+                    continue  # One configuration only: no switch positions, nothing to advance
                 position = _traffic_position(position_of[site], group, is_sender=(dx == 0 and dy == 0))
-                commands.append(position is not None and position + 1 < positions_at.get(site, 0))
+                if position is None:
+                    continue
+                ring, total = wraps[site]
+                position %= len(indices)
+                if position + 1 < len(indices):
+                    advances[site.describe()] = indices[position + 1] - indices[position]
+                elif ring:
+                    advances[site.describe()] = total - indices[position]
+                # Otherwise this router is on its last configuration for this color and never routes
+                # anything again, so wavelets passing through may over-advance it harmlessly.
 
-            if any(commands):
-                statement.switch_advance = commands
-                planned += 1
+            distinct = set(advances.values())
+            if not distinct:
+                continue
+            if len(distinct) > 1:
+                detail = ', '.join(f'{where} by {count}' for where, count in sorted(advances.items()))
+                raise SyntaxError(
+                    f"Closing '{name.as_ir()}' has to advance the routers along its path by "
+                    f'different amounts ({detail}), but one switch-advance wavelet moves every '
+                    f'switch-configured router it reaches by one position.\n'
+                    '  note: a control wavelet carries a single command that each router applies; '
+                    'it cannot skip a router on its path\n'
+                    '  note: give the streams that disagree separate channels, at the cost of an '
+                    'additional color')
+
+            statement.switch_advance = distinct.pop()
+            planned += 1
 
     return planned
 

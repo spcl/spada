@@ -38,6 +38,18 @@ def _rectangles(code: str, **parameters):
     return canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
 
 
+def _turnaround(direction: str) -> str:
+    """
+    The ``.switches`` text for a router that stops receiving and starts sending in ``direction``.
+
+    Changing both the input and the output direction takes two switch positions wherever a position
+    carries only one of them.
+    """
+    if csl.SWITCH_POSITION_ALLOWS_BOTH:
+        return '.pos1 = .{ .rx = RAMP, .tx = .{%s} }' % direction
+    return '.pos1 = .{ .tx = .{%s} }, .pos2 = .{ .rx = RAMP }' % direction
+
+
 ###
 # RouteConfig / ColorSwitchPlan
 ###
@@ -64,16 +76,56 @@ def test_switch_positions_are_emitted():
     plan = cslrouting.ColorSwitchPlan()
     plan.add(cslrouting.RouteConfig(('RAMP', ), ('WEST', )))
     plan.add(cslrouting.RouteConfig(('EAST', ), ('WEST', )))
+    # Only the side that changes is written: a switch position carries an input or an output
     assert plan.as_csl() == ('.{ .routes = .{ .rx = .{RAMP}, .tx = .{WEST} }, '
-                             '.switches = .{ .pos1 = .{ .rx = EAST, .tx = .{WEST} } } }')
+                             '.switches = .{ .pos1 = .{ .rx = EAST } } }')
 
 
 def test_too_many_configurations_is_rejected():
     plan = cslrouting.ColorSwitchPlan()
     for direction in ('NORTH', 'SOUTH', 'EAST', 'WEST', 'RAMP'):
         plan.add(cslrouting.RouteConfig((direction, ), ('RAMP', )))
-    with pytest.raises(SyntaxError, match='requires 5 route configurations'):
+    with pytest.raises(SyntaxError, match='requires 5 switch positions'):
         plan.validate(0, 'PEs [2:3, 0:1]')
+
+
+def test_both_sided_transition_becomes_two_positions():
+    """
+    A router that changes its input *and* its output direction cannot express that as one switch
+    position on WSE-2, so it goes through an intermediate pure-relay configuration.
+    """
+    receive = cslrouting.RouteConfig(('EAST', ), ('RAMP', ))
+    send = cslrouting.RouteConfig(('RAMP', ), ('WEST', ))
+    positions, index_of = cslrouting.expand_positions([receive, send])
+
+    if csl.SWITCH_POSITION_ALLOWS_BOTH:
+        assert positions == [receive, send]
+        assert index_of == [0, 1]
+    else:
+        assert positions == [receive, cslrouting.RouteConfig(('EAST', ), ('WEST', )), send]
+        assert index_of == [0, 2]
+
+        plan = cslrouting.ColorSwitchPlan()
+        plan.add(receive)
+        plan.add(send)
+        # Each position names only the side it changes, and they compose incrementally.
+        assert plan.as_csl() == ('.{ .routes = .{ .rx = .{EAST}, .tx = .{RAMP} }, '
+                                 '.switches = .{ .pos1 = .{ .tx = .{WEST} }, .pos2 = .{ .rx = RAMP } } }')
+
+
+def test_both_sided_transition_counts_against_capacity():
+    """Two both-sided transitions take four positions, which exactly fills a router."""
+    plan = cslrouting.ColorSwitchPlan()
+    plan.add(cslrouting.RouteConfig(('EAST', ), ('RAMP', )))
+    plan.add(cslrouting.RouteConfig(('RAMP', ), ('WEST', )))
+    plan.add(cslrouting.RouteConfig(('NORTH', ), ('RAMP', )))
+
+    if csl.SWITCH_POSITION_ALLOWS_BOTH:
+        plan.validate(0, 'PEs [1:2, 0:1]')
+    else:
+        assert len(plan.hardware_positions) == 5
+        with pytest.raises(SyntaxError, match='requires 5 switch positions'):
+            plan.validate(0, 'PEs [1:2, 0:1]')
 
 
 def test_exactly_four_configurations_is_accepted():
@@ -100,20 +152,29 @@ def test_non_switchable_color_is_rejected(monkeypatch):
 ###
 
 
-def test_single_router_advance_uses_the_single_payload_helper():
-    assert cslrouting.switch_advance_payload([True]) == \
+def test_switch_advance_uses_the_single_command_payload():
+    """
+    The hardware applies a control wavelet's single command at every switch-configured router it
+    reaches, so there is nothing to index per router.
+    """
+    assert cslrouting.switch_advance_payload() == \
         'ctrl.encode_single_payload(ctrl.opcode.SWITCH_ADV, true, {}, 0)'
 
 
-def test_routers_that_keep_their_configuration_get_a_nop():
-    payload = cslrouting.switch_advance_payload([False, True])
-    assert '.opcodes = .{ctrl.opcode.NOP, ctrl.opcode.SWITCH_ADV}' in payload
+def test_one_advance_emits_one_wavelet():
+    assert cslrouting.switch_advance_statements('s_switch_dsd', 1) == \
+        '@mov32(s_switch_dsd, ctrl.encode_single_payload(ctrl.opcode.SWITCH_ADV, true, {}, 0));'
 
 
-def test_path_longer_than_the_control_wavelet_is_rejected():
-    commands = [True] * (csl.MAX_CONTROL_COMMANDS + 1)
-    with pytest.raises(SyntaxError, match='at most 8'):
-        cslrouting.switch_advance_payload(commands)
+def test_both_sided_transition_emits_two_wavelets():
+    text = cslrouting.switch_advance_statements('s_switch_dsd', 2)
+    assert text.count('@mov32(s_switch_dsd,') == 2
+    assert text.count('\n') == 1
+
+
+def test_empty_advance_is_rejected():
+    with pytest.raises(ValueError, match='at least one position'):
+        cslrouting.switch_advance_statements('s_switch_dsd', 0)
 
 
 ###
@@ -139,9 +200,15 @@ def test_two_phase_split_switch_plans():
 
     with_switches = [line for line in configs if '.switches' in line]
     assert len(with_switches) == 2
-    assert any('.rx = .{RAMP}, .tx = .{WEST} }, .switches = .{ .pos1 = .{ .rx = EAST, .tx = .{WEST} } }' in line
+    # PE 1 only changes where it receives from, which is one position on every architecture.
+    assert any('.rx = .{RAMP}, .tx = .{WEST} }, .switches = .{ .pos1 = .{ .rx = EAST } }' in line
                for line in with_switches), layout
-    assert any('.rx = .{EAST}, .tx = .{RAMP} }, .switches = .{ .pos1 = .{ .rx = RAMP, .tx = .{WEST} } }' in line
+    # PE 2 turns around from receiving to sending, changing both sides at once.
+    if csl.SWITCH_POSITION_ALLOWS_BOTH:
+        turnaround = '.switches = .{ .pos1 = .{ .rx = RAMP, .tx = .{WEST} } }'
+    else:
+        turnaround = '.switches = .{ .pos1 = .{ .tx = .{WEST} }, .pos2 = .{ .rx = RAMP } }'
+    assert any('.rx = .{EAST}, .tx = .{RAMP} }, ' + turnaround in line
                for line in with_switches), layout
 
 
@@ -154,9 +221,11 @@ def test_two_phase_split_emits_two_control_wavelets():
     emitting = {name: code for name, code in files.items() if 'switch_dsd' in code}
     assert sorted(emitting) == ['code_1_0.csl', 'code_3_0.csl']
 
-    # PE 1 advances its own router, PE 3 advances the router of its receiver
-    assert '.opcodes = .{ctrl.opcode.SWITCH_ADV, ctrl.opcode.NOP}' in emitting['code_1_0.csl']
-    assert '.opcodes = .{ctrl.opcode.NOP, ctrl.opcode.SWITCH_ADV}' in emitting['code_3_0.csl']
+    payload = 'ctrl.encode_single_payload(ctrl.opcode.SWITCH_ADV, true, {}, 0)'
+    # PE 1 moves its own router one position; PE 3 retires PE 2's incoming configuration, and PE 2
+    # has to turn around, which takes two positions where a switch carries only one direction.
+    assert emitting['code_1_0.csl'].count(payload) == 1
+    assert emitting['code_3_0.csl'].count(payload) == (1 if csl.SWITCH_POSITION_ALLOWS_BOTH else 2)
     for code in emitting.values():
         assert 'const ctrl = @import_module("<control>");' in code
         assert '.control = true' in code
@@ -251,7 +320,7 @@ def test_systolic_forwarding_gets_two_positions():
     layout = files['layout.csl']
     middle = [line for line in layout.splitlines() if '@set_color_config' in line and '.switches' in line]
     assert len(middle) == 1, layout
-    assert '.rx = .{WEST}, .tx = .{RAMP} }, .switches = .{ .pos1 = .{ .rx = RAMP, .tx = .{EAST} } }' in middle[0]
+    assert _turnaround('EAST') in middle[0], middle[0]
 
     # The first PE retires its outgoing configuration so that the middle PE advances to sending
     assert any('switch_dsd' in code for name, code in files.items() if name == 'code_0_0.csl')
@@ -266,10 +335,10 @@ def test_bounded_chain_sample_lowers_with_switches():
     layout = files['layout.csl']
     switched = [line for line in layout.splitlines() if '@set_color_config' in line and '.switches' in line]
     assert len(switched) == 1, layout
-    assert '.rx = .{WEST}, .tx = .{RAMP} }, .switches = .{ .pos1 = .{ .rx = RAMP, .tx = .{EAST} } }' in switched[0]
+    assert _turnaround('EAST') in switched[0], switched[0]
 
     # The head of the chain retires the incoming configuration for the PE that forwards
-    assert 'ctrl.opcode.NOP, ctrl.opcode.SWITCH_ADV' in files['code_0_0.csl']
+    assert 'ctrl.opcode.SWITCH_ADV' in files['code_0_0.csl']
     assert not any('switch_dsd' in code for name, code in files.items() if name == 'code_2_0.csl')
 
 
@@ -329,17 +398,24 @@ def _stress_kernel(phases: int) -> str:
     """
 
 
+# Every phase of the stress kernel turns PE 2 around between receiving and sending, so on an
+# architecture where a switch position carries a single direction each phase costs two positions.
+_MAX_STRESS_PHASES = 4 if csl.SWITCH_POSITION_ALLOWS_BOTH else 2
+
+
 @pytest.mark.parametrize('phases', [2, 3, 4])
 def test_switch_positions_within_capacity(phases):
-    """Up to four route configurations fit in a router."""
+    """A router holds four switch positions; how many phases that is depends on the architecture."""
+    if phases > _MAX_STRESS_PHASES:
+        pytest.skip(f'{csl.ARCH} fits at most {_MAX_STRESS_PHASES} turnarounds in one router')
     files = _lower_string(_stress_kernel(phases), K=4)
     assert any('.switches' in code for code in files.values())
 
 
 def test_switch_positions_beyond_capacity_are_rejected():
-    """A fifth distinct configuration on one color has nowhere to go."""
-    with pytest.raises(SyntaxError, match='route configurations'):
-        _lower_string(_stress_kernel(5), K=4)
+    """One configuration too many on a color has nowhere to go."""
+    with pytest.raises(SyntaxError, match='switch positions'):
+        _lower_string(_stress_kernel(_MAX_STRESS_PHASES + 1), K=4)
 
 
 if __name__ == '__main__':

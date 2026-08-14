@@ -912,18 +912,19 @@ class CloseStatement(Statement):
     """
     stream_name: Union[Identifier, ArraySlice]
     completion_name: Optional[Completion] = None
-    #: Which routers along the stream's path advance their switch when this close retires the
-    #: stream's route configuration, starting at the sending PE. Filled in during lowering by
-    #: ``csl.routing.plan_switch_advances``; ``None`` means no router has to act, in which
-    #: case the close generates no code. Not part of the surface syntax.
-    switch_advance: Optional[list[bool]] = None
+    #: How many switch positions the routers along the stream's path move forward when this close
+    #: retires the stream's route configuration. One wavelet is emitted per position, and a
+    #: transition that changes both a router's input and its output direction takes two. Filled in
+    #: during lowering by ``csl.routing.plan_switch_advances``; ``None`` means no router has to act,
+    #: in which case the close generates no code. Not part of the surface syntax.
+    switch_advance: Optional[int] = None
 
     def validate(self) -> None:
         assert isinstance(self.stream_name, (Identifier, ArraySlice))
         if self.completion_name:
             assert isinstance(self.completion_name, Completion)
         if self.switch_advance is not None:
-            assert all(isinstance(command, bool) for command in self.switch_advance)
+            assert isinstance(self.switch_advance, int) and self.switch_advance > 0
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent

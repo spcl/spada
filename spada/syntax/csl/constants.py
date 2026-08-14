@@ -59,8 +59,16 @@ HARDWARE_FABRIC_DIMS = _HARDWARE_FABRIC_DIMS[ARCH]
 # See https://sdk.cerebras.ai/csl/language/builtins#switching-configuration-semantics
 SWITCH_POSITIONS = 4
 
-# Maximum number of switching commands that fit in one control wavelet (``<control>``'s MAX_CMDS).
-# One command is consumed per router the wavelet traverses.
+# Number of switching command slots a control wavelet carries (``<control>``'s MAX_CMDS).
+#
+# NOTE: only slot 0 is ever executed. Measured on the simulator, every switch-configured router a
+# wavelet reaches applies the command in slot 0; slots 1-7 had no effect in any topology tested
+# (the sender's own router, one hop, two hops through a plain relay, and two switch-configured
+# routers in sequence). A wavelet therefore cannot advance one router while skipping another on its
+# path, which is why ``routing.plan_switch_advances`` requires the routers along a path to agree.
+# ``<control>``'s ``encode_payload`` also loops over all eight slots regardless of the array length
+# it is given, so it must be passed exactly eight; ``encode_single_payload`` writes slot 0 only and
+# is what the compiler emits.
 MAX_CONTROL_COMMANDS = 8
 
 # Colors whose routers support switches. WSE-3 only implements switches on a subset of colors.
@@ -69,3 +77,9 @@ _SWITCHABLE_COLORS = {
     'wse3': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 16, 17, 20],
 }
 SWITCHABLE_COLORS = [color for color in _SWITCHABLE_COLORS[ARCH] if color in COLORS]
+
+# Whether one switch position may change both the receiving and the transmitting direction.
+# WSE-2 rejects it ("cannot have both an input and an output in the same switch position"), so a PE
+# that receives and then sends on one color cannot be expressed there with a single advance.
+_SWITCH_POSITION_ALLOWS_BOTH = {'wse2': False, 'wse3': True}
+SWITCH_POSITION_ALLOWS_BOTH = _SWITCH_POSITION_ALLOWS_BOTH[ARCH]

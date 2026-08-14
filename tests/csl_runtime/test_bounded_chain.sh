@@ -29,7 +29,7 @@ grep -q 'SWITCH_ADV' "$FOLDER"/code_0_0.csl || {
 
 python3 - <<PYEOF
 import numpy as np
-a = np.random.rand(3, $K).astype(np.float32)
+a = np.random.rand(3, 1, $K).astype(np.float32)
 np.save('a_in.npy', a)
 PYEOF
 
@@ -38,7 +38,7 @@ timeout -s 9 120 cs_python "$RUNTIME_PY" "$FOLDER" a_in.npy --benchmark
 python3 - <<'PYEOF'
 import numpy as np, sys
 a = np.load('a_in.npy')
-ref = a[0] + a[1]
+ref = a[0, 0] + a[1, 0]
 out = np.load('OUT_out.npy').reshape(ref.shape)
 if not np.allclose(out, ref, atol=1e-5):
     print(f"Test failed: max abs diff = {float(np.max(np.abs(out - ref))):.3e}")

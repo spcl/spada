@@ -51,13 +51,13 @@ def generate_csl_statement(statement: spir.Statement,
         # Skip (taken care of when tasks are defined)
         return ""
     elif isinstance(statement, spir.CloseStatement):
-        # Retiring a route configuration is a control wavelet that advances the routers along the
-        # stream's path, or nothing at all when none of them has to move.
+        # Retiring a route configuration means advancing the switches along the stream's path, one
+        # control wavelet per position, or nothing at all when no router has to move.
         if not statement.switch_advance:
             return ""
         stream = statement.stream_name
         name = name_to_csl(stream.array if isinstance(stream, spir.ArraySlice) else stream)
-        return '@mov32(%s_switch_dsd, %s);' % (name, routing.switch_advance_payload(statement.switch_advance))
+        return routing.switch_advance_statements(f'{name}_switch_dsd', statement.switch_advance)
 
     if op is None:
         return f'// TODO: Convert {statement} to CSL'

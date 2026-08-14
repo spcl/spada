@@ -31,7 +31,7 @@ grep -q '\.switches' "$FOLDER/layout.csl" || {
 
 python3 - <<PYEOF
 import numpy as np
-a = np.random.rand(4, $K).astype(np.float32)
+a = np.random.rand(4, 1, $K).astype(np.float32)
 np.save('a_in.npy', a)
 PYEOF
 
@@ -40,7 +40,7 @@ timeout -s 9 120 cs_python "$RUNTIME_PY" "$FOLDER" a_in.npy --benchmark
 python3 - <<'PYEOF'
 import numpy as np, sys
 a = np.load('a_in.npy')
-ref = np.sum(a, axis=0)
+ref = np.sum(a.reshape(4, -1), axis=0)
 out = np.load('OUT_out.npy').reshape(ref.shape)
 if not np.allclose(out, ref, atol=1e-5):
     print(f"Test failed: max abs diff = {float(np.max(np.abs(out - ref))):.3e}")

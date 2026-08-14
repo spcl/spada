@@ -10,7 +10,7 @@
  *
  * Reference: out == inp[0] + inp[1]
  **/
-kernel @bounded_chain<K>(stream<f32, K>[3] readonly inp, stream<f32, K> writeonly out) {
+kernel @bounded_chain<K>(stream<f32, K>[3,1] readonly inp, stream<f32, K>[1,1] writeonly out) {
 
     place u16 i, u16 j in [0:3, 0:1] {
         f32[K] a
@@ -25,13 +25,13 @@ kernel @bounded_chain<K>(stream<f32, K>[3] readonly inp, stream<f32, K> writeonl
 
     // Head of the chain
     compute u16 i, u16 j in [0:1, 0:1] {
-        await receive(a, inp[i])
+        await receive(a, inp[i, j])
         await send(a, eastwards)
     }
 
     // Middle: receive, accumulate, forward on the same stream
     compute u16 i, u16 j in [1:2, 0:1] {
-        await receive(a, inp[i])
+        await receive(a, inp[i, j])
         await foreach i32 k, f32 x in [0:K], receive(eastwards) {
             a[k] = a[k] + x
         }
@@ -43,6 +43,6 @@ kernel @bounded_chain<K>(stream<f32, K>[3] readonly inp, stream<f32, K> writeonl
         await foreach i32 k, f32 x in [0:K], receive(eastwards) {
             a[k] = x
         }
-        await send(a, out)
+        await send(a, out[i, j])
     }
 }

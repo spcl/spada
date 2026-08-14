@@ -1,5 +1,5 @@
-kernel @two_phase<K> (stream<f32, K>[4] readonly in,
-                      stream<f32, K> writeonly out) {
+kernel @two_phase<K> (stream<f32, K>[4,1] readonly in,
+                      stream<f32, K>[1,1] writeonly out) {
 
     place i16 i, i16 j in [0, 0] {
         f32[K] a
@@ -51,7 +51,7 @@ kernel @two_phase<K> (stream<f32, K>[4] readonly in,
             }
         }
         compute i32 i, i32 j in [0, 0] {
-            await receive(a, in[i])
+            await receive(a, in[i, j])
             await foreach i32 k, f32 x in [0:K], receive(hop1) {
               a[k] = a[k] + x
             }
@@ -59,15 +59,15 @@ kernel @two_phase<K> (stream<f32, K>[4] readonly in,
             await foreach i32 k, f32 x in [0:K], receive(hop2) {
               a[k] = a[k] + x
             }
-            await send(a, out)
+            await send(a, out[i, j])
         }
         compute i32 i, i32 j in [1, 0] {
-            await receive(a, in[i])
+            await receive(a, in[i, j])
             await send(a, hop1)
             await hop1.close()
         }
         compute i32 i, i32 j in [2, 0] {
-            await receive(a, in[i])
+            await receive(a, in[i, j])
             await foreach i32 k, f32 x in [0:K], receive(hop1) {
               a[k] = a[k] + x
             }
@@ -75,7 +75,7 @@ kernel @two_phase<K> (stream<f32, K>[4] readonly in,
             await send(a, hop2)
         }
         compute i32 i, i32 j in [3, 0] {
-            await receive(a, in[i])
+            await receive(a, in[i, j])
             await send(a, hop1)
             await hop1.close()
         }
