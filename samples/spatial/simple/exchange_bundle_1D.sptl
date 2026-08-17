@@ -1,0 +1,61 @@
+/**
+ * Two overlapping 1D interval shifts, in opposite directions, repeated R times.
+ *
+ * D + M PEs on a line. The PEs in [0:M) and those in [D:D+M) swap values pairwise: PE i
+ * trades with PE i + D. Each direction is a shift bundle of its own on a color of its own,
+ * so one exchange costs two colors however many pairs there are. M <= D, so the two halves
+ * are disjoint.
+ *
+ * This is the skeleton of a sorting network's phase (see the bundled Batcher), reduced to
+ * one operation: every PE is a source on one color and a filtered destination on the other.
+ * R repeats it in R phases, none of which shares a color with another, so every PE ends up
+ * with R wavelet filters and R is what the per-PE filter budget limits.
+ *
+ * Constraints: 2 <= M <= D, R >= 1.
+ **/
+kernel @exchange_bundle_1d<M, D, R>(
+    stream<f32, 1>[D + M, 1] readonly  inp,
+    stream<f32, 1>[D + M, 1] writeonly out
+) {
+    place i16 i, i16 j in [0:D + M, 0] {
+        f32 val
+        f32 tmp
+    }
+
+    phase {
+        compute i16 i, i16 j in [0:D + M, 0] {
+            await receive(val, inp[i, j])
+        }
+    }
+
+    for i16 r in [0:R] {
+        phase {
+            dataflow i16 i, i16 j in [0:D + M, 0] {
+                stream<f32, 1> fwd = relative_stream(D, 0) {
+                    hops = auto,
+                    channel = auto
+                }
+                stream<f32, 1> bwd = relative_stream(-D, 0) {
+                    hops = auto,
+                    channel = auto
+                }
+            }
+            compute i16 i, i16 j in [0:M, 0] {
+                await send(val, fwd)
+                await receive(tmp, bwd)
+                val = tmp
+            }
+            compute i16 i, i16 j in [D:D + M, 0] {
+                await receive(tmp, fwd)
+                await send(val, bwd)
+                val = tmp
+            }
+        }
+    }
+
+    phase {
+        compute i16 i, i16 j in [0:D + M, 0] {
+            await send(val, out[i, j])
+        }
+    }
+}

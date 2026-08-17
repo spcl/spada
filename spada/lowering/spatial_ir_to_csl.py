@@ -176,7 +176,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     rect_size = x1 - x0, y1 - y0
 
     # Collect unique routes for all rectangles
-    routes_per_rectangle = cslrouting.collect_routes(rectangles, color_maps, disable_switching)
+    routes_per_rectangle, standalone_routes = cslrouting.collect_routes(rectangles, color_maps,
+                                                                       disable_switching, rect_offset)
 
     if use_memcpy_mode:
         layout_code.write(f'''
@@ -271,6 +272,10 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
 {route_code}
         }}
     }}\n''')
+
+    # Sites that are no rectangle shifted as a whole bring their own loop.
+    for loop in standalone_routes:
+        layout_code.write('\n' + loop)
 
     for rinst in routing_instructions:
         layout_code.write(rinst + '\n')
@@ -642,17 +647,28 @@ def _collect_colors_globally(kernel: spir.Kernel, rectangles: list[Rectangle[PEB
 
     max_channel = max(channel_is_read.union(channel_is_written), default=-1)
 
-    # Assign all "auto" channels
+    # Assign all "auto" channels, one per stream of a phase rather than one per declaration. A stream
+    # declared for a grid that consolidation splits shows up once per rectangle, and ``inline_phases``
+    # gives each copy a name of its own, so the copies are recognised by what they route rather than
+    # by their name: same phase, same offsets, same hops. Sharing them is what puts the matchings of
+    # a sorting network's phase on two colors instead of two per matching.
+    auto_channels = {}
     for rect in rectangles:
         for stream_decl in rect.metadata.dataflow.statements:
             assert stream_decl.stream.routing is not None
-            if stream_decl.stream.routing.resolved_channel == "auto":
-                stream_decl.stream.routing.channel = max_channel + 1
-                if stream_decl.stream_name in auto_stream_is_written:
-                    channel_is_written.add(max_channel + 1)
-                if stream_decl.stream_name in auto_stream_is_read:
-                    channel_is_read.add(max_channel + 1)
+            if stream_decl.stream.routing.resolved_channel != "auto":
+                continue
+            key = (stream_decl.phase, stream_lifetime.stream_group_key(stream_decl))
+            channel = auto_channels.get(key)
+            if channel is None:
                 max_channel += 1
+                channel = max_channel
+                auto_channels[key] = channel
+            stream_decl.stream.routing.channel = channel
+            if stream_decl.stream_name in auto_stream_is_written:
+                channel_is_written.add(channel)
+            if stream_decl.stream_name in auto_stream_is_read:
+                channel_is_read.add(channel)
 
     # Allocate colors for each channel
     color_offset = 0
@@ -1482,9 +1498,11 @@ def _generate_task_code(rect: PEBlock,
             code = cslstmt.generate_csl_statement(stmt, dsds, dtypes, async_target, header)
             lines = code.splitlines()
 
-            # DSD operation or async call
-            if any(dsdop in line for line in lines for dsdop in dsd_ops.DSD_ASSIGNMENT_MAPPING):
-                # Asynchronous DSD op. DSD line already contains activation or unblocking
+            # A DSD operation given an async target performs the transition itself, either as the
+            # operation's ``.activate``/``.unblock`` field or as a call right after it. Naming the
+            # target is what distinguishes those from a statement that merely happens to use a DSD
+            # instruction -- a ``close``, whose control wavelets go out through a plain ``@mov32``.
+            if async_target is not None and async_target.target_task in code:
                 skip_activation = True
 
             for line in lines:

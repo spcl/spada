@@ -493,20 +493,15 @@ The routing configuration is set up as follows:
 stream<T> stream_name = relative_stream(dx, dy) {
     // Optional routing declaration
     hops = [(dx_1, dy_1), (dx_2, dy_2), ... , (dx_n, dy_n)],
-    channel = channel_id,
-    count = k
+    channel = channel_id
 }
 ```
 where `hops` is a list of relative hops that the data takes between the sender and receiver.
 Each hop is given by a pair of constant literals, the sum of their absolute value must be 1.
 The sum of all the hops must be equal to the relative position of the stream.
-`count` is optional. If it is a compile-time integer `k`, each PE transfers exactly `k`
-fabric words on this stream edge in the phase, which enables counted router switching
-on overlapping 1D shifts. Switching uses two colors **per phase** (one per direction).
-Wave quotas depend on the shift distance, so later phases with a different `d` receive
-a fresh color pair rather than reloading the same two colors. If `count` is omitted or
-`count = auto`, the stream is unbounded: the compiler does not infer a length and does
-not apply counted switching.
+How many words the stream carries is not stated here but by its type: a bounded
+`stream<T, BOUND>` closes after `BOUND` elements, which is what frees its channel
+(see [Streams](#streams) and [closing streams](#closing-streams-with-close)).
 
 If two messages (elements of a `send`) are routed through a PE simultaneously,
 it must be ensured that they do not share a `channel`.

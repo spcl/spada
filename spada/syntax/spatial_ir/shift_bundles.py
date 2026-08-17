@@ -1,421 +1,213 @@
 """
-Detect consecutive 1D interval shifts and schedule counted two-state color switching.
+Overlapping 1D interval shifts on one color.
 
-A stream with an explicit ``count = k`` whose senders form a consecutive interval
-``[L, L+m)`` at distance ``d`` (with ``1 < m <= d``) can share one color: each PE
-forwards a known number of waves, then injects or absorbs. ``count = auto`` is
-unbounded and is never rewritten.
+A run of consecutive PEs each shifting the same distance ``d`` along an axis has overlapping paths:
+the router of source ``p + 1`` carries source ``p``'s words. One color per direction still suffices,
+because the routers can be time-multiplexed -- but only if every switch is triggered by something
+the PE that owns it knows locally, since a control wavelet advances *every* switch-configured router
+it reaches (see ``irspec/docs/spatial/routing.md``).
+
+Send order is what provides that. The sources go nearest-the-destinations first, so a source's
+router changes from injecting to relaying exactly when that source has finished its own send, which
+it can signal itself with one switch-advance wavelet. Nothing needs to be told from a distance, and
+the order enforces itself: a source further from the destinations cannot push a word through its
+neighbour's router while that neighbour is still injecting, so it waits on the link.
+
+The destinations do not switch at all. Each transmits to its ramp *and* onward, so all of them see
+the whole stream and a counter filter decides which words each one keeps; the last one transmits to
+its ramp alone and thereby takes the stream out of the network.
+
+This is the arrangement Schnyder's 2D reduce-scatter uses ("Distributed Sorting on the Cerebras
+Wafer-Scale Engine", fig. 7.6), and ``tests/csl_runtime/test_shift_bundle_filters.sh`` is a
+hand-written version of it that pins down the hardware behaviour relied on here.
 """
 from __future__ import annotations
 
-from collections import defaultdict
-from dataclasses import dataclass, replace
-from typing import Literal
+from dataclasses import dataclass
+from typing import Literal, Optional
 
-from spada.syntax.spatial_ir import analysis
+from spada.syntax.spatial_ir import analysis, stream_lifetime
 from spada.syntax.spatial_ir import irnodes as spir
+from spada.syntax.spatial_ir.canonicalization import PEBlock
+from spada.syntax.spatial_ir.grid_geometry import Rectangle
+
+#: A shift of one PE needs no bundling: consecutive sources at distance 1 form a chain, whose
+#: routers are sequenced by the ordinary receive-then-send switch positions.
+MIN_BUNDLE_DISTANCE = 2
 
 
 @dataclass(frozen=True)
 class ShiftBundle:
-    """A consecutive interval of sources shifted by an axis-aligned distance."""
+    """
+    One run of consecutive sources shifted onto an equally long run of destinations.
 
-    phase_index: int
-    axis: Literal["x", "y"]
+    The sources occupy ``[start, start + length)`` along ``axis``; source ``c`` sends to
+    ``c + sign * dist``. ``length <= dist`` keeps the two runs apart, so no PE is both a source and a
+    destination of the same bundle.
+    """
+    axis: Literal['x', 'y']
     sign: Literal[1, -1]
     start: int
     length: int
     dist: int
-    count: int
-    fixed: int
-    stream_names: tuple[spir.Identifier, ...]
-    # Physical channel, unique to this phase and direction. Detect leaves 0;
-    # apply_shift_bundles assigns a per-phase pair (fwd, bwd).
-    channel: int = 0
-
-
-@dataclass(frozen=True)
-class ColorScheduleStep:
-    """One router config and how many fabric waves it stays active."""
-
-    rx: str
-    tx: str
-    waves: int
-
-    def as_pair(self) -> str:
-        return f"{_short(self.rx)}->{_short(self.tx)}"
-
-
-@dataclass(frozen=True)
-class ColorSchedule:
-    """Per-PE counted switch program for one phase and logical channel."""
-
-    phase_index: int
-    x: int
-    y: int
+    #: Words each source sends, from the stream's bound. The filter windows are this wide.
+    words: int
+    #: The range of the *other* axis, as ``(start, stop, stride)``. Every PE in it runs an
+    #: independent copy of the bundle with the same router configurations.
+    cross: tuple[int, int, int]
     channel: int
-    steps: tuple[ColorScheduleStep, ...]
+    #: Routing identity of the stream, as :func:`stream_lifetime.stream_group_key` defines it.
+    group: str
+
+    def sources(self) -> tuple[int, int]:
+        """The source run, as a half-open interval in ascending coordinates."""
+        return self.start, self.start + self.length
+
+    def destinations(self) -> tuple[int, int]:
+        """The destination run, as a half-open interval in ascending coordinates."""
+        first = self.start + self.sign * self.dist
+        return first, first + self.length
+
+    def relays(self) -> tuple[int, int]:
+        """
+        The PEs between the two runs that only pass the stream through, as a half-open interval.
+
+        Empty when ``length == dist``, which is the densest a bundle gets.
+        """
+        if self.sign > 0:
+            return self.sources()[1], self.destinations()[0]
+        return self.destinations()[1], self.sources()[0]
+
+    def destination_order(self) -> tuple[int, int]:
+        """
+        Returns ``(first, step)``: the destination the stream reaches first, and the step from one
+        destination to the next along the direction of travel.
+
+        The stream passes the destination run from the side it arrives on, and each destination sees
+        the whole stream, so this is what maps a destination onto the words it should keep.
+        """
+        low, high = self.destinations()
+        return (low, 1) if self.sign > 0 else (high - 1, -1)
+
+    def describe(self) -> str:
+        low, high = self.sources()
+        direction = {('x', 1): 'east', ('x', -1): 'west',
+                     ('y', 1): 'south', ('y', -1): 'north'}[(self.axis, self.sign)]
+        return f'{self.axis} in [{low}:{high}] shifted {self.dist} {direction}'
 
 
-@dataclass(frozen=True)
-class SwitchAdvance:
+def _straight_shift(declaration: spir.StreamDeclaration) -> Optional[tuple[Literal['x', 'y'], int]]:
     """
-    SWITCH_ADV control wavelet sent after a non-last injector's data waves.
+    Returns the axis and signed distance of a stream that runs straight along one axis.
 
-    Each downstream router pops one opcode (always_pop): the next source and
-    the dest that just absorbed see SWITCH_ADV; hops in between see NOP.
-    A control wavelet holds at most 8 opcodes, so ``dist`` must be <= 8.
+    ``None`` for anything else: a stream that is not a relative one, that moves diagonally, or whose
+    hop list does not walk the axis one PE at a time.
     """
-
-    channel: int
-    axis: Literal["x", "y"]
-    last_injector: int
-    opcodes: tuple[str, ...]
-
-
-def _short(port: str) -> str:
-    return {"RAMP": "R", "EAST": "E", "WEST": "W", "NORTH": "N", "SOUTH": "S"}.get(port, port)
-
-
-def _resolved_count(routing: spir.RoutingDeclaration | None) -> int | None:
-    if routing is None:
+    stream = declaration.stream
+    if not isinstance(stream, spir.RelativeStreamDeclaration) or stream.routing is None:
         return None
-    count = routing.resolved_count
-    if count == "auto":
+    try:
+        dx, dy = int(stream.dx.eval()), int(stream.dy.eval())
+    except Exception:  # pragma: no cover - defensive: a non-constant offset
         return None
-    if count < 1:
-        raise ValueError(f"Routing count must be a positive integer, got {count}")
-    return count
-
-
-def _axis_offset(stream: spir.RelativeStreamDeclaration) -> tuple[Literal["x", "y"], int] | None:
-    dx = stream.dx.eval()
-    dy = stream.dy.eval()
-    if not isinstance(dx, int) or not isinstance(dy, int):
+    if (dx == 0) == (dy == 0):
         return None
-    if dx != 0 and dy == 0:
-        return "x", dx
-    if dy != 0 and dx == 0:
-        return "y", dy
-    return None
+    axis: Literal['x', 'y'] = 'x' if dy == 0 else 'y'
+    delta = dx if axis == 'x' else dy
+
+    hops = stream.routing.hops
+    if isinstance(hops, list):
+        step = (1 if delta > 0 else -1)
+        expected = [(step, 0)] * abs(delta) if axis == 'x' else [(0, step)] * abs(delta)
+        if [hop.offset for hop in hops] != expected:
+            return None
+    return axis, delta
 
 
-def _hops_are_straight(stream: spir.RelativeStreamDeclaration, axis: str, delta: int) -> bool:
-    routing = stream.routing
-    if routing is None or routing.hops == "auto":
-        return True
-    if not isinstance(routing.hops, list):
-        return False
-    step = 1 if delta > 0 else -1
-    expected = [(step, 0)] * abs(delta) if axis == "x" else [(0, step)] * abs(delta)
-    actual = [hop.offset for hop in routing.hops]
-    return actual == expected
+def _bound(declaration: spir.StreamDeclaration) -> Optional[int]:
+    if declaration.dtype.bound is None:
+        return None
+    try:
+        value = declaration.dtype.bound.eval()
+    except Exception:  # pragma: no cover - defensive: a non-constant bound
+        return None
+    return value if isinstance(value, int) and value > 0 else None
 
 
-def _block_points(block) -> list[tuple[int, int]]:
-    x0, x1, y0, y1 = block.get_grid_rect()
-    xs, ys = block.get_grid_stride()
-    return [(x, y) for x in range(x0, x1, xs) for y in range(y0, y1, ys)]
-
-
-def _consecutive_runs(values: list[int]) -> list[tuple[int, int]]:
+def _consecutive_runs(values: set[int]) -> list[tuple[int, int]]:
+    """Splits a set of coordinates into ``(start, length)`` runs of consecutive values."""
     if not values:
         return []
-    ordered = sorted(set(values))
-    runs = []
-    start = prev = ordered[0]
+    runs: list[tuple[int, int]] = []
+    ordered = sorted(values)
+    start = previous = ordered[0]
     for value in ordered[1:]:
-        if value == prev + 1:
-            prev = value
+        if value == previous + 1:
+            previous = value
             continue
-        runs.append((start, prev - start + 1))
-        start = prev = value
-    runs.append((start, prev - start + 1))
+        runs.append((start, previous - start + 1))
+        start = previous = value
+    runs.append((start, previous - start + 1))
     return runs
 
 
-def detect_shift_bundles(kernel: spir.Kernel) -> list[ShiftBundle]:
+def detect_shift_bundles(rectangles: list[Rectangle[PEBlock]]) -> list[ShiftBundle]:
     """
-    Find consecutive interval shifts with an explicit count in each phase.
+    Finds the interval shifts in a kernel whose paths overlap, and which therefore need bundling.
 
-    :param kernel: A kernel whose metaprogramming and auto-hops are already resolved,
-                   and whose phases have not yet been inlined.
+    Sources are collected per channel and shift, across rectangles: one logical shift is often
+    declared by several compute blocks -- a sorting network's matchings at successive offsets, for
+    instance -- and only their union shows which PEs form a consecutive run.
+
+    A shift is bundled only if *every* run it decomposes into can be: at least two sources, and no
+    longer than the shift distance, so that sources and destinations stay disjoint. A shift that
+    fails this is left to the ordinary per-hop lowering, which reports the conflict if there is one.
+
+    :param rectangles: The consolidated PE rectangles of the kernel, with channels already resolved.
+    :return: The bundles, in a deterministic order.
     """
-    bundles: list[ShiftBundle] = []
-    phase_index = 0
-    for block in kernel.body:
-        if not isinstance(block, spir.Phase):
-            continue
-        bundles.extend(_detect_in_phase(block, phase_index))
-        phase_index += 1
-    return bundles
-
-
-def _detect_in_phase(phase: spir.Phase, phase_index: int) -> list[ShiftBundle]:
-    decls: dict[spir.Identifier, spir.RelativeStreamDeclaration] = {}
-    for dataflow in phase.dataflow:
-        for stmt in dataflow.statements:
-            stream = stmt.stream
-            if not isinstance(stream, spir.RelativeStreamDeclaration):
-                continue
-            existing = decls.get(stmt.stream_name)
-            if existing is None:
-                decls[stmt.stream_name] = stream
-                continue
-            if (existing.dx.eval(), existing.dy.eval()) != (stream.dx.eval(), stream.dy.eval()):
-                raise ValueError(
-                    f'Stream "{stmt.stream_name.as_ir()}" is declared with conflicting offsets '
-                    f"in the same phase."
-                )
-
-    # (axis, delta, k, fixed_coord) -> (source coords along the axis, stream names)
-    groups: dict[tuple[str, int, int, int], tuple[set[int], set[spir.Identifier]]] = {}
-    for compute in phase.compute:
-        sent_recv = analysis.sends_and_receives(compute)
-        for name, stream in decls.items():
-            sent, _received = sent_recv.get(name, (False, False))
+    # (channel, axis, signed distance, cross-axis range) -> (source coordinates, words, group)
+    groups: dict[tuple[int, str, int, tuple[int, int, int]], tuple[set[int], int, str]] = {}
+    for rect in rectangles:
+        sends_recvs = analysis.sends_and_receives(rect.metadata.compute)
+        for declaration in rect.metadata.dataflow.statements:
+            sent, _received = sends_recvs.get(declaration.stream_name, (False, False))
             if not sent:
                 continue
-            k = _resolved_count(stream.routing)
-            if k is None:
+            shift = _straight_shift(declaration)
+            words = _bound(declaration)
+            if shift is None or words is None:
                 continue
-            axis_delta = _axis_offset(stream)
-            if axis_delta is None:
+            axis, delta = shift
+            if abs(delta) < MIN_BUNDLE_DISTANCE:
                 continue
-            axis, delta = axis_delta
-            if not _hops_are_straight(stream, axis, delta):
+            channel = declaration.stream.routing.resolved_channel
+            if channel == 'auto':
                 continue
-            for x, y in _block_points(compute):
-                if axis == "x":
-                    key = (axis, delta, k, y)
-                    coord = x
-                else:
-                    key = (axis, delta, k, x)
-                    coord = y
-                bucket = groups.get(key)
-                if bucket is None:
-                    bucket = (set(), set())
-                    groups[key] = bucket
-                bucket[0].add(coord)
-                bucket[1].add(name)
+
+            along = rect.x_range if axis == 'x' else rect.y_range
+            cross = rect.y_range if axis == 'x' else rect.x_range
+            key = (channel, axis, delta, cross)
+            coords, _, _ = groups.setdefault(key, (set(), words, stream_lifetime.stream_group_key(declaration)))
+            coords.update(range(along[0], along[1], along[2]))
 
     bundles: list[ShiftBundle] = []
-    for (axis, delta, k, fixed), (coords, names) in groups.items():
-        dist = abs(delta)
-        sign: Literal[1, -1] = 1 if delta > 0 else -1
-        for start, length in _consecutive_runs(list(coords)):
-            if length < 2 or length > dist:
-                continue
-            bundles.append(
-                ShiftBundle(
-                    phase_index=phase_index,
-                    axis=axis,
-                    sign=sign,
-                    start=start,
-                    length=length,
-                    dist=dist,
-                    count=k,
-                    fixed=fixed,
-                    stream_names=tuple(names),
-                )
-            )
+    for (channel, axis, delta, cross), (coords, words, group) in sorted(groups.items()):
+        runs = _consecutive_runs(coords)
+        if not all(2 <= length <= abs(delta) for _start, length in runs):
+            continue
+        for start, length in runs:
+            bundles.append(ShiftBundle(axis=axis, sign=1 if delta > 0 else -1, start=start,
+                                       length=length, dist=abs(delta), words=words, cross=cross,
+                                       channel=channel, group=group))
     return bundles
 
 
-def schedule_counted_switch(bundle: ShiftBundle) -> list[ColorSchedule]:
+def bundles_by_group(bundles: list[ShiftBundle]) -> dict[str, list[ShiftBundle]]:
     """
-    Build the two-state per-PE schedule for one interval shift.
-
-    East/south (+d): source half forwards then injects; dest half absorbs then forwards.
-    West/north (−d): the same lemma with the opposite ports, sources on the far side.
+    Indexes bundles by the routing identity of their stream, for the route collector to look up.
     """
-    if bundle.axis == "x":
-        forward_rx, forward_tx = ("WEST", "EAST") if bundle.sign > 0 else ("EAST", "WEST")
-        inject_tx = "EAST" if bundle.sign > 0 else "WEST"
-        absorb_rx = "WEST" if bundle.sign > 0 else "EAST"
-
-        def pe(coord: int) -> tuple[int, int]:
-            return coord, bundle.fixed
-    else:
-        forward_rx, forward_tx = ("NORTH", "SOUTH") if bundle.sign > 0 else ("SOUTH", "NORTH")
-        inject_tx = "SOUTH" if bundle.sign > 0 else "NORTH"
-        absorb_rx = "NORTH" if bundle.sign > 0 else "SOUTH"
-
-        def pe(coord: int) -> tuple[int, int]:
-            return bundle.fixed, coord
-
-    L = bundle.start
-    m = bundle.length
-    d = bundle.dist
-    k = bundle.count
-    schedules: dict[tuple[int, int], list[ColorScheduleStep]] = {}
-
-    def add(coord: int, steps: list[ColorScheduleStep]) -> None:
-        x, y = pe(coord)
-        kept = [step for step in steps if step.waves > 0]
-        if kept:
-            schedules[(x, y)] = kept
-
-    if bundle.sign > 0:
-        for j in range(m):
-            src = L + j
-            add(src, [
-                ColorScheduleStep(forward_rx, forward_tx, j * k),
-                ColorScheduleStep("RAMP", inject_tx, k),
-            ])
-        for j in range(m):
-            dest = L + d + j
-            add(dest, [
-                ColorScheduleStep(absorb_rx, "RAMP", k),
-                ColorScheduleStep(forward_rx, forward_tx, (m - 1 - j) * k),
-            ])
-        for coord in range(L + m, L + d):
-            add(coord, [ColorScheduleStep(forward_rx, forward_tx, m * k)])
-    else:
-        # Sources occupy [L, L+m); dests are at source - d.
-        for j in range(m):
-            src = L + j
-            add(src, [
-                ColorScheduleStep(forward_rx, forward_tx, (m - 1 - j) * k),
-                ColorScheduleStep("RAMP", inject_tx, k),
-            ])
-        for j in range(m):
-            dest = L - d + j
-            add(dest, [
-                ColorScheduleStep(absorb_rx, "RAMP", k),
-                ColorScheduleStep(forward_rx, forward_tx, j * k),
-            ])
-        for coord in range(L - d + m, L):
-            add(coord, [ColorScheduleStep(forward_rx, forward_tx, m * k)])
-
-    return [
-        ColorSchedule(bundle.phase_index, x, y, bundle.channel, tuple(steps))
-        for (x, y), steps in sorted(schedules.items())
-    ]
-
-
-_MAX_SWITCH_CMDS = 8
-
-
-def switch_advance_for_bundle(bundle: ShiftBundle) -> SwitchAdvance:
-    """Build the opcode chain popped by each downstream hop (distance ``d``).
-
-    The injecting PE uses ``no_pop``, so the first opcode is for its neighbor.
-    """
-    d = bundle.dist
-    if d > _MAX_SWITCH_CMDS:
-        raise ValueError(
-            f"Counted switching encodes one opcode per hop and a control wavelet "
-            f"holds at most {_MAX_SWITCH_CMDS} commands; got dist={d}."
-        )
-    opcodes = ("SWITCH_ADV",) + ("NOP",) * max(d - 2, 0) + ("SWITCH_ADV",)
-    last_injector = bundle.start + bundle.length - 1 if bundle.sign > 0 else bundle.start
-    return SwitchAdvance(bundle.channel, bundle.axis, last_injector, opcodes)
-
-
-def _phase_has_explicit_count_relative(phase: spir.Phase) -> bool:
-    for dataflow in phase.dataflow:
-        for stmt in dataflow.statements:
-            stream = stmt.stream
-            if not isinstance(stream, spir.RelativeStreamDeclaration):
-                continue
-            if _resolved_count(stream.routing) is not None:
-                return True
-    return False
-
-
-def _phase_channel_bases(kernel: spir.Kernel, bundles: list[ShiftBundle]) -> dict[int, int]:
-    """
-    Give each routed phase its own even/odd color pair.
-
-    Wave quotas depend on the shift distance, so a counted two-state program
-    cannot be reused on the same color in a later phase.
-    """
-    needed = {bundle.phase_index for bundle in bundles}
-    phase_index = 0
-    for block in kernel.body:
-        if not isinstance(block, spir.Phase):
-            continue
-        if _phase_has_explicit_count_relative(block):
-            needed.add(phase_index)
-        phase_index += 1
-    return {phase: 2 * i for i, phase in enumerate(sorted(needed))}
-
-
-def apply_shift_bundles(kernel: spir.Kernel, bundles: list[ShiftBundle]) -> list[ColorSchedule]:
-    """
-    Mark bundled streams for counted switching, assign two colors per phase,
-    and return the per-PE schedules.
-    """
-    bases = _phase_channel_bases(kernel, bundles)
-    assigned = [
-        replace(bundle, channel=bases[bundle.phase_index] + (0 if bundle.sign > 0 else 1))
-        for bundle in bundles
-    ]
-
-    names_by_phase: dict[int, dict[spir.Identifier, int]] = defaultdict(dict)
-    for bundle in assigned:
-        for name in bundle.stream_names:
-            names_by_phase[bundle.phase_index][name] = bundle.channel
-
-    phase_index = 0
-    for block in kernel.body:
-        if not isinstance(block, spir.Phase):
-            continue
-        rewrite = names_by_phase.get(phase_index, {})
-        if rewrite:
-            for dataflow in block.dataflow:
-                for stmt in dataflow.statements:
-                    channel = rewrite.get(stmt.stream_name)
-                    if channel is None or stmt.stream.routing is None:
-                        continue
-                    stmt.stream.routing.channel = channel
-                    stmt.stream.routing.counted_switch = True
-        phase_index += 1
-
-    schedules: list[ColorSchedule] = []
-    advances: list[SwitchAdvance] = []
-    for bundle in assigned:
-        schedules.extend(schedule_counted_switch(bundle))
-        advances.append(switch_advance_for_bundle(bundle))
-    _assign_unit_hop_channels(kernel, bases)
-    kernel.switch_advances = advances
-    return schedules
-
-
-def _assign_unit_hop_channels(kernel: spir.Kernel, bases: dict[int, int]) -> None:
-    """Assign this phase's fwd/bwd pair to explicit-count distance-1 streams."""
-    phase_index = 0
-    for block in kernel.body:
-        if not isinstance(block, spir.Phase):
-            continue
-        base = bases.get(phase_index)
-        phase_index += 1
-        if base is None:
-            continue
-        for dataflow in block.dataflow:
-            for stmt in dataflow.statements:
-                stream = stmt.stream
-                if not isinstance(stream, spir.RelativeStreamDeclaration) or stream.routing is None:
-                    continue
-                if stream.routing.counted_switch:
-                    continue
-                if _resolved_count(stream.routing) is None:
-                    continue
-                axis_delta = _axis_offset(stream)
-                if axis_delta is None:
-                    continue
-                _axis, delta = axis_delta
-                if abs(delta) != 1:
-                    continue
-                stream.routing.channel = base + (0 if delta > 0 else 1)
-
-
-def coalesce_shift_bundles(kernel: spir.Kernel) -> list[ColorSchedule]:
-    """
-    Detect shift bundles, rewrite their channels, and attach schedules to ``kernel``.
-    """
-    bundles = detect_shift_bundles(kernel)
-    schedules = apply_shift_bundles(kernel, bundles)
-    kernel.shift_schedules = schedules
-    return schedules
+    grouped: dict[str, list[ShiftBundle]] = {}
+    for bundle in bundles:
+        grouped.setdefault(bundle.group, []).append(bundle)
+    return grouped

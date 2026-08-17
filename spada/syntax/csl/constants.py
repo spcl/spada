@@ -85,3 +85,11 @@ SWITCHABLE_COLORS = [color for color in _SWITCHABLE_COLORS[ARCH] if color in COL
 # that receives and then sends on one color cannot be expressed there with a single advance.
 _SWITCH_POSITION_ALLOWS_BOTH = {'wse2': False, 'wse3': True}
 SWITCH_POSITION_ALLOWS_BOTH = _SWITCH_POSITION_ALLOWS_BOTH[ARCH]
+
+# Router filters usable per PE, over all colors. The hardware has four, but the memcpy module
+# reserves one, so a program may configure three (Schnyder, "Distributed Sorting on the Cerebras
+# Wafer-Scale Engine", ch. 7).
+#
+# NOTE: a filter must not be reconfigured while wavelets it counts are still in flight. Filters are
+# therefore set once in the layout and never rewritten between phases.
+FILTERS_PER_PE = 3

@@ -118,8 +118,7 @@ hop : "(" posneg_integer_literal "," posneg_integer_literal ")"  // 2D at the mo
 hops : "[" hop ("," hop)* "]"
 routing_hops : "hops" "=" (auto | hops)
 routing_channel : "channel" "=" (auto | value_expr)
-routing_count : "count" "=" (auto | value_expr)
-routing_field : routing_hops | routing_channel | routing_count
+routing_field : routing_hops | routing_channel
 routing : routing_field ("," routing_field)*
 multicast_range : "[" range_expression "]"
 relative_stream_declaration : "relative_stream" "(" (value_expr | multicast_range) "," (value_expr | multicast_range) ")" ("{" routing "}")?

@@ -288,7 +288,11 @@ class Program:
         cmaddr = cm_addr or os.environ.get("CM_ADDR", None)
         self.simulator = cmaddr is None
         print("SIMULATOR?", self.simulator)
-        self.runtime = crt.SdkRuntime(str(self.out_folder), suppress_simfab_trace=True, cmaddr=cmaddr)
+        # Fabric traces are large, so they are only written when asked for: they are what tells a
+        # stalled or faulting simulator run apart, per tile and per color.
+        trace = os.environ.get("SPADA_SIMFAB_TRACE") is not None
+        self.runtime = crt.SdkRuntime(str(self.out_folder), suppress_simfab_trace=not trace,
+                                      cmaddr=cmaddr)
 
         # Store input/output information from metadata
         self.inputs = self.metadata.inputs

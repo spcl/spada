@@ -1,516 +1,289 @@
-"""Tests for count= routing and counted 1D shift-bundle switching."""
+"""
+Tests for bundling overlapping 1D interval shifts onto one color.
+
+The mechanism these check the lowering against is measured in
+``tests/csl_runtime/test_shift_bundle_filters.sh``, which runs a hand-written version of the same
+layout on the simulator.
+"""
 import os
 import re
 
 import pytest
 
-from spada.lowering.spatial_ir_to_csl import lower_spatial_ir_to_csl
-from spada.syntax.spatial_ir import canonical_subgrids, canonicalization, irnodes as spir, parser, passes
-from spada.syntax.spatial_ir.shift_bundles import (
-    detect_shift_bundles,
-    schedule_counted_switch,
-    coalesce_shift_bundles,
-    switch_advance_for_bundle,
-)
-
-
-def _prepare(src: str, **params: int):
-    kernel = parser.parse_string(src)
-    kernel = passes.concretize_parameters(kernel, **params)
-    kernel = passes.constexpr_propagation(kernel)
-    kernel = canonicalization.inline_metaprogramming(kernel)
-    kernel = canonicalization.canonicalize_phases(kernel)
-    kernel = canonicalization.reduce_streams(kernel)
-    kernel = canonical_subgrids.canonicalize_subgrids(kernel)
-    kernel = canonicalization.resolve_auto_hops(kernel)
-    return kernel
-
+from spada.lowering.spatial_ir_to_csl import canonicalize_kernel, lower_spatial_ir_to_csl
+from spada.syntax.csl import routing as cslrouting
+from spada.syntax.spatial_ir import canonicalization, parser, passes
+from spada.syntax.spatial_ir.shift_bundles import detect_shift_bundles
 
 _SHIFT = """
-kernel @shift_k<N>(
-    stream<f32, 1>[N, 1] readonly inp,
-    stream<f32, 1>[N, 1] writeonly out
+kernel @shift<M, D, K>(
+    stream<f32, K>[D + M, 1] readonly inp,
+    stream<f32, K>[D + M, 1] writeonly out
 ) {
-    place i16 i, i16 j in [0:N, 0] {
-        f32 val
+    place i16 i, i16 j in [0:D + M, 0] {
+        f32[K] val
     }
     phase {
-        compute i16 i, i16 j in [0:N, 0] {
+        compute i16 i, i16 j in [0:D + M, 0] {
             await receive(val, inp[i, j])
         }
     }
     phase {
-        dataflow i16 i, i16 j in [0:4, 0] {
-            stream<f32> fwd = relative_stream(4, 0) {
+        dataflow i16 i, i16 j in [0:D + M, 0] {
+            stream<f32, K> fwd = relative_stream(D, 0) {
                 hops = auto,
-                channel = auto,
-                count = 1
+                channel = 0
             }
         }
-        dataflow i16 i, i16 j in [4:8, 0] {
-            stream<f32> fwd = relative_stream(4, 0) {
-                hops = auto,
-                channel = auto,
-                count = 1
-            }
-        }
-        compute i16 i, i16 j in [0:4, 0] {
+        compute i16 i, i16 j in [0:M, 0] {
             await send(val, fwd)
         }
-        compute i16 i, i16 j in [4:8, 0] {
+        compute i16 i, i16 j in [D:D + M, 0] {
             await receive(val, fwd)
         }
     }
     phase {
-        compute i16 i, i16 j in [0:N, 0] {
+        compute i16 i, i16 j in [0:D + M, 0] {
             await send(val, out[i, j])
         }
     }
 }
 """
 
-_SHIFT_AUTO = _SHIFT.replace("count = 1", "count = auto")
+_WESTBOUND = _SHIFT.replace('relative_stream(D, 0)', 'relative_stream(-D, 0)') \
+                   .replace('compute i16 i, i16 j in [0:M, 0] {\n            await send(val, fwd)',
+                            'compute i16 i, i16 j in [D:D + M, 0] {\n            await send(val, fwd)') \
+                   .replace('compute i16 i, i16 j in [D:D + M, 0] {\n            await receive(val, fwd)',
+                            'compute i16 i, i16 j in [0:M, 0] {\n            await receive(val, fwd)')
 
-_SHIFT_OMITTED = _SHIFT.replace(",\n                count = 1", "")
-
-_SHIFT_TOO_LONG = _SHIFT.replace("[0:4, 0]", "[0:6, 0]").replace("relative_stream(4, 0)", "relative_stream(2, 0)")
-
-
-def test_parse_count_roundtrip():
-    kernel = parser.parse_string(_SHIFT)
-    ir_1 = kernel.as_ir()
-    assert "count = 1" in ir_1
-    ir_2 = parser.parse_string(ir_1).as_ir()
-    assert ir_1 == ir_2
+_UNBOUNDED = _SHIFT.replace('stream<f32, K> fwd', 'stream<f32> fwd')
 
 
-def test_omitted_count_has_no_count_line():
-    kernel = parser.parse_string(_SHIFT_OMITTED)
-    assert "count =" not in kernel.as_ir()
-
-
-def test_detect_interval_shift():
-    kernel = _prepare(_SHIFT, N=8)
-    bundles = detect_shift_bundles(kernel)
-    assert len(bundles) == 1
-    b = bundles[0]
-    assert (b.start, b.length, b.dist, b.count, b.sign, b.axis) == (0, 4, 4, 1, 1, "x")
-
-
-def test_auto_count_is_not_rewritten():
-    kernel = _prepare(_SHIFT_AUTO, N=8)
-    assert detect_shift_bundles(kernel) == []
-    coalesce_shift_bundles(kernel)
-    assert kernel.shift_schedules == []
-
-
-def test_omitted_count_is_not_rewritten():
-    kernel = _prepare(_SHIFT_OMITTED, N=8)
-    assert detect_shift_bundles(kernel) == []
-
-
-def test_m_greater_than_d_is_rejected():
-    kernel = _prepare(_SHIFT_TOO_LONG, N=8)
-    assert detect_shift_bundles(kernel) == []
-
-
-def test_schedule_source_and_dest_halves():
-    kernel = _prepare(_SHIFT, N=8)
-    bundle = detect_shift_bundles(kernel)[0]
-    by_pe = {(s.x, s.y): s.steps for s in schedule_counted_switch(bundle)}
-    assert [(st.rx, st.tx, st.waves) for st in by_pe[(0, 0)]] == [("RAMP", "EAST", 1)]
-    assert [(st.rx, st.tx, st.waves) for st in by_pe[(1, 0)]] == [("WEST", "EAST", 1), ("RAMP", "EAST", 1)]
-    assert [(st.rx, st.tx, st.waves) for st in by_pe[(3, 0)]] == [("WEST", "EAST", 3), ("RAMP", "EAST", 1)]
-    assert [(st.rx, st.tx, st.waves) for st in by_pe[(4, 0)]] == [("WEST", "RAMP", 1), ("WEST", "EAST", 3)]
-    assert [(st.rx, st.tx, st.waves) for st in by_pe[(7, 0)]] == [("WEST", "RAMP", 1)]
-    adv = switch_advance_for_bundle(bundle)
-    assert adv.last_injector == 3
-    assert adv.opcodes == ("SWITCH_ADV", "NOP", "NOP", "SWITCH_ADV")
-
-
-def test_westbound_schedule():
-    west = """
-kernel @shift_w<N>(
-    stream<f32, 1>[N, 1] readonly inp,
-    stream<f32, 1>[N, 1] writeonly out
-) {
-    place i16 i, i16 j in [0:N, 0] { f32 val }
-    phase {
-        compute i16 i, i16 j in [0:N, 0] { await receive(val, inp[i, j]) }
-    }
-    phase {
-        dataflow i16 i, i16 j in [4:8, 0] {
-            stream<f32> bwd = relative_stream(-4, 0) {
-                hops = auto,
-                channel = auto,
-                count = 1
-            }
-        }
-        compute i16 i, i16 j in [4:8, 0] { await send(val, bwd) }
-        compute i16 i, i16 j in [0:4, 0] { await receive(val, bwd) }
-    }
-    phase {
-        compute i16 i, i16 j in [0:N, 0] { await send(val, out[i, j]) }
-    }
-}
-"""
-    kernel = _prepare(west, N=8)
-    bundle = detect_shift_bundles(kernel)[0]
-    assert bundle.sign == -1 and bundle.start == 4 and bundle.length == 4
-    by_pe = {(s.x, s.y): s.steps for s in schedule_counted_switch(bundle)}
-    assert [(st.rx, st.tx, st.waves) for st in by_pe[(7, 0)]] == [("RAMP", "WEST", 1)]
-    assert [(st.rx, st.tx, st.waves) for st in by_pe[(4, 0)]] == [("EAST", "WEST", 3), ("RAMP", "WEST", 1)]
-    assert [(st.rx, st.tx, st.waves) for st in by_pe[(0, 0)]] == [("EAST", "RAMP", 1)]
-    assert [(st.rx, st.tx, st.waves) for st in by_pe[(3, 0)]] == [("EAST", "RAMP", 1), ("EAST", "WEST", 3)]
-
-
-def _batcher_prepared(n_log: int):
-    path = os.path.join(
-        os.path.dirname(__file__), "..", "..", "samples", "spatial", "sort", "batcher_oddeven_1D.sptl"
-    )
-    kernel = parser.parse_file(path)
-    kernel = passes.concretize_parameters(kernel, L=n_log)
+def _rectangles(source: str, **params: int):
+    kernel = parser.parse_string(source)
+    kernel = passes.concretize_parameters(kernel, **params)
     kernel = passes.constexpr_propagation(kernel)
-    kernel = canonicalization.inline_metaprogramming(kernel)
-    kernel = canonicalization.canonicalize_phases(kernel)
-    kernel = canonicalization.reduce_streams(kernel)
-    kernel = canonical_subgrids.canonicalize_subgrids(kernel)
-    kernel = canonicalization.resolve_auto_hops(kernel)
-    return kernel
+    kernel = canonicalize_kernel(kernel)
+    return canonicalization.consolidate_rectangles_to_equivalence_classes(kernel)
 
 
-def test_batcher_n16_p1_d8_bundle():
-    kernel = _batcher_prepared(4)
-    bundles = detect_shift_bundles(kernel)
-    east = [b for b in bundles if b.sign > 0 and b.dist == 8]
-    west = [b for b in bundles if b.sign < 0 and b.dist == 8]
-    assert len(east) == 1 and east[0].start == 0 and east[0].length == 8
-    assert len(west) == 1 and west[0].start == 8 and west[0].length == 8
+def _bundles(source: str, **params: int):
+    return detect_shift_bundles(_rectangles(source, **params))
 
 
-def test_batcher_n16_p2_d4_bundle():
-    kernel = _batcher_prepared(4)
-    bundles = detect_shift_bundles(kernel)
-    east = [b for b in bundles if b.sign > 0 and b.dist == 4]
-    assert any(b.start == 4 and b.length == 4 for b in east)
+def _layout(source: str, **params: int) -> str:
+    kernel = parser.parse_string(source)
+    kernel = passes.concretize_parameters(kernel, **params)
+    kernel = passes.constexpr_propagation(kernel)
+    files = lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
+    return next(f.code for f in files if 'layout' in f.filename)
 
 
-def test_batcher_d1_has_no_counted_switch():
-    kernel = _batcher_prepared(3)
-    bundles = detect_shift_bundles(kernel)
-    assert all(b.dist != 1 for b in bundles)
+def _codes(source: str, **params: int) -> dict[str, str]:
+    kernel = parser.parse_string(source)
+    kernel = passes.concretize_parameters(kernel, **params)
+    kernel = passes.constexpr_propagation(kernel)
+    files = lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
+    return {f.filename: f.code for f in files if f.filename.startswith('code_')}
 
 
-def _xy(bundle, coord):
-    return (coord, bundle.fixed) if bundle.axis == "x" else (bundle.fixed, coord)
-
-
-def _consume(states, xy, role):
-    steps = states[xy]
-    assert steps, f"PE {xy} has no remaining config but needs {role}"
-    rx, tx, waves = steps[0]
-    if role == "inject":
-        assert rx == "RAMP" and tx != "RAMP", (xy, steps[0], role)
-    elif role == "absorb":
-        assert tx == "RAMP" and rx != "RAMP", (xy, steps[0], role)
-    elif role == "forward":
-        assert rx != "RAMP" and tx != "RAMP", (xy, steps[0], role)
-    else:
-        raise ValueError(role)
-    waves -= 1
-    if waves == 0:
-        steps.pop(0)
-    else:
-        steps[0] = (rx, tx, waves)
-
-
-def simulate_bundle_delivery(bundle, drop_second_step=False):
+def _configs(layout: str) -> dict[tuple[int, int], str]:
     """
-    West-first (eastbound) / east-first (westbound) serial delivery.
+    Maps each ``@set_color_config`` loop in a layout to its configuration, keyed by the PE range.
 
-    Each fabric word consumes one wave at every PE on its path. After the
-    source-half forward quota the PE must have switched to inject; after the
-    dest-half absorb quota it must have switched to forward. Exhausting every
-    quota means the two-state program matches the matching.
+    Only the standalone loops a shift bundle produces are keyed this way; they hold one call each.
     """
-    states = {}
-    for sched in schedule_counted_switch(bundle):
-        steps = [(st.rx, st.tx, st.waves) for st in sched.steps]
-        if drop_second_step:
-            steps = steps[:1]
-        states[(sched.x, sched.y)] = steps
-    order = range(bundle.length) if bundle.sign > 0 else range(bundle.length - 1, -1, -1)
-    for j in order:
-        src = bundle.start + j
-        dest = src + bundle.sign * bundle.dist
-        for _ in range(bundle.count):
-            _consume(states, _xy(bundle, src), "inject")
-            hop = src + bundle.sign
-            while hop != dest:
-                _consume(states, _xy(bundle, hop), "forward")
-                hop += bundle.sign
-            _consume(states, _xy(bundle, dest), "absorb")
-    leftover = {pe: steps for pe, steps in states.items() if steps}
-    assert leftover == {}, leftover
+    found = {}
+    for start, stop, body in re.findall(
+            r'for \(@range\(i16, (\d+), (\d+), 1\)\) \|pe_x\| \{\s*'
+            r'for \(@range\(i16, \d+, \d+, 1\)\) \|pe_y\| \{\s*'
+            r'(@set_color_config\([^\n]*\);)', layout):
+        found[(int(start), int(stop))] = body
+    return found
 
 
-def test_two_state_switch_delivers_eastbound():
-    kernel = _prepare(_SHIFT, N=8)
-    simulate_bundle_delivery(detect_shift_bundles(kernel)[0])
+def test_detects_the_overlapping_shift():
+    bundles = _bundles(_SHIFT, M=3, D=3, K=1)
+    assert len(bundles) == 1
+    bundle = bundles[0]
+    assert (bundle.axis, bundle.sign, bundle.start, bundle.length, bundle.dist, bundle.words) \
+        == ('x', 1, 0, 3, 3, 1)
+    assert (bundle.sources(), bundle.destinations(), bundle.relays()) == ((0, 3), (3, 6), (3, 3))
 
 
-def test_two_state_switch_delivers_westbound():
-    west = """
-kernel @shift_w<N>(
-    stream<f32, 1>[N, 1] readonly inp,
-    stream<f32, 1>[N, 1] writeonly out
-) {
-    place i16 i, i16 j in [0:N, 0] { f32 val }
-    phase {
-        compute i16 i, i16 j in [0:N, 0] { await receive(val, inp[i, j]) }
-    }
-    phase {
-        dataflow i16 i, i16 j in [4:8, 0] {
-            stream<f32> bwd = relative_stream(-4, 0) {
-                hops = auto,
-                channel = auto,
-                count = 1
-            }
-        }
-        compute i16 i, i16 j in [4:8, 0] { await send(val, bwd) }
-        compute i16 i, i16 j in [0:4, 0] { await receive(val, bwd) }
-    }
-    phase {
-        compute i16 i, i16 j in [0:N, 0] { await send(val, out[i, j]) }
-    }
-}
-"""
-    kernel = _prepare(west, N=8)
-    simulate_bundle_delivery(detect_shift_bundles(kernel)[0])
+def test_a_gap_between_the_halves_becomes_relays():
+    bundle = _bundles(_SHIFT, M=3, D=5, K=1)[0]
+    assert (bundle.sources(), bundle.relays(), bundle.destinations()) == ((0, 3), (3, 5), (5, 8))
 
 
-def test_two_state_switch_delivers_count_2():
-    kernel = _prepare(_SHIFT.replace("count = 1", "count = 2"), N=8)
-    bundle = detect_shift_bundles(kernel)[0]
-    assert bundle.count == 2
-    simulate_bundle_delivery(bundle)
+def test_westbound_shift_is_detected_mirrored():
+    bundle = _bundles(_WESTBOUND, M=3, D=5, K=1)[0]
+    assert (bundle.sign, bundle.sources(), bundle.relays(), bundle.destinations()) \
+        == (-1, (5, 8), (3, 5), (0, 3))
+    # The stream arrives on the destinations' east side, so it is the westmost one it reaches last.
+    assert bundle.destination_order() == (2, -1)
 
 
-def test_without_the_switch_delivery_fails():
-    kernel = _prepare(_SHIFT, N=8)
-    with pytest.raises(AssertionError):
-        simulate_bundle_delivery(detect_shift_bundles(kernel)[0], drop_second_step=True)
+def test_an_unbounded_stream_is_not_bundled():
+    # Without a bound there is no self-close, so nothing would advance the sources' switches.
+    assert _bundles(_UNBOUNDED, M=3, D=3, K=1) == []
 
 
-def test_batcher_d8_switch_delivers():
-    kernel = _batcher_prepared(4)
-    bundles = detect_shift_bundles(kernel)
-    east = next(b for b in bundles if b.sign > 0 and b.dist == 8)
-    west = next(b for b in bundles if b.sign < 0 and b.dist == 8)
-    simulate_bundle_delivery(east)
-    simulate_bundle_delivery(west)
+def test_a_single_source_is_not_bundled():
+    assert _bundles(_SHIFT, M=1, D=3, K=1) == []
 
 
-def test_two_state_lemma_never_needs_a_third_config():
-    kernel = _prepare(_SHIFT, N=8)
-    bundle = detect_shift_bundles(kernel)[0]
-    for sched in schedule_counted_switch(bundle):
-        assert 1 <= len(sched.steps) <= 2
-        if len(sched.steps) == 2:
-            first, second = sched.steps
-            forward_then_inject = first.rx != "RAMP" and first.tx != "RAMP" and second.rx == "RAMP"
-            absorb_then_forward = first.tx == "RAMP" and second.rx != "RAMP" and second.tx != "RAMP"
-            assert forward_then_inject or absorb_then_forward
+def test_a_shift_of_one_is_not_bundled():
+    # Consecutive sources at distance one form a chain, which the ordinary receive-then-send switch
+    # positions already sequence.
+    assert _bundles(_SHIFT, M=1, D=1, K=1) == []
 
 
-def _onchip_channels_by_phase(kernel):
-    phases = []
-    for block in kernel.body:
-        if not isinstance(block, spir.Phase):
-            continue
-        chans = set()
-        for dataflow in block.dataflow:
-            for stmt in dataflow.statements:
-                routing = getattr(stmt.stream, "routing", None)
-                if routing is None or routing.resolved_channel == "auto":
-                    continue
-                chans.add(routing.resolved_channel)
-        phases.append(chans)
-    return phases
+def test_sources_longer_than_the_shift_are_not_bundled():
+    # Sources would be destinations of the same bundle, which this arrangement cannot express.
+    assert _bundles(_SHIFT, M=4, D=2, K=1) == []
 
 
-def test_batcher_two_colors_per_phase_not_globally():
-    kernel = _batcher_prepared(3)
-    coalesce_shift_bundles(kernel)
-    routed = [chans for chans in _onchip_channels_by_phase(kernel) if chans]
-    assert len(routed) == 6  # L=3 has 6 (l,p) CAS phases
-    for chans in routed:
-        assert len(chans) == 2
-    used = [c for chans in routed for c in chans]
-    assert len(used) == len(set(used))
-    assert set(used) == set(range(12))
+def test_sources_inject_then_relay():
+    configs = _configs(_layout(_SHIFT, M=3, D=3, K=1))
+    sources = configs[(0, 3)]
+    assert '.routes = .{ .rx = .{RAMP}, .tx = .{EAST} }' in sources
+    assert '.switches = .{ .pos1 = .{ .rx = WEST } }' in sources
+    assert 'ring_mode' not in sources
+    # One call covers the whole run, the westmost source included: a switch position it never uses
+    # is cheaper than a second configuration.
+    assert '.filter' not in sources
+
+
+def test_destinations_are_static_and_filtered():
+    configs = _configs(_layout(_SHIFT, M=3, D=3, K=1))
+    passing = configs[(3, 5)]
+    assert '.routes = .{ .rx = .{WEST}, .tx = .{RAMP, EAST} }' in passing
+    assert '.switches' not in passing
+    # Destination 3 keeps the last of the three words, destination 4 the second: the counter has to
+    # start one and two words short of the end of the cycle respectively.
+    assert '.init_counter = pe_x - 2' in passing
+    assert '.limit1 = 2, .max_counter = 0' in passing
+
+
+def test_the_last_destination_terminates_the_stream():
+    configs = _configs(_layout(_SHIFT, M=3, D=3, K=1))
+    terminal = configs[(5, 6)]
+    assert '.routes = .{ .rx = .{WEST}, .tx = .{RAMP} }' in terminal
+    assert '.init_counter = 0' in terminal
+
+
+def test_relays_pass_the_stream_through_unchanged():
+    configs = _configs(_layout(_SHIFT, M=3, D=5, K=1))
+    relays = configs[(3, 5)]
+    assert '.routes = .{ .rx = .{WEST}, .tx = .{EAST} }' in relays
+    assert '.switches' not in relays and '.filter' not in relays
+
+
+def test_westbound_layout_mirrors_the_eastbound_one():
+    configs = _configs(_layout(_WESTBOUND, M=3, D=3, K=1))
+    assert '.routes = .{ .rx = .{RAMP}, .tx = .{WEST} }' in configs[(3, 6)]
+    assert '.switches = .{ .pos1 = .{ .rx = EAST } }' in configs[(3, 6)]
+    assert '.routes = .{ .rx = .{EAST}, .tx = .{RAMP, WEST} }' in configs[(1, 3)]
+    assert '.init_counter = 3 - pe_x' in configs[(1, 3)]
+    assert '.routes = .{ .rx = .{EAST}, .tx = .{RAMP} }' in configs[(0, 1)]
+    assert '.init_counter = 0' in configs[(0, 1)]
+
+
+def test_windows_are_as_wide_as_the_stream_bound():
+    configs = _configs(_layout(_SHIFT, M=3, D=3, K=2))
+    # Six words in the cycle, two of which each destination keeps.
+    assert '.limit1 = 5, .max_counter = 1' in configs[(3, 5)]
+    assert '.init_counter = (pe_x - 2) * 2' in configs[(3, 5)]
+    assert '.limit1 = 5, .max_counter = 1' in configs[(5, 6)]
+
+
+def test_each_source_advances_its_own_switch_once():
+    codes = _codes(_SHIFT, M=3, D=3, K=1)
+    sending = codes['code_0_0.csl']
+    assert sending.count('ctrl.opcode.SWITCH_ADV') == 1
+    assert '.control = true' in sending
+    # The destinations do not switch, so nothing is emitted there.
+    assert 'SWITCH_ADV' not in codes['code_3_0.csl']
+
+
+def test_one_color_carries_the_whole_bundle():
+    layout = _layout(_SHIFT, M=3, D=3, K=1)
+    routes = layout[layout.index('// Routes'):]
+    assert {int(color) for color in re.findall(r'@get_color\((\d+)\)', routes)} == {0}
+
+
+def test_no_port_is_a_union_on_the_receiving_side():
+    # A switch position accepts a single rx direction, and only a destination unions its tx.
+    layout = _layout(_SHIFT, M=3, D=3, K=1)
+    assert re.search(r'\.rx = \.\{[A-Z]+, [A-Z]+\}', layout) is None
+    assert re.search(r'\.pos\d = \.\{ \.rx = [A-Z]+, ', layout) is None
+
+
+def test_filter_renders_as_a_color_config_field():
+    plan = cslrouting.ColorSwitchPlan(
+        [cslrouting.RouteConfig(('WEST', ), ('RAMP', 'EAST'))],
+        filter=cslrouting.FilterConfig('pe_x - 2', '2', '0'))
+    assert plan.as_csl() == ('.{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP, EAST} }, '
+                             '.filter = .{ .kind = .{ .counter = true }, .count_data = true, '
+                             '.init_counter = pe_x - 2, .limit1 = 2, .max_counter = 0 } }')
+
+
+def test_a_pe_cannot_use_more_filters_than_the_hardware_has():
+    from spada.syntax.csl import constants
+
+    def site(color: int):
+        return cslrouting._RouteSite(color=color, x_range=(0, 4, 1), y_range=(0, 1, 1), absolute=True)
+
+    def entry():
+        return cslrouting._RouteEntry(cslrouting.RouteConfig(('WEST', ), ('RAMP', )), (0, 0, 0), 0,
+                                     (0, 0), None, '', cslrouting.FilterConfig('0', '1', '0'))
+
+    entries = {site(color): [entry()] for color in range(constants.FILTERS_PER_PE + 1)}
+    with pytest.raises(SyntaxError, match='wavelet filters'):
+        cslrouting._check_filter_budget(entries)
+
+
+def _bundled_batcher(l: int):
+    path = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort',
+                        'batcher_oddeven_bundled_1D.sptl')
+    kernel = parser.parse_file(path)
+    kernel = passes.concretize_parameters(kernel, L=l)
+    kernel = passes.constexpr_propagation(kernel)
+    return lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
+
+
+@pytest.mark.parametrize('l, phases', [(2, 3), (3, 6)])
+def test_a_batcher_phase_costs_two_colors(l: int, phases: int):
+    # The matchings of a phase are declared as one stream over the whole line and share its channel,
+    # so the count is per phase and per direction rather than per comparator.
+    layout = next(f.code for f in _bundled_batcher(l) if 'layout' in f.filename)
+    routes = layout[layout.index('// Routes'):]
+    assert len({int(color) for color in re.findall(r'@get_color\((\d+)\)', routes)}) == 2 * phases
+
+
+def test_the_batcher_runs_out_of_filters_before_it_runs_out_of_colors():
+    # A PE receives a bundle in every phase whose distance is at least two, and cannot filter more
+    # than three colors; L = 4 has six such phases.
+    with pytest.raises(SyntaxError, match='wavelet filters'):
+        _bundled_batcher(4)
 
 
 def test_batcher_scalar_receive_lowers_to_data_task():
     path = os.path.join(
-        os.path.dirname(__file__), "..", "..", "samples", "spatial", "sort", "batcher_oddeven_1D.sptl"
+        os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort', 'batcher_oddeven_1D.sptl'
     )
     kernel = parser.parse_file(path)
     kernel = passes.concretize_parameters(kernel, L=1)
     kernel = passes.constexpr_propagation(kernel)
     files = lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
-    pe_codes = [f.code for f in files if "code_" in f.filename]
+    pe_codes = [f.code for f in files if 'code_' in f.filename]
     assert pe_codes
     for code in pe_codes:
-        assert "tmp = bwd" not in code
-        assert ".async = true" not in code
-    pe0 = next(f.code for f in files if "code_0_0" in f.filename)
-    assert "task dtask_" in pe0
-    assert "tmp = __x" in pe0
-
-
-def test_lowering_encodes_intra_phase_switch():
-    kernel = parser.parse_string(_SHIFT)
-    kernel = passes.concretize_parameters(kernel, N=8)
-    kernel = passes.constexpr_propagation(kernel)
-    files = lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
-    layout = next(f.code for f in files if "layout" in f.filename)
-    assert "spa_phase_reload" not in layout
-    # PE 1: forward 1 wave W→E, then switch to inject R→E.
-    assert re.search(
-        r"@set_color_config\(1, 0, @get_color\(0\), "
-        r"\.\{ \.routes = \.\{ \.rx = \.\{WEST\}, \.tx = \.\{EAST\} \}",
-        layout,
-    )
-    assert re.search(
-        r"spa_switch_after phase=\d+ pe=1,0 ch=0 waves=1 rx=RAMP tx=EAST",
-        layout,
-    )
-    assert ".pos1 = .{ .rx = RAMP }" in layout
-    assert ".pop_mode = .{ .pop_on_advance_nop = true }" in layout
-    assert ".pop_mode = .{ .no_pop = true }" in layout
-    # PE 4: absorb 1 wave W→R, then switch to forward W→E.
-    assert re.search(
-        r"@set_color_config\(4, 0, @get_color\(0\), "
-        r"\.\{ \.routes = \.\{ \.rx = \.\{WEST\}, \.tx = \.\{RAMP\} \}",
-        layout,
-    )
-    assert re.search(
-        r"spa_switch_after phase=\d+ pe=4,0 ch=0 waves=1 rx=WEST tx=EAST",
-        layout,
-    )
-    assert ".pos1 = .{ .tx = EAST }" in layout
-    pe0 = next(f.code for f in files if "code_0_0" in f.filename)
-    assert "ctrl.opcode.SWITCH_ADV" in pe0
-    assert "encode_payload" in pe0
-    assert "get_fabric_coord" in pe0
-
-
-def test_batcher_lowering_two_colors_per_phase():
-    path = os.path.join(
-        os.path.dirname(__file__), "..", "..", "samples", "spatial", "sort", "batcher_oddeven_1D.sptl"
-    )
-    for n_log, n_cas, old_static in ((3, 6, 14), (4, 10, 30)):
-        kernel = parser.parse_file(path)
-        kernel = passes.concretize_parameters(kernel, L=n_log)
-        kernel = passes.constexpr_propagation(kernel)
-        files = lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
-        layout = next(f.code for f in files if "layout" in f.filename)
-        assert "spa_color_schedule" in layout
-        assert "spa_switch_after" in layout
-        assert "spa_phase_reload" not in layout
-        colors = {int(c) for c in re.findall(r"@get_color\((\d+)\)", layout)}
-        assert colors == set(range(2 * n_cas)), (
-            f"L={n_log} used colors {sorted(colors)}, expected 2 per phase "
-            f"({2 * n_cas}), not a kernel-wide pair and not {old_static} static"
-        )
-        # Every two-step schedule has a matching counted switch onto the second pair.
-        schedules = re.findall(
-            r"spa_color_schedule phase=(\d+) pe=(\d+),(\d+) ch=(\d+) : ([^\n]+)",
-            layout,
-        )
-        switches = {
-            (int(ph), int(x), int(y), int(ch)): (int(w), rx, tx)
-            for ph, x, y, ch, w, rx, tx in re.findall(
-                r"spa_switch_after phase=(\d+) pe=(\d+),(\d+) ch=(\d+) "
-                r"waves=(\d+) rx=(\w+) tx=(\w+)",
-                layout,
-            )
-        }
-        short = {"R": "RAMP", "E": "EAST", "W": "WEST", "N": "NORTH", "S": "SOUTH"}
-        for ph, x, y, ch, step_txt in schedules:
-            parts = [p.strip() for p in step_txt.split(";")]
-            key = (int(ph), int(x), int(y), int(ch))
-            if len(parts) < 2:
-                assert key not in switches
-                continue
-            first, second = parts[0], parts[1]
-            first_waves = int(re.search(r"waves=(\d+)", first).group(1))
-            pair = re.search(r"(\w+)->(\w+)", second)
-            rx = short.get(pair.group(1), pair.group(1))
-            tx = short.get(pair.group(2), pair.group(2))
-            assert switches[key] == (first_waves, rx, tx)
-
-
-_SAMPLE_SHIFT = os.path.join(
-    os.path.dirname(__file__), "..", "..", "samples", "spatial", "simple", "shift_bundle_1D.sptl"
-)
-
-_DUAL_PORT = re.compile(
-    r"\.(?:rx|tx) = \.\{[A-Z]+, [A-Z]+\}"
-)
-_ABS_COLOR_CONFIG = re.compile(
-    r"@set_color_config\((\d+), (\d+), @get_color\((\d+)\),"
-)
-
-
-def _sample_shift(m: int = 4):
-    kernel = parser.parse_file(_SAMPLE_SHIFT)
-    kernel = passes.concretize_parameters(kernel, M=m)
-    kernel = passes.constexpr_propagation(kernel)
-    return kernel
-
-
-def test_sample_shift_bundle_is_one_eastbound_color():
-    kernel = _prepare(open(_SAMPLE_SHIFT).read(), M=4)
-    bundles = detect_shift_bundles(kernel)
-    assert len(bundles) == 1
-    b = bundles[0]
-    assert (b.start, b.length, b.dist, b.sign, b.axis, b.count) == (0, 4, 4, 1, "x", 1)
-    coalesce_shift_bundles(kernel)
-    routed = [chans for chans in _onchip_channels_by_phase(kernel) if chans]
-    assert routed == [{0}]
-
-
-def test_sample_shift_bundle_one_rx_tx_pair_at_a_time():
-    """A color installs one (rx, tx) pair; pos1 changes rx or tx, never both."""
-    kernel = _prepare(open(_SAMPLE_SHIFT).read(), M=4)
-    bundle = detect_shift_bundles(kernel)[0]
-    for sched in schedule_counted_switch(bundle):
-        assert 1 <= len(sched.steps) <= 2
-        for step in sched.steps:
-            assert step.rx in {"RAMP", "WEST", "EAST"}
-            assert step.tx in {"RAMP", "WEST", "EAST"}
-            assert step.rx != step.tx
-        if len(sched.steps) == 2:
-            first, second = sched.steps
-            changed_rx = first.rx != second.rx
-            changed_tx = first.tx != second.tx
-            assert changed_rx ^ changed_tx, (
-                f"PE ({sched.x},{sched.y}) changes both rx and tx: "
-                f"{first.as_pair()} then {second.as_pair()}"
-            )
-
-
-def test_sample_shift_bundle_layout_does_not_union_ports():
-    kernel = _sample_shift(4)
-    files = lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
-    layout = next(f.code for f in files if "layout" in f.filename)
-    assert _DUAL_PORT.search(layout) is None
-    keys = _ABS_COLOR_CONFIG.findall(layout)
-    assert keys
-    assert len(keys) == len(set(keys)), f"duplicate (PE, color) configs: {keys}"
-    assert "spa_switch_after" in layout
-    assert ".pos1 = .{ .rx = RAMP }" in layout
-    assert ".pos1 = .{ .tx = EAST }" in layout
-    simulate_bundle_delivery(detect_shift_bundles(_prepare(open(_SAMPLE_SHIFT).read(), M=4))[0])
+        # A scalar receive becomes a data task, not an undeclared assignment, and a scalar source
+        # cannot be moved asynchronously.
+        assert 'tmp = bwd' not in code
+        assert '.async = true' not in code
+    pe0 = next(f.code for f in files if 'code_0_0' in f.filename)
+    assert 'task dtask_' in pe0
+    assert 'tmp = __x' in pe0

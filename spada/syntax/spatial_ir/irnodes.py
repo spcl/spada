@@ -569,7 +569,7 @@ class RoutingHop(SpatialNode):
 @dataclass
 class RoutingDeclaration(SpatialNode):
     """
-    A routing declaration for a stream, optionally specifying hops, channel, and count.
+    A routing declaration for a stream, optionally specifying hops and channel.
 
     The ``channel`` field may hold:
     * ``"auto"``  – the channel number is assigned automatically.
@@ -580,17 +580,11 @@ class RoutingDeclaration(SpatialNode):
                     an integer by the time CSL lowering runs; use
                     :attr:`resolved_channel` to obtain the concrete value.
 
-    The ``count`` field is the number of fabric words on this stream edge per PE
-    per phase. ``"auto"`` (the default, also used when the field is omitted) means
-    the stream is unbounded: the compiler does not infer a length and does not
-    apply counted router switching. Counted switching requires an explicit
-    compile-time integer ``count``.
+    How many words a stream carries is stated by its type (``stream<T, BOUND>``), not
+    here; see :class:`StreamType` and ``stream_lifetime``.
     """
     hops: Union[list[RoutingHop], Literal["auto"]] = "auto"  # list of hops or 'auto'
     channel: Union["Expression", int, Literal["auto"]] = "auto"
-    count: Union["Expression", int, Literal["auto"]] = "auto"
-    # Set by the shift-bundle pass; not part of the surface language.
-    counted_switch: bool = False
 
     def validate(self) -> None:
         if isinstance(self.hops, list):
@@ -617,23 +611,6 @@ class RoutingDeclaration(SpatialNode):
             )
         return val
 
-    @property
-    def resolved_count(self) -> Union[int, Literal["auto"]]:
-        """
-        Return the message count as a concrete integer, or ``"auto"`` if unbounded.
-        """
-        if self.count == "auto":
-            return "auto"
-        if isinstance(self.count, int):
-            return self.count
-        val = self.count.eval()
-        if not isinstance(val, int):
-            raise ValueError(
-                f"Count expression '{self.count.as_ir()}' did not evaluate to an integer. "
-                "Ensure all parameters and loop variables are concretized before counted switching."
-            )
-        return val
-
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
         hops_str = "auto" if self.hops == "auto" else f"[{', '.join(hop.as_ir() for hop in self.hops)}]"
@@ -647,12 +624,6 @@ class RoutingDeclaration(SpatialNode):
             f"{indent_str}hops = {hops_str}",
             f"{indent_str}channel = {channel_str}",
         ]
-        if self.count != "auto":
-            if isinstance(self.count, int):
-                count_str = str(self.count)
-            else:
-                count_str = self.count.as_ir()
-            lines.append(f"{indent_str}count = {count_str}")
         return ", \n".join(lines)
 
 

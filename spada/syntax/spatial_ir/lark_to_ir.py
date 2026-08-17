@@ -331,14 +331,11 @@ class TreeToSpatialIR(lark.Transformer):
     def routing_channel(self, args):
         return ('channel', args[0])
 
-    def routing_count(self, args):
-        return ('count', args[0])
-
     def routing_field(self, args):
         return args[0]
 
     def routing(self, args):
-        kwargs = {'hops': 'auto', 'channel': 'auto', 'count': 'auto'}
+        kwargs = {'hops': 'auto', 'channel': 'auto'}
         seen: set[str] = set()
         for key, value in args:
             if key in seen:
@@ -347,11 +344,7 @@ class TreeToSpatialIR(lark.Transformer):
             kwargs[key] = value
         if 'hops' not in seen or 'channel' not in seen:
             raise ValueError('Routing declaration requires both hops and channel')
-        return irnodes.RoutingDeclaration(
-            hops=kwargs['hops'],
-            channel=kwargs['channel'],
-            count=kwargs['count'],
-        )
+        return irnodes.RoutingDeclaration(hops=kwargs['hops'], channel=kwargs['channel'])
 
     def compute_body(self, args):
         if len(args) == 1 and isinstance(args[0], list):

@@ -426,10 +426,6 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
         parameters=copy.deepcopy(kernel.parameters),
         arguments=copy.deepcopy(kernel.arguments),
         body=list(rect_place.values()) + list(rect_dataflow.values()) + list(rect_compute.values()))
-    if hasattr(kernel, "shift_schedules"):
-        new_kernel.shift_schedules = kernel.shift_schedules
-    if hasattr(kernel, "switch_advances"):
-        new_kernel.switch_advances = kernel.switch_advances
     return new_kernel
 
 

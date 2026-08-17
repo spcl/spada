@@ -25,7 +25,7 @@ from io import StringIO
 from spada.syntax.csl import constants
 from spada.syntax.csl import statements as cslstmt
 from spada.syntax.csl import structures as cslstruct
-from spada.syntax.spatial_ir import analysis, stream_lifetime
+from spada.syntax.spatial_ir import analysis, shift_bundles, stream_lifetime
 from spada.syntax.spatial_ir import irnodes as spir
 from spada.syntax.spatial_ir.canonicalization import PEBlock
 from spada.syntax.spatial_ir.grid_geometry import Rectangle
@@ -63,6 +63,36 @@ class RouteConfig:
 
     def changes_both_sides(self, previous: 'RouteConfig') -> bool:
         return self.rx != previous.rx and self.tx != previous.tx
+
+
+@dataclass(frozen=True)
+class FilterConfig:
+    """
+    A counter filter: which of the wavelets passing a router are handed to its compute element.
+
+    The router keeps a counter per filter. It starts at ``init_counter``, advances on every wavelet
+    the filter counts, and wraps to zero after ``limit1``, so it cycles through ``limit1 + 1``
+    values. A wavelet is delivered iff the counter is at most ``max_counter``, and *withheld*
+    otherwise -- withheld is not the same as consumed: the wavelet carries on along the router's
+    ``tx`` directions, so PEs further along still see it. Only a router that transmits to the ramp
+    alone drops what it withholds, which is what takes a wavelet out of the network.
+    (Measured; see ``tests/csl_runtime/test_shift_bundle_filters.sh``. The manual describes
+    ``max_counter`` as exclusive, but a wavelet arriving at ``counter == max_counter`` is delivered.)
+
+    The fields are expression strings rather than integers because a filter's window generally
+    depends on where the PE sits: a shift bundle's receivers share one ``@set_color_config`` whose
+    ``init_counter`` is a function of ``pe_x``.
+
+    A PE can hold only ``constants.FILTERS_PER_PE`` of these across all of its colors.
+    """
+    init_counter: str
+    limit1: str
+    max_counter: str
+
+    def as_csl(self) -> str:
+        return ('.{ .kind = .{ .counter = true }, .count_data = true, .init_counter = %s, '
+                '.limit1 = %s, .max_counter = %s }'
+                % (self.init_counter, self.limit1, self.max_counter))
 
 
 def logical_positions(configs: list[RouteConfig]) -> tuple[list[RouteConfig], bool]:
@@ -136,9 +166,13 @@ class ColorSwitchPlan:
     ``positions[0]`` is the base configuration, and every further entry becomes a switch position.
     Consecutive identical configurations are collapsed by :meth:`add`, so a router that keeps the
     same configuration across an epoch boundary consumes no switch position and needs no advance.
+
+    A :class:`FilterConfig` applies to the color as a whole rather than to a position: filters cannot
+    be switched, and rewriting one while wavelets are in flight is unsafe.
     """
     positions: list[RouteConfig] = field(default_factory=list)
     ring_mode: bool = False
+    filter: 'FilterConfig | None' = None
 
     def add(self, config: RouteConfig) -> None:
         if self.positions and self.positions[-1] == config:
@@ -166,18 +200,19 @@ class ColorSwitchPlan:
         return len(self.cycle[0]) > 1
 
     def as_csl(self) -> str:
-        base = self.positions[0].as_csl()
-        if not self.uses_switches:
-            return '.{ .routes = %s }' % base
-
-        hardware = self.hardware_positions
-        switches = [
-            '.pos%d = %s' % (index, config.as_switch_position(hardware[index - 1]))
-            for index, config in enumerate(hardware[1:], start=1)
-        ]
-        if self.cycle[1]:
-            switches.append('.ring_mode = true')
-        return '.{ .routes = %s, .switches = .{ %s } }' % (base, ', '.join(switches))
+        fields = ['.routes = %s' % self.positions[0].as_csl()]
+        if self.uses_switches:
+            hardware = self.hardware_positions
+            switches = [
+                '.pos%d = %s' % (index, config.as_switch_position(hardware[index - 1]))
+                for index, config in enumerate(hardware[1:], start=1)
+            ]
+            if self.cycle[1]:
+                switches.append('.ring_mode = true')
+            fields.append('.switches = .{ %s }' % ', '.join(switches))
+        if self.filter is not None:
+            fields.append('.filter = %s' % self.filter.as_csl())
+        return '.{ %s }' % ', '.join(fields)
 
     def validate(self, color: int, location: str) -> None:
         """
@@ -311,10 +346,18 @@ class _RouteSite:
     """
     One ``@set_color_config`` target: the rectangle of PEs (already shifted by the relay offset) that
     receive a route configuration for one color.
+
+    A site is normally a compute rectangle shifted by a relay offset, and is configured from that
+    rectangle's layout loop as ``pe_x + offset``. ``absolute`` marks the exception: a site whose PEs
+    are not any rectangle shifted as a whole -- the pure relays between the two halves of a shift
+    bundle, say, whose count has nothing to do with either half's width -- and which therefore gets a
+    layout loop of its own. It is excluded from equality so that :func:`_find_site` can still look a
+    site up by its PEs alone.
     """
     color: int
     x_range: tuple[int, int, int]
     y_range: tuple[int, int, int]
+    absolute: bool = field(default=False, compare=False)
 
     def as_rectangle(self) -> Rectangle:
         return Rectangle(self.x_range, self.y_range, None)
@@ -341,6 +384,112 @@ class _RouteEntry:
     stream: spir.Identifier
     #: Routing identity of the stream; stable across the per-rectangle renaming of ``inline_phases``
     group: str = ''
+    #: Which of the wavelets reaching these routers are handed to their compute element. Belongs to
+    #: the color rather than to this one configuration, so all entries of a site must agree.
+    filter: FilterConfig | None = None
+
+
+def _bundle_ports(bundle: shift_bundles.ShiftBundle) -> tuple[str, str]:
+    """Returns the ``(incoming, outgoing)`` router ports along a bundle's direction of travel."""
+    if bundle.axis == 'x':
+        return ('WEST', 'EAST') if bundle.sign > 0 else ('EAST', 'WEST')
+    return ('NORTH', 'SOUTH') if bundle.sign > 0 else ('SOUTH', 'NORTH')
+
+
+def _window_start(variable: str, first: int, step: int, words: int) -> str:
+    """
+    Returns the counter value a destination's filter starts at, as an expression in the loop variable.
+
+    Every destination sees the whole stream, in one order, so which words a destination keeps is
+    decided by where it sits: the ``p``-th destination along the direction of travel keeps the block
+    the ``p``-th-from-last source sent, which begins ``(p + 1) * words`` short of the end of the
+    cycle. Starting the counter there brings it to zero just as that block arrives.
+
+    :param first: The coordinate of the destination the stream reaches first, where ``p`` is zero.
+    :param step: ``+1`` or ``-1``, the direction the coordinate grows in as ``p`` grows.
+    """
+    offset = 1 - first if step > 0 else first + 1
+    if step > 0:
+        inner = variable if offset == 0 else f'{variable} + {offset}' if offset > 0 else f'{variable} - {-offset}'
+    else:
+        inner = f'{offset} - {variable}'
+    if words == 1:
+        return inner
+    return f'({inner}) * {words}'
+
+
+def _bundle_route_entries(bundle: shift_bundles.ShiftBundle, color: int, order: tuple[int, int, int],
+                          rect_index: int, stream_name: spir.Identifier) -> list[tuple['_RouteSite', '_RouteEntry']]:
+    """
+    Returns the route configurations of one shift bundle, replacing the per-hop ones.
+
+    Four kinds of router take part, and none of them is a compute rectangle shifted as a whole -- the
+    relays in between are as many as the shift distance minus the run length, which is neither half's
+    width -- so every site here is a standalone one.
+
+    The sources all get the same pair of configurations, injecting and then relaying, including the
+    one furthest from the destinations which has nothing to relay for. Giving it a switch position it
+    never uses costs nothing and keeps one ``@set_color_config`` for the whole run; its own
+    switch-advance wavelet moves it into a configuration that never carries anything, and the
+    wavelets of the sources behind it pass routers already sitting on their last position, which is a
+    no-op.
+
+    :param order: The switch-position order key of the send that this bundle carries.
+    """
+    incoming, outgoing = _bundle_ports(bundle)
+    variable = 'pe_x' if bundle.axis == 'x' else 'pe_y'
+    first, step = bundle.destination_order()
+    limit1 = str(bundle.length * bundle.words - 1)
+    max_counter = str(bundle.words - 1)
+
+    collected: list[tuple[_RouteSite, _RouteEntry]] = []
+
+    def add(span: tuple[int, int], configs: list[RouteConfig],
+            wavelet_filter: FilterConfig | None = None) -> None:
+        start, stop = span
+        if start >= stop:
+            return
+        along = (start, stop, 1)
+        site = _RouteSite(color=color,
+                          x_range=along if bundle.axis == 'x' else bundle.cross,
+                          y_range=bundle.cross if bundle.axis == 'x' else along,
+                          absolute=True)
+        for config in configs:
+            collected.append((site, _RouteEntry(config, order, rect_index, (0, 0), stream_name,
+                                                bundle.group, wavelet_filter)))
+
+    add(bundle.sources(), [RouteConfig(('RAMP', ), (outgoing, )), RouteConfig((incoming, ), (outgoing, ))])
+    add(bundle.relays(), [RouteConfig((incoming, ), (outgoing, ))])
+
+    # The destinations the stream still has to travel past hand a copy to their ramp and pass it on;
+    # the one it reaches last has nowhere to pass it and so is what removes it from the network.
+    low, high = bundle.destinations()
+    terminal = high - 1 if step > 0 else low
+    passing = (low, high - 1) if step > 0 else (low + 1, high)
+    add(passing, [RouteConfig((incoming, ), ('RAMP', outgoing))],
+        FilterConfig(_window_start(variable, first, step, bundle.words), limit1, max_counter))
+    add((terminal, terminal + 1), [RouteConfig((incoming, ), ('RAMP', ))],
+        FilterConfig('0', limit1, max_counter))
+    return collected
+
+
+def _bundle_owners(rectangles: list[Rectangle[PEBlock]],
+                   bundles: dict[str, list[shift_bundles.ShiftBundle]]) -> dict[str, int]:
+    """
+    Picks the rectangle that contributes each bundle's routing.
+
+    A bundle's sources are often declared by several compute blocks, each of which sends the same
+    stream; the configurations only have to be contributed once.
+    """
+    owners: dict[str, int] = {}
+    for rect_index, rect in enumerate(rectangles):
+        sends_recvs = analysis.sends_and_receives(rect.metadata.compute)
+        for declaration in rect.metadata.dataflow.statements:
+            sent, _received = sends_recvs.get(declaration.stream_name, (False, False))
+            group = stream_lifetime.stream_group_key(declaration)
+            if sent and group in bundles:
+                owners.setdefault(group, rect_index)
+    return owners
 
 
 def _stream_use_order(compute: spir.ComputeBlock) -> dict[spir.Identifier, dict[str, tuple[int, int]]]:
@@ -372,7 +521,8 @@ def _offset_expression(axis: str, offset: int) -> str:
 
 def collect_routes(rectangles: list[Rectangle[PEBlock]],
                    color_maps: list[dict[str, int]],
-                   disable_switching: bool = False) -> dict[tuple[int, int], str]:
+                   disable_switching: bool = False,
+                   grid_offset: tuple[int, int] = (0, 0)) -> tuple[dict[tuple[int, int], str], list[str]]:
     """
     Creates a parametric version of the Routing Graph (see the Spatial IR specification for more information) and
     returns a dictionary of code segements to add to the layout CSL file based on the streams.
@@ -386,20 +536,23 @@ def collect_routes(rectangles: list[Rectangle[PEBlock]],
     :param color_maps: Per-rectangle mapping of stream names to colors.
     :param disable_switching: If True, emit each configuration as its own ``@set_color_config``
                               instead of merging them into switch positions.
-    :return: A dictionary mapping the starting point of each rectangle to a string representing the layout instructions.
+    :param grid_offset: Where the PE grid sits in the fabric rectangle, applied to the loop bounds of
+                        standalone sites. Sites belonging to a rectangle inherit it from that
+                        rectangle's loop instead.
+    :return: The layout instructions to place inside each rectangle's loop, keyed by the starting
+             point of the rectangle, together with the standalone loops of the sites that belong to
+             no rectangle.
     """
     INDENT = 12 * ' '
 
-    entries: dict[_RouteSite, list[_RouteEntry]] = {}
-    for rect_index, (rect, color_map) in enumerate(zip(rectangles, color_maps)):
-        for site, entry in _rectangle_route_entries(rect_index, rect, color_map):
-            entries.setdefault(site, []).append(entry)
-
+    entries = _route_sites(rectangles, color_maps)
     _check_site_overlap(entries)
+    _check_filter_budget(entries)
 
     result = {(rect.x_range[0], rect.y_range[0]): '' for rect in rectangles}
+    standalone: list[str] = []
     for site, site_entries in entries.items():
-        site_entries.sort(key=lambda entry: entry.order)
+        color = f'@get_color({site.color})'
 
         # The site is configured from the loop of one rectangle: the one that owns these PEs if
         # there is one, otherwise the first relay that reaches them.
@@ -408,9 +561,8 @@ def collect_routes(rectangles: list[Rectangle[PEBlock]],
         key = (owner_rect.x_range[0], owner_rect.y_range[0])
         x = _offset_expression('pe_x', owner.origin_offset[0])
         y = _offset_expression('pe_y', owner.origin_offset[1])
-        color = f'@get_color({site.color})'
 
-        if disable_switching:
+        if disable_switching and not site.absolute:
             for entry in site_entries:
                 plan = ColorSwitchPlan([entry.config])
                 text = set_color_config(x, y, color, plan, INDENT)
@@ -418,23 +570,93 @@ def collect_routes(rectangles: list[Rectangle[PEBlock]],
                     result[key] += text
             continue
 
-        plan = ColorSwitchPlan()
+        plan = ColorSwitchPlan(filter=_site_filter(site, site_entries))
         for entry in site_entries:
             plan.add(entry.config)
         plan.validate(site.color, site.describe())
-        result[key] += set_color_config(x, y, color, plan, INDENT)
+        if site.absolute:
+            standalone.append(_standalone_site(site, color, plan, grid_offset))
+        else:
+            result[key] += set_color_config(x, y, color, plan, INDENT)
 
-    return result
+    return result, standalone
+
+
+def _site_filter(site: '_RouteSite', site_entries: list['_RouteEntry']) -> FilterConfig | None:
+    """
+    Returns the filter of a site, checking that every configuration contributed to it agrees.
+
+    A filter is a property of the color at a router, not of one route configuration: it cannot be
+    switched along with them.
+    """
+    filters = {entry.filter for entry in site_entries}
+    if len(filters) > 1:
+        raise SyntaxError(
+            f'Color {site.color} at {site.describe()} is given more than one wavelet filter, but a '
+            'router holds one filter per color and it cannot be switched.\n'
+            '  note: give the streams that disagree separate channels, at the cost of an '
+            'additional color')
+    return filters.pop() if filters else None
+
+
+def _standalone_site(site: '_RouteSite', color: str, plan: ColorSwitchPlan,
+                     grid_offset: tuple[int, int]) -> str:
+    """
+    Renders a site that belongs to no rectangle as a layout loop of its own.
+
+    :param grid_offset: Where the PE grid sits in the fabric rectangle.
+    """
+    xb, xe, xs = site.x_range
+    yb, ye, ys = site.y_range
+    body = set_color_config('pe_x', 'pe_y', color, plan, 12 * ' ')
+    return (f'    for (@range(i16, {xb + grid_offset[0]}, {xe + grid_offset[0]}, {xs})) |pe_x| {{\n'
+            f'        for (@range(i16, {yb + grid_offset[1]}, {ye + grid_offset[1]}, {ys})) |pe_y| {{\n'
+            f'{body}'
+            f'        }}\n'
+            f'    }}\n')
+
+
+def _check_filter_budget(entries: dict['_RouteSite', list['_RouteEntry']]) -> None:
+    """
+    Raises a ``SyntaxError`` if some PE would need more wavelet filters than a router has.
+
+    Filters are counted per PE across all colors, which is why sites of *different* colors are
+    compared here -- unlike switch positions, which are a per-color resource. A PE needs one filter
+    per *color* it filters, however many sites of that color it belongs to: the sites of one bundle
+    that carry a filter are disjoint, and two bundles on one color are as well.
+    """
+    colors_per_pe: dict[tuple[int, int], set[int]] = {}
+    for site, site_entries in entries.items():
+        if all(entry.filter is None for entry in site_entries):
+            continue
+        for x in range(*site.x_range):
+            for y in range(*site.y_range):
+                colors_per_pe.setdefault((x, y), set()).add(site.color)
+    for (x, y), colors in colors_per_pe.items():
+        if len(colors) > constants.FILTERS_PER_PE:
+            raise SyntaxError(
+                f'PE ({x}, {y}) would need {len(colors)} wavelet filters (colors '
+                f'{sorted(colors)}), but a PE can use at most {constants.FILTERS_PER_PE} on '
+                f'{constants.ARCH}.\n'
+                '  note: one of the four hardware filters is reserved by the memcpy module\n'
+                '  note: filtered delivery is what lets several streams share a color; using fewer '
+                'channels here needs more filters, and using more channels needs more colors')
 
 
 def _route_sites(rectangles: list[Rectangle[PEBlock]],
                  color_maps: list[dict[str, int]]) -> dict['_RouteSite', list['_RouteEntry']]:
     """
     Collects the route configurations of every site, sorted into switch-position order.
+
+    Sorting is stable, which is what keeps configurations contributed by one statement -- a shift
+    bundle's inject-then-relay pair, whose order is geometric rather than a matter of statement
+    order -- in the sequence they were added in.
     """
+    bundles = shift_bundles.bundles_by_group(shift_bundles.detect_shift_bundles(rectangles))
+    owners = _bundle_owners(rectangles, bundles)
     entries: dict[_RouteSite, list[_RouteEntry]] = {}
     for rect_index, (rect, color_map) in enumerate(zip(rectangles, color_maps)):
-        for site, entry in _rectangle_route_entries(rect_index, rect, color_map):
+        for site, entry in _rectangle_route_entries(rect_index, rect, color_map, bundles, owners):
             entries.setdefault(site, []).append(entry)
     for site_entries in entries.values():
         site_entries.sort(key=lambda entry: entry.order)
@@ -547,8 +769,10 @@ def plan_switch_advances(rectangles: list[Rectangle[PEBlock]]) -> int:
                     advances[site.describe()] = indices[position + 1] - indices[position]
                 elif ring:
                     advances[site.describe()] = total - indices[position]
-                # Otherwise this router is on its last configuration for this color and never routes
-                # anything again, so wavelets passing through may over-advance it harmlessly.
+                # Otherwise this router is on its last position for this color, and outside ring mode
+                # an advance past it is a no-op, so wavelets passing through over-advance it
+                # harmlessly. It is not necessarily finished with the color: a shift bundle's source
+                # keeps relaying its last configuration long after reaching it.
 
             distinct = set(advances.values())
             if not distinct:
@@ -626,10 +850,20 @@ def _check_site_overlap(entries: dict['_RouteSite', list['_RouteEntry']]) -> Non
 
 
 def _rectangle_route_entries(rect_index: int, rect: Rectangle[PEBlock],
-                             color_map: dict[str, int]) -> list[tuple['_RouteSite', '_RouteEntry']]:
+                             color_map: dict[str, int],
+                             bundles: dict[str, list[shift_bundles.ShiftBundle]] | None = None,
+                             bundle_owners: dict[str, int] | None = None
+                             ) -> list[tuple['_RouteSite', '_RouteEntry']]:
     """
     Collects every route configuration a single rectangle contributes, as ``(site, entry)`` pairs.
+
+    :param bundles: The shift bundles of the kernel, keyed by stream group. A stream that is bundled
+                    is routed by :func:`_bundle_route_entries` instead of hop by hop.
+    :param bundle_owners: Which rectangle contributes each bundle, so that a bundle declared by
+                          several sending blocks is only contributed once.
     """
+    bundles = bundles or {}
+    bundle_owners = bundle_owners or {}
     # Test whether a receive/send statement are called for creating inbound/outbound routes
     sends_recvs = analysis.sends_and_receives(rect.metadata.compute)
     use_order = _stream_use_order(rect.metadata.compute)
@@ -664,6 +898,15 @@ def _rectangle_route_entries(rect_index: int, rect: Rectangle[PEBlock],
 
         if isinstance(stream.stream, spir.ExternStreamDeclaration):
             continue  # Extern streams do not have on-chip routing
+
+        if group in bundles:
+            # The whole bundle -- both halves and the relays between them -- is contributed at once,
+            # by one of its sending rectangles, so the receiving side adds nothing here.
+            if sent and bundle_owners.get(group) == rect_index:
+                for bundle in bundles[group]:
+                    collected.extend(_bundle_route_entries(bundle, color_outbound, send_order,
+                                                           rect_index, stream.stream_name))
+            continue
 
         if isinstance(stream.stream, spir.MulticastRangeStreamDeclaration):
             if sent and received:
