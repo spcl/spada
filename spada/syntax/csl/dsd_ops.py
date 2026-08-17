@@ -40,8 +40,8 @@ class DSDOp:
             dsds = copy.copy(dsds)
             dsds[statement.stream_variable.identifier.as_ir()] = dsds[_ident(
                 statement.receive_stream.stream_name).as_ir()]
-        normalized_statement: Optional[spir.AssignmentStatement | spir.SendStatement]
-        if isinstance(statement, (spir.AssignmentStatement, spir.SendStatement)):
+        normalized_statement: Optional[spir.AssignmentStatement | spir.SendStatement | spir.ReceiveStatement]
+        if isinstance(statement, (spir.AssignmentStatement, spir.SendStatement, spir.ReceiveStatement)):
             normalized_statement = statement
         else:
             normalized_statement = get_dsd_statement(dtypes, statement)
@@ -272,15 +272,9 @@ class CopyDSDOp(DSDOp):
         super().__init__()
         self.scalar_input = scalar_input
 
-    def _as_csl(self, statement: spir.AssignmentStatement | spir.SendStatement,
+    def _as_csl(self, statement: spir.AssignmentStatement | spir.SendStatement | spir.ReceiveStatement,
                 dtypes: dict[spir.Identifier, spir.IRType], dsds: UniqueDSDDict) -> str:
-        if isinstance(statement, spir.SendStatement):
-            src = _ident_or_const(statement.local_array)
-            dest = _ident(statement.stream_name)
-        else:
-            assert isinstance(statement.source.value, (spir.ArraySlice, spir.Identifier, spir.ConstantLiteral))
-            src = _ident_or_const(statement.source.value)
-            dest = _ident(statement.destination)
+        src, dest = self._operands(statement)
 
         src_dtype = _get_base_dtype(dtypes, src)
         dtype = _get_base_dtype(dtypes, dest)
@@ -311,7 +305,8 @@ class CopyDSDOp(DSDOp):
             else:
                 raise TypeError(f"Unsupported types for cast operation: {src_dtype}, {dtype}")
 
-        if self.scalar_input:
+        # A receive reads the fabric, which is always a descriptor -- there is no scalar form of it.
+        if self.scalar_input and not isinstance(statement, spir.ReceiveStatement):
             from spada.syntax.csl.statements import emit_expression
             if isinstance(statement, spir.SendStatement):
                 # local_array may be an ArraySlice (e.g. a[k]) or a plain Identifier (e.g. x)
@@ -322,17 +317,24 @@ class CopyDSDOp(DSDOp):
 
         return f'{op}({_dsd(dsds, dest, output=True)}, {_dsd(dsds, src)});'
 
+    def _operands(
+        self, statement: spir.AssignmentStatement | spir.SendStatement | spir.ReceiveStatement
+    ) -> tuple[spir.Identifier | spir.ConstantLiteral, spir.Identifier]:
+        """
+        Returns the ``(source, destination)`` pair the copy moves between.
+        """
+        if isinstance(statement, spir.SendStatement):
+            return _ident_or_const(statement.local_array), _ident(statement.stream_name)
+        if isinstance(statement, spir.ReceiveStatement):
+            return _ident(statement.stream_name), _ident(statement.local_array)
+        assert isinstance(statement.source.value, (spir.ArraySlice, spir.Identifier, spir.ConstantLiteral))
+        return _ident_or_const(statement.source.value), _ident(statement.destination)
+
     def used_dsd_objects(self, statement: spir.AssignmentStatement,
                          dsds: UniqueDSDDict) -> list[cslstruct.DataStructureDescriptor]:
-        if isinstance(statement, spir.SendStatement):
-            src = _ident_or_const(statement.local_array)
-            dest = _ident(statement.stream_name)
-        else:
-            assert isinstance(statement.source.value, (spir.ArraySlice, spir.Identifier, spir.ConstantLiteral))
-            src = _ident_or_const(statement.source.value)
-            dest = _ident(statement.destination)
+        src, dest = self._operands(statement)
 
-        if self.scalar_input:
+        if self.scalar_input and not isinstance(statement, spir.ReceiveStatement):
             return [_dsd_object(dsds, dest, output=True)]
 
         return [_dsd_object(dsds, dest, output=True), _dsd_object(dsds, src)]

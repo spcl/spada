@@ -157,7 +157,7 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice | spir.ConstantLiteral,
     elif isinstance(src_dtype, spir.ScalarType):
         src_dtype = (src_dtype, [])
     else:
-        src_dtype = (src_dtype.element_type, [s.eval() for s in src_dtype.shape])
+        src_dtype = (src_dtype.element_type, [s if isinstance(s, int) else s.eval() for s in src_dtype.shape])
 
     if isinstance(dst_dtype, spir.ArrayType) and isinstance(dst_dtype.base_type, spir.StreamType):
         if dst_dtype.base_type.buffer_size is None:
@@ -167,7 +167,7 @@ def emit_copy(source: spir.Identifier | spir.ArraySlice | spir.ConstantLiteral,
     elif isinstance(dst_dtype, spir.ScalarType):
         dst_dtype = (dst_dtype, [])
     else:
-        dst_dtype = (dst_dtype.element_type, [s.eval() for s in dst_dtype.shape])
+        dst_dtype = (dst_dtype.element_type, [s if isinstance(s, int) else s.eval() for s in dst_dtype.shape])
 
     if src_dtype[0] != dst_dtype[0]:
         raise ValueError(

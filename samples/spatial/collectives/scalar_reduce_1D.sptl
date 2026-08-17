@@ -3,13 +3,10 @@
  * N is the number of PEs in the first row.
  * Root is 0,0
  * Receiving and sending share channel 0, so every middle PE's router switches between the
- * two configurations. See tests/csl_runtime/pending_scalar_reduce_1d.sh
+ * two configurations. See tests/csl_runtime/test_scalar_reduce_1d.sh
  *
- * WARNING: this sample does not compile yet, for a reason unrelated to routing. `await
- * receive(rcv_val, westwards)` targets a scalar, and scalars in place blocks get no DSD, so
- * `emit_copy` falls through to a plain assignment and emits `rcv_val = westwards;` -- a reference
- * to an undeclared identifier. Scalar receives need to lower either to a data task or to a
- * one-element DSD before this runs. The routing itself lowers correctly.
+ * The values travel one at a time: a scalar that receives from a fabric stream is given a
+ * one-element array to live in, which is what the copy's memory descriptor is built from.
  **/
  kernel @reduce<N>(stream<f32, 1>[N] readonly inp, stream<f32, 1> writeonly out) {
 

@@ -1,11 +1,4 @@
 #!/bin/sh
-# NOT RUN YET (named "pending_" so run_tests.sh does not collect it).
-#
-# The routing this exercises lowers correctly -- every middle PE turns its router around on one
-# channel, which now compiles and runs. What blocks the sample is unrelated: `await
-# receive(rcv_val, westwards)` targets a scalar, and scalars in place blocks get no DSD, so
-# emit_copy falls through to a plain assignment and emits `rcv_val = westwards;`, which cslc
-# rejects as an undeclared identifier. Rename back to test_*.sh once scalar receives lower.
 # E2E test: 1D scalar chain reduction over a single channel (scalar_reduce_1D.sptl).
 #
 # Every PE but the last receives a partial sum from the east and sends the accumulated value west,

@@ -1067,6 +1067,49 @@ def test_foreach_receive_op_send_lifting_to_dsd_op():
     assert not data_task_found, "Relay foreach should not be lowered as a data task"
 
 
+def test_scalar_receive_from_fabric_stream_uses_a_descriptor():
+    """
+    A scalar that receives from a fabric stream gets a one-element array to live in.
+
+    Without one there is nothing for the copy's memory descriptor to walk, and the receive used to
+    degrade into an assignment from the stream's name -- which is not a CSL variable at all.
+    """
+    spatial_ir_code = '''
+    kernel @test_scalar_fabric_receive<>() {
+        place u16 i, u16 j in [0:1, 0:1] {
+            f32 local_val;
+            f32 received;
+        }
+        dataflow u16 i, u16 j in [0:1, 0:1] {
+            stream<f32> input = relative_stream(-1, 0) {
+                hops = [(-1, 0)],
+                channel = 0
+            }
+        }
+        compute u16 i, u16 j in [0:1, 0:1] {
+            await receive(received, input);
+            received = received + local_val;
+        }
+    }
+    '''
+
+    kernel = create_inline_spatial_ir(spatial_ir_code)
+    kernel = passes.constexpr_propagation(kernel)
+
+    csl_files = lower_spatial_ir_to_csl(kernel, copy_elision=False)
+
+    assert len(csl_files) > 0
+
+    code = next(f.code for f in csl_files if 'received' in f.code)
+    assert 'var received: [1]f32;' in code, "Scalar receive target was not given a one-element array"
+    assert 'received_dsd = @get_dsd(mem1d_dsd' in code, "No memory descriptor was generated for the target"
+    assert '@fmovs(received_dsd, input_in_dsd' in code, "Receive did not lower to a descriptor copy"
+    assert 'received = input' not in code, "Receive still lowers to an assignment from the stream name"
+    # Every other use stays a scalar access, so it does not pay for a descriptor operation.
+    assert 'received[0] = (received[0] + local_val);' in code
+    assert 'var local_val: f32;' in code, "A scalar that never receives should be left alone"
+
+
 if __name__ == '__main__':
     test_receive_statement_scalar()
     test_receive_statement_array()
