@@ -1,0 +1,122 @@
+// Counted switching by send order, with counter filters at the receivers.
+//
+// M senders at x in [0, M) each ship K f32 words M steps east, to the receiver at x + M. A
+// single switchable color carries all of it, even though the paths overlap pairwise.
+//
+// The senders go east to west -- the one closest to the receivers first. That order is what
+// makes this cheap: a sender injects its own words and only then has to become a relay for
+// the senders west of it, so the hand-over is triggered by an event it knows locally and can
+// signal itself with one SWITCH_ADV. No router has to be switched from a distance, which is
+// the thing a control wavelet cannot do selectively.
+//
+// The receivers never switch. Each one transmits to its ramp *and* onward east, so every
+// receiver's router sees the whole stream and the outermost one terminates it. Which words a
+// receiver keeps is decided by a counter filter, when FILTER != 0.
+//
+// Counter filter semantics, as measured on the simulator (the manual's "(exclusive)" aside
+// notwithstanding, and matching its "reject all wavelets whose active counter is greater
+// than max_counter"):
+//
+//   * the counter starts at init_counter and increments on every data wavelet,
+//   * it wraps to zero after limit1, so it cycles through limit1 + 1 values,
+//   * a wavelet reaches the compute element iff counter <= max_counter.
+//
+// So a window of K words out of a stream of M*K is limit1 = M*K - 1, max_counter = K - 1,
+// and init_counter placing the wanted word at counter zero.
+
+param M: i16;
+param K: i16;
+
+// 0: no filter; every receiver takes all M*K words. Establishes the arrival order.
+// 1: counter filters; every receiver takes only the K words addressed to it.
+param FILTER: i16;
+
+const memcpy = @import_module("<memcpy/get_params>", .{
+    .width = 2 * M,
+    .height = 1,
+});
+
+const CHANNEL: i16 = 1;
+
+const STREAM: i16 = M * K;
+
+// Sends run east to west, so the words from sender q arrive as block M - 1 - q of the
+// stream. Receiver M + q wants that block, so its counter must read zero when the block
+// starts: shift the start of the cycle back by as many words as precede the block.
+fn window_start(q: i16) i16 {
+    return @as(i16, ((q + 1) * K) % STREAM);
+}
+
+layout {
+    @set_rectangle(2 * M, 1);
+
+    for (@range(i16, 0, M, 1)) |x| {
+        @set_tile_code(x, 0, "sender.csl", .{
+            .memcpy_params = memcpy.get_params(x),
+            .stream = STREAM,
+            .words = K,
+            // The westmost sender is the last to send and has nothing to relay for.
+            .hands_over = x > 0,
+        });
+    }
+    for (@range(i16, 0, M, 1)) |q| {
+        @set_tile_code(M + q, 0, "receiver.csl", .{
+            .memcpy_params = memcpy.get_params(M + q),
+            .stream = STREAM,
+            .words = K,
+            .takes = if (FILTER == 0) STREAM else K,
+        });
+    }
+
+    // Senders: inject from the ramp, then relay from the west.
+    @set_color_config(0, 0, @get_color(CHANNEL), .{ .routes = .{ .rx = .{RAMP}, .tx = .{EAST} } });
+    for (@range(i16, 1, M, 1)) |x| {
+        @set_color_config(x, 0, @get_color(CHANNEL), .{
+            .routes = .{ .rx = .{RAMP}, .tx = .{EAST} },
+            .switches = .{ .pos1 = .{ .rx = WEST } },
+        });
+    }
+
+    // Receivers: statically routed, duplicating to the ramp and onward east. The outermost
+    // one terminates the stream instead of running off the east edge, which also makes its
+    // router the thing that removes the words nobody kept.
+    for (@range(i16, 0, M, 1)) |q| {
+        if (FILTER == 0) {
+            if (q == M - 1) {
+                @set_color_config(M + q, 0, @get_color(CHANNEL),
+                                  .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP} } });
+            } else {
+                @set_color_config(M + q, 0, @get_color(CHANNEL),
+                                  .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP, EAST} } });
+            }
+        } else {
+            if (q == M - 1) {
+                @set_color_config(M + q, 0, @get_color(CHANNEL), .{
+                    .routes = .{ .rx = .{WEST}, .tx = .{RAMP} },
+                    .filter = .{
+                        .kind = .{ .counter = true },
+                        .count_data = true,
+                        .init_counter = window_start(q),
+                        .limit1 = STREAM - 1,
+                        .max_counter = K - 1,
+                    },
+                });
+            } else {
+                @set_color_config(M + q, 0, @get_color(CHANNEL), .{
+                    .routes = .{ .rx = .{WEST}, .tx = .{RAMP, EAST} },
+                    .filter = .{
+                        .kind = .{ .counter = true },
+                        .count_data = true,
+                        .init_counter = window_start(q),
+                        .limit1 = STREAM - 1,
+                        .max_counter = K - 1,
+                    },
+                });
+            }
+        }
+    }
+
+    @export_name("val", [*]f32, true);
+    @export_name("got", [*]f32, true);
+    @export_name("main", fn()void);
+}
