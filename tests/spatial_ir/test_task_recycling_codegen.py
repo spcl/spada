@@ -55,6 +55,43 @@ def test_csl_runtime_task_recycling_sample_lowers(filename: str):
     assert '__task_slot_' in combined, 'expected task-ID recycling in generated CSL'
 
 
+def test_data_tasks_install_the_state_of_a_recycled_successor():
+    """A data task handing control to a recycled slot must install that slot's state first.
+
+    Without the assignment the dispatcher runs whichever branch was installed last -- in the
+    bundled Batcher at L=3 that meant a PE silently skipped its comparator and the fabric
+    deadlocked behind the send it never made.
+    """
+    sample = os.path.join(
+        os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort', 'batcher_oddeven_bundled_1D.sptl')
+    kernel = parser.parse_file(sample)
+    kernel = passes.concretize_parameters(kernel, L=3)
+    kernel = passes.constexpr_propagation(kernel)
+
+    csl_files = lower_spatial_ir_to_csl(kernel)
+
+    checked = 0
+    for file in csl_files:
+        code = file.code
+        hardware_ids: dict[str, list[str]] = {}
+        for task_index, hardware_id in re.findall(r'const task_(\d+)_id = @get_local_task_id\((\d+)\)', code):
+            hardware_ids.setdefault(hardware_id, []).append(task_index)
+        recycled = {task for tasks in hardware_ids.values() if len(tasks) > 1 for task in tasks}
+
+        for body in re.findall(r'task dtask_\d+\([^)]*\) void \{(.*?)\n\}', code, re.S):
+            for match in re.finditer(r'@(?:activate|unblock)\(task_(\d+)_id\);', body):
+                if match.group(1) not in recycled:
+                    continue
+                written = [line.strip() for line in body[:match.start()].splitlines() if line.strip()]
+                preceding = written[-1] if written else ''
+                assert re.fullmatch(r'__task_slot_\d+_state = \d+;', preceding), (
+                    f'{file.filename}: @activate(task_{match.group(1)}_id) is not preceded by its '
+                    f'slot state assignment, but by "{preceding}"')
+                checked += 1
+
+    assert checked, 'sample no longer exercises a data task triggering a recycled local task'
+
+
 def test_codegen_avoids_local_task_id_color_overlap():
     path = os.path.join(_CSL_RUNTIME_TASK_RECYCLING_SAMPLES, 'task_color_overlap_many_channels.sptl')
     kernel = parser.parse_file(path)

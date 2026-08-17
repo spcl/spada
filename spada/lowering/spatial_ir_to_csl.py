@@ -514,7 +514,8 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     for i, task in enumerate(tasks):
         if task.task_type != 'data':
             continue
-        _generate_data_task(rect.metadata, i, task, current_code, header, footer, dsds, dtypes, color_map, tasks)
+        _generate_data_task(rect.metadata, i, task, current_code, header, footer, dsds, dtypes, color_map, tasks,
+                            task_bindings)
         footer.write(f'    @bind_data_task(dtask_{i}, dtask_{i}_id);\n')
         if task.blocked:
             footer.write(f'    @block(dtask_{i}_id);\n')
@@ -1360,6 +1361,7 @@ def _generate_data_task(
     dtypes: dict[spir.Identifier, spir.IRType],
     color_map: dict[str, int],
     tasks: list[tdag.CSLTask],
+    task_bindings: task_recycling.TaskBindingPlan,
 ):
     """
     Generates a data task from a foreach loop.
@@ -1373,6 +1375,8 @@ def _generate_data_task(
     :param dtypes: A dictionary mapping identifiers to their defined types.
     :param color_map: Dictionary mapping each stream to its respective color id ({name}_color also works).
     :param tasks: A list of all tasks in the kernel.
+    :param task_bindings: The local-task binding plan, needed to install the state of a recycled
+                          successor slot before handing control to it.
     """
     #   * If index is requested: before unblocking task, set k; inc at end of task
     #   * Wavelet-triggered task as fallback
@@ -1396,7 +1400,12 @@ def _generate_data_task(
             next_task_code = f'@{itedge_code}(exit_task_id);'
         else:
             prefix = "d" if next_task_type == 'data' else ""
-            next_task_code = f'@{itedge_code}({prefix}task_{next_task}_id);'
+            lines = []
+            if next_task_type == 'local':
+                lines.extend(task_bindings.emit_local_transition_preamble(
+                    next_task, tasks[next_task].blocked, indent='').splitlines())
+            lines.append(f'@{itedge_code}({prefix}task_{next_task}_id);')
+            next_task_code = '\n        '.join(lines)
 
         var_dtype_csl = dtype_as_csl(stmt.variables[0].dtype)
         param_range = stmt.parameter_range[0]
