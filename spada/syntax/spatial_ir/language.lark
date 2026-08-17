@@ -116,7 +116,11 @@ subgrid_expression_2d : "[" range_expression "," range_expression "]"
 !direction : "in" | "out"
 hop : "(" posneg_integer_literal "," posneg_integer_literal ")"  // 2D at the moment, might expand
 hops : "[" hop ("," hop)* "]"
-routing : "hops" "=" (auto | hops) "," "channel" "=" (auto | value_expr)
+routing_hops : "hops" "=" (auto | hops)
+routing_channel : "channel" "=" (auto | value_expr)
+routing_count : "count" "=" (auto | value_expr)
+routing_field : routing_hops | routing_channel | routing_count
+routing : routing_field ("," routing_field)*
 multicast_range : "[" range_expression "]"
 relative_stream_declaration : "relative_stream" "(" (value_expr | multicast_range) "," (value_expr | multicast_range) ")" ("{" routing "}")?
 extern_stream_declaration : "extern_stream" "(" direction ")" ("{" routing "}")?

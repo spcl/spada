@@ -40,6 +40,8 @@ def canonicalize_kernel(kernel: spir.Kernel) -> spir.Kernel:
     kernel = canonicalization.reduce_streams(kernel)
     kernel = canonical_subgrids.canonicalize_subgrids(kernel)
     kernel = canonicalization.resolve_auto_hops(kernel)
+    from spada.syntax.spatial_ir.shift_bundles import coalesce_shift_bundles
+    coalesce_shift_bundles(kernel)
     kernel = canonicalization.inline_phases(kernel)
     return kernel
 
@@ -156,6 +158,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
 
     # Collect unique routes for all rectangles
     routes_per_rectangle = _collect_routes(rectangles, color_maps)
+    shift_schedule_code = _emit_shift_schedules(kernel, channel_to_color)
 
     if use_memcpy_mode:
         layout_code.write(f'''
@@ -253,6 +256,9 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
 
     for rinst in routing_instructions:
         layout_code.write(rinst + '\n')
+
+    if shift_schedule_code:
+        layout_code.write(shift_schedule_code)
 
     # Emit symbol names for arguments and kernel
     layout_code.write('\n    // Extern fields\n')
@@ -1236,6 +1242,10 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
             if isinstance(stream.stream, spir.ExternStreamDeclaration):
                 continue  # Extern streams do not have on-chip routing
 
+            if stream.stream.routing is not None and stream.stream.routing.counted_switch:
+                # Counted interval shifts are emitted from kernel.shift_schedules.
+                continue
+
             if isinstance(stream.stream, spir.MulticastRangeStreamDeclaration):
                 if sent and received:
                     raise ValueError(
@@ -1388,6 +1398,64 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
         result[(rect.x_range[0], rect.y_range[0])] = inst
 
     return result
+
+
+def _emit_shift_schedules(kernel: spir.Kernel, channel_to_color: dict[int, int]) -> str:
+    """
+    Emit absolute @set_color_config plus spa_switch_after / spa_color_schedule
+    annotations for counted 1D shift bundles.
+
+    Each color carries one two-state program (one phase). Wave quotas differ
+    across phases, so the same color is never reloaded with a new count.
+    """
+    schedules = getattr(kernel, "shift_schedules", None)
+    if not schedules:
+        return ""
+
+    from collections import defaultdict
+    from spada.syntax.spatial_ir.shift_bundles import ColorSchedule
+
+    by_pe: dict[tuple[int, int, int], list[ColorSchedule]] = defaultdict(list)
+    for sched in schedules:
+        by_pe[(sched.x, sched.y, sched.channel)].append(sched)
+
+    lines = ["\n    // Counted shift-bundle color schedules\n"]
+    seen_config: set[str] = set()
+    for (x, y, channel), pe_scheds in sorted(by_pe.items()):
+        pe_scheds = sorted(pe_scheds, key=lambda s: s.phase_index)
+        if channel not in channel_to_color:
+            continue
+        if len(pe_scheds) > 1:
+            phases = [sched.phase_index for sched in pe_scheds]
+            raise ValueError(
+                f"Color {channel} on PE ({x},{y}) is used in phases {phases}; "
+                "counted switching assigns a distinct color pair per phase "
+                "because wave quotas differ."
+            )
+        color_expr = f"@get_color({channel_to_color[channel]})"
+        sched = pe_scheds[0]
+        step_txt = " ; ".join(
+            f"{step.as_pair()} waves={step.waves}" for step in sched.steps
+        )
+        lines.append(
+            f"    // spa_color_schedule phase={sched.phase_index} pe={x},{y} "
+            f"ch={channel} : {step_txt}\n"
+        )
+        first = sched.steps[0]
+        config = (
+            f"    @set_color_config({x}, {y}, {color_expr}, "
+            f".{{ .routes = .{{ .rx = .{{{first.rx}}}, .tx = .{{{first.tx}}} }} }});\n"
+        )
+        if config not in seen_config:
+            lines.append(config)
+            seen_config.add(config)
+        if len(sched.steps) > 1:
+            nxt = sched.steps[1]
+            lines.append(
+                f"    // spa_switch_after phase={sched.phase_index} pe={x},{y} "
+                f"ch={channel} waves={first.waves} rx={nxt.rx} tx={nxt.tx}\n"
+            )
+    return "".join(lines)
 
 
 def _write_indented_block(current_code: StringIO, block: str, indent: str) -> None:

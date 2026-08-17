@@ -311,11 +311,14 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
             raise TypeError(f'Unexpected block type "{type(block).__name__}" in kernel. Was ``canonicalize_phases`` '
                             'called?')
 
-    return spir.Kernel(
+    new_kernel = spir.Kernel(
         name=kernel.name,
         parameters=copy.deepcopy(kernel.parameters),
         arguments=copy.deepcopy(kernel.arguments),
         body=list(rect_place.values()) + list(rect_dataflow.values()) + list(rect_compute.values()))
+    if hasattr(kernel, "shift_schedules"):
+        new_kernel.shift_schedules = kernel.shift_schedules
+    return new_kernel
 
 
 @dataclass

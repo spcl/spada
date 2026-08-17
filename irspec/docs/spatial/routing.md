@@ -156,6 +156,14 @@ Recall that sending onto the same stream [must be synchronized using completions
 to avoid data races](../spatial#streaming-data-with-send). Hence, sending through the same stream multiple times
 in the same phases is ok as long as the sends (and receives) are correctly synchronized.
 
+When a stream declares an explicit compile-time `count = k`, the compiler may
+serialize overlapping 1D interval shifts onto one channel per direction by
+switching the router after a known number of fabric waves (forward-then-inject
+on the source half, absorb-then-forward on the dest half). That program is
+tied to the wave quotas of this phase, so a later phase with a different
+shift distance uses a distinct color pair. `count = auto` (the default) does
+not enable this: the stream is treated as unbounded.
+
 Keep in mind that PEs transition between phases asynchronously,
 that is, a PE may advance to the next phase before another PE has completed the current phase.
 We exploit here implicitly that routers back-pressure when
