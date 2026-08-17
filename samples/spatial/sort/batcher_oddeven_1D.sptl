@@ -1,0 +1,133 @@
+/**
+ * 1D Batcher odd-even mergesort over N = 2^L PEs, one f32 key per PE.
+ * Ascending: after the network, PE i holds the i-th smallest input.
+ *
+ * Merge stages l = 1 .. L, each of width 2^l. Within stage l:
+ *   p = 1: every PE in each 2^l box compares at dist = 2^{l-1}
+ *   p = 2 .. l: skip box endpoints, compare at dist = 2^{l-p}
+ *
+ * Each drawn comparator is two messages (low -> high, then high -> low).
+ * Lower index keeps min; higher index keeps max.
+ *
+ * Static channel assignment (no router reconfiguration):
+ *   At distance d, the d interleaved matchings (offset r = 0 .. d-1) overlap
+ *   on the 1D mesh, so each (d, r) pair gets its own colors:
+ *     fwd (east,  +d) : channel 2*(((d - 1) + r))
+ *     bwd (west,  -d) : channel 2*(((d - 1) + r)) + 1
+ *   Stages that share the same d reuse those colors (identical hop table).
+ *   Total colors = 2*(N - 1). Intended for small N (e.g. L <= 3).
+ *
+ * Example L=3 (n=8):
+ *   (l=1,p=1) dist 1: (0,1)(2,3)(4,5)(6,7)
+ *   (l=2,p=1) dist 2: (0,2)(1,3)(4,6)(5,7)
+ *   (l=2,p=2) dist 1: (1,2)(5,6)
+ *   (l=3,p=1) dist 4: (0,4)(1,5)(2,6)(3,7)
+ *   (l=3,p=2) dist 2: (2,4)(3,5)
+ *   (l=3,p=3) dist 1: (1,2)(3,4)(5,6)
+ *
+ * Constraints: L >= 1
+ **/
+kernel @batcher_oddeven_1d<L>(
+    stream<f32, 1>[1<<L, 1] readonly  inp,
+    stream<f32, 1>[1<<L, 1] writeonly out
+) {
+    place i16 i, i16 j in [0:1<<L, 0] {
+        f32 val
+        f32 tmp
+    }
+
+    // Load one key per PE.
+    phase {
+        compute i16 i, i16 j in [0:1<<L, 0] {
+            await receive(val, inp[i, j])
+        }
+    }
+
+    for i16 l in [1:L+1] {
+        // p = 1: all PEs participate, dist = 1<<(l-1).
+        // Offset r is one disjoint matching; each r has its own fwd/bwd colors.
+        phase {
+            for i16 r in [0:1<<(l-1)] {
+                dataflow i16 i, i16 j in [r:1<<L:1<<l, 0] {
+                    stream<f32> fwd = relative_stream(1<<(l-1), 0) {
+                        hops = auto,
+                        channel = 2 * (((1<<(l-1)) - 1) + r)
+                    }
+                    stream<f32> bwd = relative_stream(-(1<<(l-1)), 0) {
+                        hops = auto,
+                        channel = (2 * (((1<<(l-1)) - 1) + r)) + 1
+                    }
+                }
+                dataflow i16 i, i16 j in [(r + (1<<(l-1))):1<<L:1<<l, 0] {
+                    stream<f32> fwd = relative_stream(1<<(l-1), 0) {
+                        hops = auto,
+                        channel = 2 * (((1<<(l-1)) - 1) + r)
+                    }
+                    stream<f32> bwd = relative_stream(-(1<<(l-1)), 0) {
+                        hops = auto,
+                        channel = (2 * (((1<<(l-1)) - 1) + r)) + 1
+                    }
+                }
+
+                compute i16 i, i16 j in [r:1<<L:1<<l, 0] {
+                    await send(val, fwd)
+                    await receive(tmp, bwd)
+                    val = tmp if tmp < val else val
+                }
+                compute i16 i, i16 j in [(r + (1<<(l-1))):1<<L:1<<l, 0] {
+                    await receive(tmp, fwd)
+                    await send(val, bwd)
+                    val = tmp if tmp > val else val
+                }
+            }
+        }
+
+        // p = 2 .. l: skip first/last dist PEs of each 2^l box, dist = 1<<(l-p).
+        for i16 p in [2:l+1] {
+            phase {
+                for i16 r in [0:1<<(l-p)] {
+                    for i16 b in [0:1<<L:1<<l] {
+                        dataflow i16 i, i16 j in [(b + ((1<<(l-p)) + r)):((b + (1<<l)) - (1<<(l-p))) + r:2 * (1<<(l-p)), 0] {
+                            stream<f32> fwd = relative_stream(1<<(l-p), 0) {
+                                hops = auto,
+                                channel = 2 * (((1<<(l-p)) - 1) + r)
+                            }
+                            stream<f32> bwd = relative_stream(-(1<<(l-p)), 0) {
+                                hops = auto,
+                                channel = (2 * (((1<<(l-p)) - 1) + r)) + 1
+                            }
+                        }
+                        dataflow i16 i, i16 j in [(b + ((2 * (1<<(l-p))) + r)):(b + (1<<l)) + r:2 * (1<<(l-p)), 0] {
+                            stream<f32> fwd = relative_stream(1<<(l-p), 0) {
+                                hops = auto,
+                                channel = 2 * (((1<<(l-p)) - 1) + r)
+                            }
+                            stream<f32> bwd = relative_stream(-(1<<(l-p)), 0) {
+                                hops = auto,
+                                channel = (2 * (((1<<(l-p)) - 1) + r)) + 1
+                            }
+                        }
+
+                        compute i16 i, i16 j in [(b + ((1<<(l-p)) + r)):((b + (1<<l)) - (1<<(l-p))) + r:2 * (1<<(l-p)), 0] {
+                            await send(val, fwd)
+                            await receive(tmp, bwd)
+                            val = tmp if tmp < val else val
+                        }
+                        compute i16 i, i16 j in [(b + ((2 * (1<<(l-p))) + r)):(b + (1<<l)) + r:2 * (1<<(l-p)), 0] {
+                            await receive(tmp, fwd)
+                            await send(val, bwd)
+                            val = tmp if tmp > val else val
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Write sorted keys back to the host.
+    phase {
+        compute i16 i, i16 j in [0:1<<L, 0] {
+            await send(val, out[i, j])
+        }
+    }
+}

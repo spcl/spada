@@ -102,8 +102,9 @@ Sample SPADA programs are in `samples/`:
 | `samples/advanced_stencils.py` | GT4Py definitions for horizontal diffusion kernels |
 | `samples/benchmarks/` | Pre-compiled `.spst`/`.sptl` pairs for five kernels at five domain sizes |
 | `samples/spatial/simple/` | Basic single-PE and streaming operations: `add`, `copy`, `forward_sum`, `backward_sum`, `mult_scalar`, `streaming_copy` |
-| `samples/spatial/blas/` | Dense linear algebra: `axpy`, `matvec`, `gemv`, `gemv_twophase` |
+| `samples/spatial/blas/` | Linear algebra: `axpy`, `matvec`, `gemv`, `gemv_twophase`, `spmv` |
 | `samples/spatial/collectives/` | Reductions (`scalar`, `chain`, `tree`, `twophase` in 1D/2D) and broadcasts (`broadcast_1D`, `broadcast_2D`, and multicast variants) |
+| `samples/spatial/sort/` | Sorting networks: `batcher_oddeven_1D` |
 | `samples/spatial/stencils/` | Stencil examples: `laplacian` (high-level) and `laplacian_routed` (explicit routing) |
 | `samples/spst/` | Stencil IR examples |
 

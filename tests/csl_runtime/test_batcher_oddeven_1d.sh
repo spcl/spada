@@ -1,0 +1,49 @@
+#!/bin/sh
+# E2E test: 1D Batcher odd-even mergesort (2^L PEs, one f32 key per PE).
+# Kernel: batcher_oddeven_1D.sptl  params: L
+# Reference: OUT_out[:, 0, 0] == sort(inp[:, 0, 0])
+# Tested with L ∈ {1, 2, 3}.
+
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/_lib.sh"
+
+SORT_DIR="$(cd "$(dirname "$0")/../../samples/spatial/sort" && pwd)"
+FOLDER="batcher_oddeven_1d_sptl"
+
+run_batcher() {
+    l=$1
+    echo "--- batcher_oddeven_1d L=$l ---"
+
+    sptlc "$SORT_DIR/batcher_oddeven_1D.sptl" "$FOLDER" -p L=$l
+
+    python3 - <<PYEOF
+import numpy as np
+np.random.seed(42)
+n = 1 << $l
+inp = np.random.rand(n, 1, 1).astype(np.float32)
+np.save('inp.npy', inp)
+PYEOF
+
+    timeout -s 9 120 cs_python "$RUNTIME_PY" "$FOLDER" inp.npy --benchmark
+
+    python3 - <<PYEOF
+import numpy as np, sys
+n = 1 << $l
+inp = np.load('inp.npy').reshape(n)
+out = np.load('OUT_out.npy').reshape(n)
+ref = np.sort(inp)
+if not np.allclose(out, ref, atol=1e-6):
+    print(f"FAILED L=$l: max abs diff = {float(np.max(np.abs(out - ref))):.3e}")
+    print(f"  expected: {ref}")
+    print(f"  got:      {out}")
+    sys.exit(1)
+print(f"Passed L=$l: output matches sorted input.")
+PYEOF
+
+    rm -rf "$FOLDER" inp.npy OUT_out.npy
+}
+
+run_batcher 1
+run_batcher 2
+run_batcher 3
