@@ -35,6 +35,8 @@ kernel @spmv<PX, PY, K, NZ>(
         f32[NZ] A_val     // COO nonzero values (zero-padded)
         i16[NZ] A_row     // COO row indices
         i16[NZ] A_col     // COO column indices
+        i16 tmp
+        i16 tmp2
         f32[K]  x         // x chunk for this PE column (populated by multicast)
         f32[K]  z         // local partial result; accumulated during reduction
         f32[K]  y_block   // y chunk; read from host, used only at i=0
@@ -82,11 +84,13 @@ kernel @spmv<PX, PY, K, NZ>(
     // Phase 4: Local COO SpMV: z[A_row[p]] += A_val[p] * x[A_col[p]].
     phase {
         compute i16 i, i16 j in [0:PX, 0:PY] {
-            for i16 k in [0:K] {
+            await map i16 k in [0:K] {
                 z[k] = 0.0
             }
             for i16 p in [0:NZ] {
-                z[A_row[p]] = z[A_row[p]] + A_val[p] * x[A_col[p]]
+                tmp = A_row[p]
+                tmp2 = A_col[p]
+                z[tmp] = z[tmp] + A_val[p] * x[tmp2]
             }
         }
     }
@@ -131,7 +135,7 @@ kernel @spmv<PX, PY, K, NZ>(
             await foreach i16 k, f32 v in [0:K], receive(green) {
                 z[k] = z[k] + v
             }
-            for i16 k in [0:K] {
+            await map i16 k in [0:K] {
                 z[k] = alpha * z[k] + beta * y_block[k]
             }
             await send(z, out[i, j])
