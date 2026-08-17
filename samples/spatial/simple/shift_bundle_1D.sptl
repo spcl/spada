@@ -1,0 +1,56 @@
+/**
+ * Counted 1D interval shift, and nothing else.
+ *
+ * 2M PEs on a line. Sources [0:M) each send one f32 to dest M steps east.
+ * Dest i+M overwrites its value with the word from i. Sources keep theirs.
+ *
+ * Overlapping paths share one eastbound color. A WSE color holds a single
+ * (rx, tx) pair at a time; the compiler sequences two pairs with a counted
+ * switch (forward-then-inject on the source half, absorb-then-forward on
+ * the dest half). There is no westbound stream, no CAS, and no d=1 stage.
+ *
+ * Constraints: M >= 2 (M=1 is a static hop; no overlap).
+ **/
+kernel @shift_bundle_1d<M>(
+    stream<f32, 1>[2 * M, 1] readonly  inp,
+    stream<f32, 1>[2 * M, 1] writeonly out
+) {
+    place i16 i, i16 j in [0:2 * M, 0] {
+        f32 val
+    }
+
+    phase {
+        compute i16 i, i16 j in [0:2 * M, 0] {
+            await receive(val, inp[i, j])
+        }
+    }
+
+    phase {
+        dataflow i16 i, i16 j in [0:M, 0] {
+            stream<f32> fwd = relative_stream(M, 0) {
+                hops = auto,
+                channel = auto,
+                count = 1
+            }
+        }
+        dataflow i16 i, i16 j in [M:2 * M, 0] {
+            stream<f32> fwd = relative_stream(M, 0) {
+                hops = auto,
+                channel = auto,
+                count = 1
+            }
+        }
+        compute i16 i, i16 j in [0:M, 0] {
+            await send(val, fwd)
+        }
+        compute i16 i, i16 j in [M:2 * M, 0] {
+            await receive(val, fwd)
+        }
+    }
+
+    phase {
+        compute i16 i, i16 j in [0:2 * M, 0] {
+            await send(val, out[i, j])
+        }
+    }
+}

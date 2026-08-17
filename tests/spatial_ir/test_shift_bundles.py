@@ -387,7 +387,8 @@ def test_lowering_encodes_intra_phase_switch():
         layout,
     )
     assert ".pos1 = .{ .rx = RAMP }" in layout
-    assert ".pop_mode = .{ .always_pop = true }" in layout
+    assert ".pop_mode = .{ .pop_on_advance_nop = true }" in layout
+    assert ".pop_mode = .{ .no_pop = true }" in layout
     # PE 4: absorb 1 wave W→R, then switch to forward W→E.
     assert re.search(
         r"@set_color_config\(4, 0, @get_color\(0\), "
@@ -449,3 +450,67 @@ def test_batcher_lowering_two_colors_per_phase():
             rx = short.get(pair.group(1), pair.group(1))
             tx = short.get(pair.group(2), pair.group(2))
             assert switches[key] == (first_waves, rx, tx)
+
+
+_SAMPLE_SHIFT = os.path.join(
+    os.path.dirname(__file__), "..", "..", "samples", "spatial", "simple", "shift_bundle_1D.sptl"
+)
+
+_DUAL_PORT = re.compile(
+    r"\.(?:rx|tx) = \.\{[A-Z]+, [A-Z]+\}"
+)
+_ABS_COLOR_CONFIG = re.compile(
+    r"@set_color_config\((\d+), (\d+), @get_color\((\d+)\),"
+)
+
+
+def _sample_shift(m: int = 4):
+    kernel = parser.parse_file(_SAMPLE_SHIFT)
+    kernel = passes.concretize_parameters(kernel, M=m)
+    kernel = passes.constexpr_propagation(kernel)
+    return kernel
+
+
+def test_sample_shift_bundle_is_one_eastbound_color():
+    kernel = _prepare(open(_SAMPLE_SHIFT).read(), M=4)
+    bundles = detect_shift_bundles(kernel)
+    assert len(bundles) == 1
+    b = bundles[0]
+    assert (b.start, b.length, b.dist, b.sign, b.axis, b.count) == (0, 4, 4, 1, "x", 1)
+    coalesce_shift_bundles(kernel)
+    routed = [chans for chans in _onchip_channels_by_phase(kernel) if chans]
+    assert routed == [{0}]
+
+
+def test_sample_shift_bundle_one_rx_tx_pair_at_a_time():
+    """A color installs one (rx, tx) pair; pos1 changes rx or tx, never both."""
+    kernel = _prepare(open(_SAMPLE_SHIFT).read(), M=4)
+    bundle = detect_shift_bundles(kernel)[0]
+    for sched in schedule_counted_switch(bundle):
+        assert 1 <= len(sched.steps) <= 2
+        for step in sched.steps:
+            assert step.rx in {"RAMP", "WEST", "EAST"}
+            assert step.tx in {"RAMP", "WEST", "EAST"}
+            assert step.rx != step.tx
+        if len(sched.steps) == 2:
+            first, second = sched.steps
+            changed_rx = first.rx != second.rx
+            changed_tx = first.tx != second.tx
+            assert changed_rx ^ changed_tx, (
+                f"PE ({sched.x},{sched.y}) changes both rx and tx: "
+                f"{first.as_pair()} then {second.as_pair()}"
+            )
+
+
+def test_sample_shift_bundle_layout_does_not_union_ports():
+    kernel = _sample_shift(4)
+    files = lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
+    layout = next(f.code for f in files if "layout" in f.filename)
+    assert _DUAL_PORT.search(layout) is None
+    keys = _ABS_COLOR_CONFIG.findall(layout)
+    assert keys
+    assert len(keys) == len(set(keys)), f"duplicate (PE, color) configs: {keys}"
+    assert "spa_switch_after" in layout
+    assert ".pos1 = .{ .rx = RAMP }" in layout
+    assert ".pos1 = .{ .tx = EAST }" in layout
+    simulate_bundle_delivery(detect_shift_bundles(_prepare(open(_SAMPLE_SHIFT).read(), M=4))[0])

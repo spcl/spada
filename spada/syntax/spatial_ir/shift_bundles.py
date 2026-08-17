@@ -298,7 +298,10 @@ _MAX_SWITCH_CMDS = 8
 
 
 def switch_advance_for_bundle(bundle: ShiftBundle) -> SwitchAdvance:
-    """Build the always_pop opcode chain for one interval shift of distance ``d``."""
+    """Build the opcode chain popped by each downstream hop (distance ``d``).
+
+    The injecting PE uses ``no_pop``, so the first opcode is for its neighbor.
+    """
     d = bundle.dist
     if d > _MAX_SWITCH_CMDS:
         raise ValueError(

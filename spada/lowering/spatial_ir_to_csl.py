@@ -1446,16 +1446,24 @@ def _emit_shift_schedules(kernel: spir.Kernel, channel_to_color: dict[int, int])
             f"ch={channel} : {step_txt}\n"
         )
         first = sched.steps[0]
-        switch_fields = [".pop_mode = .{ .always_pop = true }"]
-        if len(sched.steps) > 1:
-            nxt = sched.steps[1]
-            pos1 = _pos1_field(first, nxt)
-            if pos1 is not None:
-                switch_fields.insert(0, f".pos1 = .{{ {pos1} }}")
-            lines.append(
-                f"    // spa_switch_after phase={sched.phase_index} pe={x},{y} "
-                f"ch={channel} waves={first.waves} rx={nxt.rx} tx={nxt.tx}\n"
-            )
+        inject_only = first.rx == "RAMP" and len(sched.steps) == 1
+        if inject_only:
+            # The sender's router sees the control wavelet on RAMP. always_pop
+            # would consume the first opcode before it reaches downstream PEs.
+            switch_fields = [".pop_mode = .{ .no_pop = true }"]
+        else:
+            # Pop ADV on a real switch and NOP on pass-through hops; do not pop
+            # SWITCH_ADV after this PE has already reached pos1 (later inject).
+            switch_fields = [".pop_mode = .{ .pop_on_advance_nop = true }"]
+            if len(sched.steps) > 1:
+                nxt = sched.steps[1]
+                pos1 = _pos1_field(first, nxt)
+                if pos1 is not None:
+                    switch_fields.insert(0, f".pos1 = .{{ {pos1} }}")
+                lines.append(
+                    f"    // spa_switch_after phase={sched.phase_index} pe={x},{y} "
+                    f"ch={channel} waves={first.waves} rx={nxt.rx} tx={nxt.tx}\n"
+                )
         config = (
             f"    @set_color_config({x}, {y}, {color_expr}, "
             f".{{ .routes = .{{ .rx = .{{{first.rx}}}, .tx = .{{{first.tx}}} }}, "
