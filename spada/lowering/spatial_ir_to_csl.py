@@ -1007,6 +1007,50 @@ def _collect_unique_dsds(
             output_queue_of[key] = csl.OUTPUT_QUEUE_IDS[output_queue_id_ctr % len(csl.OUTPUT_QUEUE_IDS)]
             output_queue_id_ctr += 1
         return output_queue_of[key]
+
+    def _visit_foreach(stmt: spir.ForeachStatement) -> None:
+        """
+        Registers the fabric input DSD for a ``foreach`` that draws from a stream.
+
+        An array ``receive`` is canonicalized into one of these (see ``_BulkCommunicationLowerer``),
+        so this is the path every bulk receive takes -- including one nested inside a sequential
+        ``for``, which is why this is a function rather than inline in the statement walk below.
+        """
+        # If the foreach statement has a stream generator, it is a DSD
+        # unless only the receive generator is given (streaming, no range provided).
+        stream_name = (
+            stmt.receive_stream.stream_name.array
+            if isinstance(stmt.receive_stream.stream_name, spir.ArraySlice) else stmt.receive_stream.stream_name)
+        if not stmt.parameter_range:
+            if stream_name not in stream_args:
+                raise SyntaxError(f'Foreach generator "{stream_name.as_ir()}" without a defined '
+                                  f'range must only be used with a kernel argument or extern_stream.'
+                                  f'\n  In line {stmt.lineinfo}')
+            # A data task will be created instead (handled in _generate_data_task)
+            return
+        if stream_name.as_ir() not in stream_candidates:
+            return
+        if memcpy_mode and stream_name in stream_args:
+            # If memcpy mode is enabled, the stream contents will have already been copied to the PE
+            dsd = _dsd_from_stream(stream_candidates, stream_name)
+            dsds[stream_name.as_ir()].append((f"{name_to_csl(stream_name)}_dsd", dsd))
+            return
+        dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
+        extents = stream_candidates[stream_name.as_ir()][1]
+        if extents is not None:  # Use buffer size
+            extents = extents if isinstance(extents, int) else extents.eval()
+        else:  # Infer from foreach range
+            if len(stmt.parameter_range) != 1:
+                raise SyntaxError(
+                    f'Expected one-dimensional foreach range for stream "{stream_name.as_ir()}", '
+                    f'got {stmt.parameter_range}.\n  In line {stmt.lineinfo}')
+            start, end, step = (stmt.parameter_range[0].start, stmt.parameter_range[0].stop,
+                                stmt.parameter_range[0].step)
+            extents = (end.eval() - start.eval()) // (step.eval() if step is not None else 1)
+        fabric_color = f'{name_to_csl(stream_name)}_color'
+        dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents, allocate_input_queue(stream_name))
+        dsds[stream_name.as_ir()].append((dsd_name, dsd))
+
     for stmt in rect.compute.statements:
         # Find out if compute block uses this stream for receive/send
         if isinstance(stmt, (spir.ReceiveStatement, spir.SendStatement)):
@@ -1078,40 +1122,7 @@ def _collect_unique_dsds(
                         dsds[arr.as_ir()].append((f"{name_to_csl(arr)}_dsd", dsd))
 
         elif isinstance(stmt, spir.ForeachStatement):
-            # If the foreach statement has a stream generator, it is a DSD
-            # unless only the receive generator is given (streaming, no range provided).
-            stream_name = (
-                stmt.receive_stream.stream_name.array
-                if isinstance(stmt.receive_stream.stream_name, spir.ArraySlice) else stmt.receive_stream.stream_name)
-            if not stmt.parameter_range:
-                if stream_name not in stream_args:
-                    raise SyntaxError(f'Foreach generator "{stream_name.as_ir()}" without a defined '
-                                      f'range must only be used with a kernel argument or extern_stream.'
-                                      f'\n  In line {stmt.lineinfo}')
-                # A data task will be created instead (handled in _generate_data_task)
-            else:
-                if stream_name.as_ir() in stream_candidates:
-                    if memcpy_mode and stream_name in stream_args:
-                        # If memcpy mode is enabled, the stream contents will have already been copied to the PE
-                        dsd = _dsd_from_stream(stream_candidates, stream_name)
-                        dsds[stream_name.as_ir()].append((f"{name_to_csl(stream_name)}_dsd", dsd))
-                    else:
-                        dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
-                        extents = stream_candidates[stream_name.as_ir()][1]
-                        if extents is not None:  # Use buffer size
-                            extents = extents if isinstance(extents, int) else extents.eval()
-                        else:  # Infer from foreach range
-                            if len(stmt.parameter_range) != 1:
-                                raise SyntaxError(
-                                    f'Expected one-dimensional foreach range for stream "{stream_name.as_ir()}", got {stmt.parameter_range}.\n  In line {stmt.lineinfo}'
-                                )
-                            start, end, step = stmt.parameter_range[0].start, stmt.parameter_range[
-                                0].stop, stmt.parameter_range[0].step
-                            extents = (end.eval() - start.eval()) // (step.eval() if step is not None else 1)
-                        fabric_color = f'{name_to_csl(stream_name)}_color'
-                        dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents,
-                                                  allocate_input_queue(stream_name))
-                        dsds[stream_name.as_ir()].append((dsd_name, dsd))
+            _visit_foreach(stmt)
 
         def _visit_nested_send(substmt: spir.SendStatement):
             if substmt.stream_name.as_ir() not in stream_candidates:
@@ -1162,13 +1173,36 @@ def _collect_unique_dsds(
             dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_input_queue(stream_name))
             dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
+        def _visit_local_array(operand):
+            """
+            Registers the memory DSD for the local side of a nested transfer.
+
+            A top-level send gets this from the explicit walk over ``stmt.local_array`` above; a
+            nested one is only reached through the visitor, which stops at the statement and never
+            descends to the operand.
+            """
+            name = operand.identifier if isinstance(operand, spir.TypedIdentifier) else operand
+            if not isinstance(name, spir.Identifier):
+                return
+            if name.as_ir() not in array_candidates or name.as_ir() in dsds:
+                return
+            dsds[name.as_ir()].append((f"{name_to_csl(name)}_dsd", _dsd_from_array(array_candidates, name)))
+
         def _visit_dsd(substmt, in_scope, in_assignment):
+            if isinstance(substmt, spir.ForeachStatement):
+                # Only reached for a foreach nested inside a sequential ``for``; a top-level one is
+                # registered by the statement walk above.
+                if in_scope:
+                    _visit_foreach(substmt)
+                return
             if isinstance(substmt, spir.SendStatement) and in_scope:
                 _visit_nested_send(substmt)
+                _visit_local_array(substmt.local_array)
                 return
             if isinstance(substmt, spir.ReceiveStatement):
                 if in_scope:
                     _visit_nested_receive(substmt)
+                    _visit_local_array(substmt.local_array)
                 return
             if (isinstance(substmt, spir.Identifier) and substmt.as_ir() in array_candidates and
                     substmt.as_ir() not in dsds):
@@ -1230,6 +1264,10 @@ class DSDVisitor(spir.NodeVisitor):
         super().__init__()
 
     def visit_ForeachStatement(self, node: spir.ForeachStatement):
+        # Nested inside a sequential ``for``, this foreach is not visited by the statement walk that
+        # registers stream DSDs, so report it here. ``in_for`` is false at the top level, where that
+        # walk has already handled it.
+        self.callback(node, self.in_for, self.in_assignment)
         old_scope = self.in_foreach
         self.in_foreach = True
         self.generic_visit(node)
@@ -1247,16 +1285,28 @@ class DSDVisitor(spir.NodeVisitor):
         self.generic_visit(node)
         self.in_for = old_scope
 
+    @property
+    def in_transfer_scope(self) -> bool:
+        """
+        Whether a send or receive here transfers a whole array and so needs a fabric DSD.
+
+        A sequential ``for`` counts: it lowers to a real CSL loop, and each iteration moves the
+        whole local array, exactly as one outside the loop would. Element accesses do *not* count
+        (see :meth:`visit_Identifier`) -- ``a[k]`` inside a sequential loop is one element per
+        iteration, which is a scalar access and not a DSD.
+        """
+        return self.in_foreach or self.in_map or self.in_for
+
     def visit_Identifier(self, node: spir.Identifier):
         self.callback(node, self.in_foreach or self.in_map, self.in_assignment)
         return
 
     def visit_SendStatement(self, node: spir.SendStatement):
-        self.callback(node, self.in_foreach or self.in_map, self.in_assignment)
+        self.callback(node, self.in_transfer_scope, self.in_assignment)
         return
 
     def visit_ReceiveStatement(self, node: spir.ReceiveStatement):
-        self.callback(node, self.in_foreach or self.in_map, self.in_assignment)
+        self.callback(node, self.in_transfer_scope, self.in_assignment)
         return
 
     def visit_ArraySlice(self, node: spir.ArraySlice):
