@@ -23,11 +23,13 @@ class DSDOp:
                              async_target: Optional[AsyncTarget]) -> str:
         if async_target is None:
             return base
-        if any(isinstance(dsd, cslstruct.FabricDSD) for dsd in dsd_objects):
+        # CSL allows .async only when every operand is a DSD/DSR. A scalar
+        # source (CopyDSDOp.scalar_input) must complete synchronously, then
+        # activate/unblock the next task.
+        fabric_async = any(isinstance(dsd, cslstruct.FabricDSD) for dsd in dsd_objects)
+        if fabric_async and not getattr(self, 'scalar_input', False):
             return f'{base[:-2]}, .{{ .async = true, .{async_target.inter_task_edge} = {async_target.target_task} }});'
-        else:
-            # Pure Memory DSD operations are synchronous
-            return f'{base}\n@{async_target.inter_task_edge}({async_target.target_task});'
+        return f'{base}\n@{async_target.inter_task_edge}({async_target.target_task});'
 
     def as_csl(self,
                statement: spir.Statement,

@@ -10,6 +10,7 @@ from spada.syntax.spatial_ir.shift_bundles import (
     detect_shift_bundles,
     schedule_counted_switch,
     coalesce_shift_bundles,
+    switch_advance_for_bundle,
 )
 
 
@@ -40,6 +41,13 @@ kernel @shift_k<N>(
     }
     phase {
         dataflow i16 i, i16 j in [0:4, 0] {
+            stream<f32> fwd = relative_stream(4, 0) {
+                hops = auto,
+                channel = auto,
+                count = 1
+            }
+        }
+        dataflow i16 i, i16 j in [4:8, 0] {
             stream<f32> fwd = relative_stream(4, 0) {
                 hops = auto,
                 channel = auto,
@@ -115,6 +123,9 @@ def test_schedule_source_and_dest_halves():
     assert [(st.rx, st.tx, st.waves) for st in by_pe[(3, 0)]] == [("WEST", "EAST", 3), ("RAMP", "EAST", 1)]
     assert [(st.rx, st.tx, st.waves) for st in by_pe[(4, 0)]] == [("WEST", "RAMP", 1), ("WEST", "EAST", 3)]
     assert [(st.rx, st.tx, st.waves) for st in by_pe[(7, 0)]] == [("WEST", "RAMP", 1)]
+    adv = switch_advance_for_bundle(bundle)
+    assert adv.last_injector == 3
+    assert adv.opcodes == ("SWITCH_ADV", "NOP", "NOP", "SWITCH_ADV")
 
 
 def test_westbound_schedule():
@@ -340,6 +351,24 @@ def test_batcher_two_colors_per_phase_not_globally():
     assert set(used) == set(range(12))
 
 
+def test_batcher_scalar_receive_lowers_to_data_task():
+    path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "samples", "spatial", "sort", "batcher_oddeven_1D.sptl"
+    )
+    kernel = parser.parse_file(path)
+    kernel = passes.concretize_parameters(kernel, L=1)
+    kernel = passes.constexpr_propagation(kernel)
+    files = lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
+    pe_codes = [f.code for f in files if "code_" in f.filename]
+    assert pe_codes
+    for code in pe_codes:
+        assert "tmp = bwd" not in code
+        assert ".async = true" not in code
+    pe0 = next(f.code for f in files if "code_0_0" in f.filename)
+    assert "task dtask_" in pe0
+    assert "tmp = __x" in pe0
+
+
 def test_lowering_encodes_intra_phase_switch():
     kernel = parser.parse_string(_SHIFT)
     kernel = passes.concretize_parameters(kernel, N=8)
@@ -350,23 +379,30 @@ def test_lowering_encodes_intra_phase_switch():
     # PE 1: forward 1 wave W→E, then switch to inject R→E.
     assert re.search(
         r"@set_color_config\(1, 0, @get_color\(0\), "
-        r"\.\{ \.routes = \.\{ \.rx = \.\{WEST\}, \.tx = \.\{EAST\} \} \}\)",
+        r"\.\{ \.routes = \.\{ \.rx = \.\{WEST\}, \.tx = \.\{EAST\} \}",
         layout,
     )
     assert re.search(
         r"spa_switch_after phase=\d+ pe=1,0 ch=0 waves=1 rx=RAMP tx=EAST",
         layout,
     )
+    assert ".pos1 = .{ .rx = RAMP }" in layout
+    assert ".pop_mode = .{ .always_pop = true }" in layout
     # PE 4: absorb 1 wave W→R, then switch to forward W→E.
     assert re.search(
         r"@set_color_config\(4, 0, @get_color\(0\), "
-        r"\.\{ \.routes = \.\{ \.rx = \.\{WEST\}, \.tx = \.\{RAMP\} \} \}\)",
+        r"\.\{ \.routes = \.\{ \.rx = \.\{WEST\}, \.tx = \.\{RAMP\} \}",
         layout,
     )
     assert re.search(
         r"spa_switch_after phase=\d+ pe=4,0 ch=0 waves=1 rx=WEST tx=EAST",
         layout,
     )
+    assert ".pos1 = .{ .tx = EAST }" in layout
+    pe0 = next(f.code for f in files if "code_0_0" in f.filename)
+    assert "ctrl.opcode.SWITCH_ADV" in pe0
+    assert "encode_payload" in pe0
+    assert "get_fabric_coord" in pe0
 
 
 def test_batcher_lowering_two_colors_per_phase():

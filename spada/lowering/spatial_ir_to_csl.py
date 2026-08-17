@@ -369,6 +369,8 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
             raise ValueError(f"Error in {e.args[0].lineinfo}. Undefined identifier \"{e.args[0].as_ir()}\".")
         raise
 
+    stream_to_adv = _bind_switch_advances(rect.metadata, kernel, dsds, header)
+
     # Fuse tasks as much as possible to reduce number of resources
     if task_fusion:
         orig_len = 0
@@ -441,6 +443,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
                         task_bindings,
                         benchmark_code.kernel_postamble,
                         indent='        ',
+                        stream_to_adv=stream_to_adv,
                     )
                 except KeyError as e:
                     identifier = e.args[0]
@@ -469,6 +472,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
                     task_bindings,
                     benchmark_code.kernel_postamble,
                     indent='    ',
+                    stream_to_adv=stream_to_adv,
                 )
             except KeyError as e:
                 identifier = e.args[0]
@@ -1402,11 +1406,11 @@ def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[
 
 def _emit_shift_schedules(kernel: spir.Kernel, channel_to_color: dict[int, int]) -> str:
     """
-    Emit absolute @set_color_config plus spa_switch_after / spa_color_schedule
-    annotations for counted 1D shift bundles.
+    Emit absolute @set_color_config with fabric switch pos1 for counted 1D
+    shift bundles, plus spa_switch_after / spa_color_schedule comments.
 
-    Each color carries one two-state program (one phase). Wave quotas differ
-    across phases, so the same color is never reloaded with a new count.
+    Each color carries one two-state program (one phase). Downstream routers
+    advance from pos0 to pos1 on a SWITCH_ADV control wavelet.
     """
     schedules = getattr(kernel, "shift_schedules", None)
     if not schedules:
@@ -1442,20 +1446,38 @@ def _emit_shift_schedules(kernel: spir.Kernel, channel_to_color: dict[int, int])
             f"ch={channel} : {step_txt}\n"
         )
         first = sched.steps[0]
-        config = (
-            f"    @set_color_config({x}, {y}, {color_expr}, "
-            f".{{ .routes = .{{ .rx = .{{{first.rx}}}, .tx = .{{{first.tx}}} }} }});\n"
-        )
-        if config not in seen_config:
-            lines.append(config)
-            seen_config.add(config)
+        switch_fields = [".pop_mode = .{ .always_pop = true }"]
         if len(sched.steps) > 1:
             nxt = sched.steps[1]
+            pos1 = _pos1_field(first, nxt)
+            if pos1 is not None:
+                switch_fields.insert(0, f".pos1 = .{{ {pos1} }}")
             lines.append(
                 f"    // spa_switch_after phase={sched.phase_index} pe={x},{y} "
                 f"ch={channel} waves={first.waves} rx={nxt.rx} tx={nxt.tx}\n"
             )
+        config = (
+            f"    @set_color_config({x}, {y}, {color_expr}, "
+            f".{{ .routes = .{{ .rx = .{{{first.rx}}}, .tx = .{{{first.tx}}} }}, "
+            f".switches = .{{ {', '.join(switch_fields)} }} }});\n"
+        )
+        if config not in seen_config:
+            lines.append(config)
+            seen_config.add(config)
     return "".join(lines)
+
+
+def _pos1_field(first, nxt) -> str | None:
+    """CSL pos1 may set only rx or only tx; the two-state lemma changes one."""
+    if first.rx != nxt.rx and first.tx == nxt.tx:
+        return f".rx = {nxt.rx}"
+    if first.tx != nxt.tx and first.rx == nxt.rx:
+        return f".tx = {nxt.tx}"
+    if first.rx == nxt.rx and first.tx == nxt.tx:
+        return None
+    raise ValueError(
+        f"Counted switch pos1 must change only rx or only tx, got {first} -> {nxt}"
+    )
 
 
 def _write_indented_block(current_code: StringIO, block: str, indent: str) -> None:
@@ -1547,6 +1569,86 @@ def _generate_data_task(
     current_code.write(f"\n}}\n")
 
 
+def _bind_switch_advances(pe_block: PEBlock, kernel: spir.Kernel, dsds: UniqueDSDDict,
+                          header: StringIO) -> dict[str, tuple]:
+    """
+    Map counted-switch send streams to their SWITCH_ADV program and emit
+    control-wavelet DSDs plus encoded payloads into ``header``.
+    """
+    from spada.syntax.spatial_ir.shift_bundles import SwitchAdvance
+
+    advances: list[SwitchAdvance] = getattr(kernel, "switch_advances", None) or []
+    if not advances or pe_block.dataflow is None:
+        return {}
+    by_channel = {adv.channel: adv for adv in advances}
+    stream_to_adv: dict[str, tuple] = {}
+    for stmt in pe_block.dataflow.statements:
+        routing = getattr(stmt.stream, "routing", None)
+        if routing is None or not routing.counted_switch:
+            continue
+        adv = by_channel.get(routing.channel)
+        if adv is None:
+            continue
+        key = stmt.stream_name.as_ir()
+        out_name, out_dsd = _fabout_dsd(dsds, key)
+        if out_dsd is None:
+            continue
+        ctrl_name = f'{name_to_csl(stmt.stream_name)}_ctrl_out_dsd'
+        stream_to_adv[key] = (adv, ctrl_name, out_dsd)
+
+    if not stream_to_adv:
+        return {}
+
+    header.write('const ctrl = @import_module("<control>");\n')
+    header.write('const tile_config = @import_module("<tile_config>");\n')
+    emitted_payloads: set[int] = set()
+    for adv, ctrl_name, out_dsd in stream_to_adv.values():
+        ctrl_dsd = cslstruct.FabricDSD(
+            cslstruct.DSDType.fabout, out_dsd.color, 1, out_dsd.queue, control=True)
+        header.write(f'const {ctrl_name} = {ctrl_dsd.as_csl()};\n')
+        if adv.channel in emitted_payloads:
+            continue
+        emitted_payloads.add(adv.channel)
+        header.write(_encode_switch_payload(adv))
+    header.write('\n')
+    return stream_to_adv
+
+
+def _fabout_dsd(dsds: UniqueDSDDict, stream_key: str):
+    for dsd_name, dsd in dsds.get(stream_key, []):
+        if isinstance(dsd, cslstruct.FabricDSD) and dsd.dsd_type == cslstruct.DSDType.fabout and not dsd.control:
+            return dsd_name, dsd
+    return None, None
+
+
+def _encode_switch_payload(adv) -> str:
+    n = len(adv.opcodes)
+    op_enum = {"SWITCH_ADV": "ctrl.opcode.SWITCH_ADV", "NOP": "ctrl.opcode.NOP"}
+    ops = ", ".join(op_enum[op] for op in adv.opcodes)
+    ignores = ", ".join("true" for _ in adv.opcodes)
+    prefix = f'switch_adv_ch{adv.channel}'
+    return (
+        f'const {prefix}_cmds = [{n}]ctrl.opcode{{ {ops} }};\n'
+        f'const {prefix}_ignore = [{n}]bool{{ {ignores} }};\n'
+        f'const {prefix}_pld: u32 = ctrl.encode_payload('
+        f'{n}, {prefix}_cmds, {prefix}_ignore, true, {{}});\n'
+    )
+
+
+def _emit_switch_advance_after_send(stmt: spir.SendStatement, stream_to_adv: dict) -> str:
+    stream_name = stmt.stream_name.array if isinstance(stmt.stream_name, spir.ArraySlice) else stmt.stream_name
+    entry = stream_to_adv.get(stream_name.as_ir())
+    if entry is None:
+        return ""
+    adv, ctrl_name, _out_dsd = entry
+    coord = "tile_config.fabric_coord.X" if adv.axis == "x" else "tile_config.fabric_coord.Y"
+    return (
+        f'if (tile_config.get_fabric_coord({coord}) != {adv.last_injector}) {{\n'
+        f'    @mov32({ctrl_name}, switch_adv_ch{adv.channel}_pld);\n'
+        f'}}'
+    )
+
+
 def _generate_task_code(rect: PEBlock,
                         task_index: int,
                         task: tdag.CSLTask,
@@ -1559,7 +1661,8 @@ def _generate_task_code(rect: PEBlock,
                         tasks: list[tdag.CSLTask],
                         task_bindings: task_recycling.TaskBindingPlan,
                         postamble: str,
-                        indent: str = '    '):
+                        indent: str = '    ',
+                        stream_to_adv: dict | None = None):
     """
     Generates a local task from a CSL task.
     This function converts statements to DSD operations or generates appropriate code.
@@ -1619,6 +1722,17 @@ def _generate_task_code(rect: PEBlock,
             if any(dsdop in line for line in lines for dsdop in dsd_ops.DSD_ASSIGNMENT_MAPPING):
                 # Asynchronous DSD op. DSD line already contains activation or unblocking
                 skip_activation = True
+
+            if stream_to_adv and isinstance(stmt, spir.SendStatement):
+                extra = _emit_switch_advance_after_send(stmt, stream_to_adv)
+                if extra:
+                    extra_lines = extra.splitlines()
+                    insert_at = next(
+                        (i for i, ln in enumerate(lines)
+                         if ln.lstrip().startswith(('@activate(', '@unblock('))),
+                        len(lines),
+                    )
+                    lines = lines[:insert_at] + extra_lines + lines[insert_at:]
 
             for line in lines:
                 current_code.write(f'{indent}{line}\n')

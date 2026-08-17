@@ -318,6 +318,8 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
         body=list(rect_place.values()) + list(rect_dataflow.values()) + list(rect_compute.values()))
     if hasattr(kernel, "shift_schedules"):
         new_kernel.shift_schedules = kernel.shift_schedules
+    if hasattr(kernel, "switch_advances"):
+        new_kernel.switch_advances = kernel.switch_advances
     return new_kernel
 
 
@@ -502,28 +504,41 @@ class _BulkCommunicationLowerer(spir.NodeTransformer):
 
     def visit_ReceiveStatement(self, node: spir.ReceiveStatement):
         sz = node.get_size(self.identifier_sizes)
-        if len(sz) == 0:  # Scalar receive
-            return self.generic_visit(node)
+        scalar_onchip = False
+        if len(sz) == 0:
+            # Memcpy/extern scalar receive keeps a direct assignment (`val = inp[0]`).
+            # On-chip scalar receive (`await receive(tmp, bwd)`) must become a
+            # one-wavelet foreach so CSL binds a data task to the fabric color.
+            if isinstance(node.stream_name, spir.ArraySlice):
+                return self.generic_visit(node)
+            sz = [1]
+            scalar_onchip = True
 
-        # Array receive, make a foreach node
-        new_node = spir.ForeachStatement(
-            [spir.TypedIdentifier(spir.ScalarType.u16, spir.Identifier(f'__k{i}', 0)) for i in range(len(sz))],
-            [
-                # ``0:size`` for every dimension
-                spir.RangeExpression(
-                    spir.Expression(spir.ConstantLiteral(0, spir.ScalarType.u16)),
-                    spir.Expression(spir.ConstantLiteral(s, spir.ScalarType.u16))) for s in sz
-            ],
-            spir.TypedIdentifier(self.identifier_dtypes[node.local_array], spir.Identifier(f'__x', 0)),
-            spir.ReceiveGenerator(node.stream_name),
-            [
-                # ``arr[__k0, ...] = __x``
+        if scalar_onchip:
+            body = [
+                spir.AssignmentStatement(
+                    copy.deepcopy(node.local_array),
+                    spir.Expression(spir.Identifier('__x', 0))),
+            ]
+        else:
+            body = [
                 spir.AssignmentStatement(
                     spir.ArraySlice(
                         copy.deepcopy(node.local_array),
                         [spir.Expression(spir.Identifier(f'__k{i}', 0)) for i in range(len(sz))]),
-                    spir.Expression(spir.Identifier(f'__x', 0))),
+                    spir.Expression(spir.Identifier('__x', 0))),
+            ]
+
+        new_node = spir.ForeachStatement(
+            [spir.TypedIdentifier(spir.ScalarType.u16, spir.Identifier(f'__k{i}', 0)) for i in range(len(sz))],
+            [
+                spir.RangeExpression(
+                    spir.Expression(spir.ConstantLiteral(0, spir.ScalarType.u16)),
+                    spir.Expression(spir.ConstantLiteral(s, spir.ScalarType.u16))) for s in sz
             ],
+            spir.TypedIdentifier(self.identifier_dtypes[node.local_array], spir.Identifier('__x', 0)),
+            spir.ReceiveGenerator(node.stream_name),
+            body,
             node.completion_name)
         new_node.lineinfo = node.lineinfo
 
@@ -559,8 +574,8 @@ class _BulkCommunicationLowerer(spir.NodeTransformer):
 
 def lower_bulk_communication(rectangles: list[Rectangle[PEBlock]]) -> None:
     """
-    Lowers top-level array ``receive`` and ``send`` operations to foreach and for loops, respectively.
-    The array operations are shorthands for a row-major (C-order) loop over the communication operations.
+    Lowers top-level array ``receive`` operations to foreach loops, and on-chip
+    scalar ``receive`` from a named stream to a one-wavelet foreach.
 
     :param rectangles: A list of PE block rectangles to lower computations within.
     """
@@ -648,14 +663,20 @@ class _ForeachDataTaskToLoopConverter(spir.NodeTransformer):
         if dsd_ops.get_dsd_op(self.dtypes, node) is not None:
             return self.generic_visit(node)
 
-        if isinstance(self.dtypes[node.receive_stream.stream_name], spir.StreamType):
+        sname = node.receive_stream.stream_name
+        if isinstance(sname, spir.ArraySlice):
+            sname = sname.array
+        stream_dtype = self.dtypes.get(sname)
+        # On-chip streams stay data tasks. Missing names are also on-chip
+        # (declared on a sender rectangle). Memcpy fields are ArrayType.
+        if stream_dtype is None or isinstance(stream_dtype, spir.StreamType):
             return self.generic_visit(node)
 
         body_statements = [self.visit(stmt) for stmt in node.body]
         loop_variables = [copy.deepcopy(var) for var in node.variables]
         loop_ranges = [copy.deepcopy(rng) for rng in node.parameter_range]
         stream_target = copy.deepcopy(node.receive_stream.stream_name)
-        if isinstance(self.dtypes[stream_target], spir.ArrayType) and loop_ranges:
+        if isinstance(stream_dtype, spir.ArrayType) and loop_ranges:
             index_exprs = []
             for var in loop_variables:
                 idx_identifier = copy.deepcopy(var.identifier)

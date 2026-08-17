@@ -57,6 +57,22 @@ class ColorSchedule:
     steps: tuple[ColorScheduleStep, ...]
 
 
+@dataclass(frozen=True)
+class SwitchAdvance:
+    """
+    SWITCH_ADV control wavelet sent after a non-last injector's data waves.
+
+    Each downstream router pops one opcode (always_pop): the next source and
+    the dest that just absorbed see SWITCH_ADV; hops in between see NOP.
+    A control wavelet holds at most 8 opcodes, so ``dist`` must be <= 8.
+    """
+
+    channel: int
+    axis: Literal["x", "y"]
+    last_injector: int
+    opcodes: tuple[str, ...]
+
+
 def _short(port: str) -> str:
     return {"RAMP": "R", "EAST": "E", "WEST": "W", "NORTH": "N", "SOUTH": "S"}.get(port, port)
 
@@ -278,6 +294,22 @@ def schedule_counted_switch(bundle: ShiftBundle) -> list[ColorSchedule]:
     ]
 
 
+_MAX_SWITCH_CMDS = 8
+
+
+def switch_advance_for_bundle(bundle: ShiftBundle) -> SwitchAdvance:
+    """Build the always_pop opcode chain for one interval shift of distance ``d``."""
+    d = bundle.dist
+    if d > _MAX_SWITCH_CMDS:
+        raise ValueError(
+            f"Counted switching encodes one opcode per hop and a control wavelet "
+            f"holds at most {_MAX_SWITCH_CMDS} commands; got dist={d}."
+        )
+    opcodes = ("SWITCH_ADV",) + ("NOP",) * max(d - 2, 0) + ("SWITCH_ADV",)
+    last_injector = bundle.start + bundle.length - 1 if bundle.sign > 0 else bundle.start
+    return SwitchAdvance(bundle.channel, bundle.axis, last_injector, opcodes)
+
+
 def _phase_has_explicit_count_relative(phase: spir.Phase) -> bool:
     for dataflow in phase.dataflow:
         for stmt in dataflow.statements:
@@ -339,9 +371,12 @@ def apply_shift_bundles(kernel: spir.Kernel, bundles: list[ShiftBundle]) -> list
         phase_index += 1
 
     schedules: list[ColorSchedule] = []
+    advances: list[SwitchAdvance] = []
     for bundle in assigned:
         schedules.extend(schedule_counted_switch(bundle))
+        advances.append(switch_advance_for_bundle(bundle))
     _assign_unit_hop_channels(kernel, bases)
+    kernel.switch_advances = advances
     return schedules
 
 
