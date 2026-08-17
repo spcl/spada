@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
-from typing import Union, Tuple, Optional, Literal
+from typing import Union, Optional, Literal
 from spada.syntax.common import visitor
-from spada.syntax.common.basenode import BaseNode
+from spada.syntax.common.basenode import BaseNode, LineInfo
 from spada.syntax.common.types import ScalarType, IRType
 from spada.syntax.spatial_ir.grid_geometry import Rectangle
 
@@ -14,6 +14,7 @@ class SpatialNode(BaseNode):
     """
     Base class for all spatial IR nodes.
     """
+    lineinfo: Optional[LineInfo] = field(default=None, init=False, repr=False, compare=False)
 
     @classmethod
     def from_lark(cls, args):
@@ -25,19 +26,6 @@ class SpatialNode(BaseNode):
 
     def as_ir(self, indent: int = 0) -> str:
         raise NotImplementedError()
-
-
-@dataclass
-class LineInfo:
-    """
-    Represents source line information for a node in the IR.
-    """
-    filename: str
-    line: int
-    column: int
-
-    def __str__(self) -> str:
-        return f"{self.filename}:{self.line}:{self.column}"
 
 
 # Constant Literals
@@ -112,17 +100,32 @@ class Identifier(SpatialNode):
 class StreamType(SpatialNode, IRType):
     """
     A stream type that sends elements of type T.
+
+    The optional second template parameter is the stream's *bound*: exactly ``buffer_size`` elements
+    are transferred over the stream, after which the stream closes itself (see
+    ``CloseStatement``). A stream without a bound is unbounded and must be closed explicitly.
+    For kernel arguments, the bound also gives the size of the host-side transfer (which is what
+    enables memcpy mode in CSL), hence the field name.
     """
     element_type: ScalarType
     buffer_size: Optional['Expression'] = None
 
     def validate(self) -> None:
         assert isinstance(self.element_type, ScalarType)
+        assert self.buffer_size is None or isinstance(self.buffer_size, Expression)
 
     def as_ir(self, indent: int = 0) -> str:
         if self.buffer_size is not None:
             return f'stream<{self.element_type.as_ir()}, {self.buffer_size.as_ir()}>'
         return f'stream<{self.element_type.as_ir()}>'
+
+    @property
+    def bound(self) -> Optional['Expression']:
+        """
+        The number of elements transferred over this stream before it closes itself, or ``None`` if
+        the stream is unbounded. An alias of ``buffer_size`` that reads better in lifetime analyses.
+        """
+        return self.buffer_size
 
     @property
     def shape(self) -> list[Union[int, 'Expression']]:
@@ -363,8 +366,8 @@ class RangeExpression(SpatialNode):
     A range expression (start:stop or start:stop:step).
     """
     start: Expression
-    stop: Expression = None
-    step: Expression = None
+    stop: Optional[Expression] = None
+    step: Optional[Expression] = None
 
     def validate(self) -> None:
         assert isinstance(self.start, Expression)
@@ -375,7 +378,7 @@ class RangeExpression(SpatialNode):
             assert isinstance(self.step, Expression)
 
     def as_ir(self, indent: int = 0) -> str:
-        if self.step:
+        if self.step and self.stop:
             return f'{self.start.as_ir()}:{self.stop.as_ir()}:{self.step.as_ir()}'
         elif self.stop:
             return f'{self.start.as_ir()}:{self.stop.as_ir()}'
@@ -383,7 +386,7 @@ class RangeExpression(SpatialNode):
             return self.start.as_ir()
 
     @staticmethod
-    def from_args(start: int, stop: int, step: int = None) -> 'RangeExpression':
+    def from_args(start: int, stop: int, step: Optional[int] = None) -> 'RangeExpression':
         start_expr = Expression(ConstantLiteral(start, ScalarType.i32))
         stop_expr = Expression(ConstantLiteral(stop, ScalarType.i32))
         step_expr = Expression(ConstantLiteral(step if step else 1, ScalarType.i32))
@@ -768,15 +771,25 @@ class StreamDeclaration(SpatialNode):
     dtype: StreamType
     stream_name: Identifier
     stream: RelativeStreamDeclaration | MulticastRangeStreamDeclaration | ExternStreamDeclaration
+    #: Index of the phase this stream is declared in, counted over the whole kernel. Filled in by
+    #: ``canonicalization.number_stream_phases`` while phases are still explicit, and used
+    #: afterwards to order a router's configurations: once phases are inlined, a compute block only
+    #: carries barriers for the phases *it* takes part in, so its local barrier count is not
+    #: comparable with another block's. A relay PE has no statements at all, and its configuration
+    #: is contributed by the sending rectangle, so only a kernel-wide index orders the two.
+    #: ``None`` on streams that never went through the pass. Not part of the surface syntax.
+    phase: Optional[int] = None
 
     def validate(self) -> None:
         assert isinstance(self.dtype, StreamType)
         assert isinstance(self.stream_name, Identifier)
         assert isinstance(self.stream, (RelativeStreamDeclaration, MulticastRangeStreamDeclaration, ExternStreamDeclaration))
+        if self.phase is not None:
+            assert isinstance(self.phase, int) and self.phase >= 0
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent
-        return f'{indent_str}stream<{self.dtype.element_type.as_ir()}> {self.stream_name.as_ir()} = {self.stream.as_ir()}'
+        return f'{indent_str}{self.dtype.as_ir()} {self.stream_name.as_ir()} = {self.stream.as_ir()}'
 
 
 ###
@@ -930,6 +943,40 @@ class ReceiveGenerator(SpatialNode):
 
     def as_ir(self, indent: int = 0) -> str:
         return f'receive({self.stream_name.as_ir()})'
+
+
+# Close Statement
+@dataclass
+class CloseStatement(Statement):
+    """
+    Close statement that ends the lifetime of a stream on the PE that executes it.
+
+    Closing a stream releases its channel, which may then be reused by another stream (see the
+    routing specification). It is collective: every PE that sends on or receives from a stream must
+    close it. Bounded streams (``stream<T, BOUND>``) close themselves once ``BOUND`` elements have
+    been transferred, and every stream in scope is implicitly closed at the end of its phase.
+    """
+    stream_name: Union[Identifier, ArraySlice]
+    completion_name: Optional[Completion] = None
+    #: How many switch positions the routers along the stream's path move forward when this close
+    #: retires the stream's route configuration. One wavelet is emitted per position, and a
+    #: transition that changes both a router's input and its output direction takes two. Filled in
+    #: during lowering by ``csl.routing.plan_switch_advances``; ``None`` means no router has to act,
+    #: in which case the close generates no code. Not part of the surface syntax.
+    switch_advance: Optional[int] = None
+
+    def validate(self) -> None:
+        assert isinstance(self.stream_name, (Identifier, ArraySlice))
+        if self.completion_name:
+            assert isinstance(self.completion_name, Completion)
+        if self.switch_advance is not None:
+            assert isinstance(self.switch_advance, int) and self.switch_advance > 0
+
+    def as_ir(self, indent: int = 0) -> str:
+        indent_str = '  ' * indent
+        if self.completion_name:
+            return f'{indent_str}{self.completion_name.as_ir()} = {self.stream_name.as_ir()}.close()'
+        return f'{indent_str}await {self.stream_name.as_ir()}.close()'
 
 
 # Foreach Loop (asynchronous)

@@ -1,0 +1,158 @@
+/**
+ * Batcher's bitonic sorting network over N = 2^L PEs in a row.
+ *
+ * Each PE holds K keys, and the network sorts K independent sequences at once: sequence k is made
+ * of element k of every PE. A compare-exchange is therefore an elementwise min/max over K values,
+ * which streams as one K-element transfer per epoch.
+ *
+ * The point of this sample is *channel economy*. A bitonic network on N keys performs L(L+1)/2
+ * compare-exchange steps at distances 1, 2, 4, ..., N/2, and every PE takes part in every step.
+ * Giving each step its own channel would need one per step; giving each concurrently exchanging
+ * pair its own channel would need O(N). This kernel instead uses
+ *
+ *     L  =  log2(N)   channels
+ *
+ * -- exactly one per exchange distance -- and reuses each of them across every step, every lane and
+ * both directions of travel. That reuse is what the router switches pay for.
+ *
+ * Why the network needs lanes
+ * ---------------------------
+ * At distance J = 2^d every PE with bit d clear is a "low" PE and exchanges with the PE J to its
+ * east. Those paths overlap: 0 -> 4 and 1 -> 5 both cross PEs 1..4, so they cannot share a channel
+ * concurrently (see the channel-conflict rule in the routing specification). The step is therefore
+ * split into J *lanes*: lane c handles the PEs congruent to c modulo 2J, whose paths are exactly
+ * disjoint.
+ *
+ * Why each lane is two phases
+ * ---------------------------
+ * A compare-exchange has to move a key in each direction, and both directions use the same channel.
+ * They cannot be concurrent, so the lane is split into an eastward phase and a westward one; the
+ * phase boundary closes the stream, which is what frees the channel. Reversing the direction of
+ * travel is what makes this kernel demanding: every PE on the path -- sender, relay and receiver
+ * alike -- has to change both its router's input and its output between the two phases.
+ *
+ * Structure, generated entirely by compile-time `for` blocks:
+ *
+ *   for s in [0, L)            stage: groups of size 2^(s+1) are sorted
+ *     for e in [0, s]          step:  exchange distance J = 2^(s-e), halving
+ *       for c in [0, J)        lane:  two phases, two epochs on channel s-e
+ *         for g in ...         the ascending groups, then the descending ones
+ *
+ * A group of size 2^(s+1) sorts ascending when bit s+1 of its index is clear and descending
+ * otherwise, so the ascending groups start at multiples of 2^(s+2) and the descending ones are
+ * offset by 2^(s+1). In the final stage the descending range is empty, which is what leaves the
+ * whole array sorted ascending.
+ *
+ * One lane (L=3, s=2, e=0, J=4, c=1) on channel 2, as two epochs:
+ *
+ *   PE:      0     1     2     3     4     5     6     7
+ *   east           *---->-----------------*                 1 -> 5, relays 2,3,4
+ *   west           *-----------------<----*                 5 -> 1, relays 4,3,2
+ *
+ * (!) Assumes L >= 1. Requires WSE-3: reversing a router between the two phases changes both its
+ *     input and its output direction, and enough of those accumulate on one color to exceed the
+ *     four switch positions a WSE-2 router can hold (where each such reversal costs two). (!)
+ *
+ * (!) The router budget caps this at L = 2. At distance 2^d the channel is reused by 2^d lanes in
+ *     two directions each, so an interior router cycles through 2^(d+1) configurations; four
+ *     switch positions run out at d = 2. Sorting more keys needs a channel per direction, which
+ *     doubles the channel count to 2*log2(N) and, since no router then reverses, also runs on
+ *     WSE-2. (!)
+ *
+ * Note on syntax: `+`/`-` are right-associative in this grammar, so `s-e+1` would parse as
+ * `s-(e+1)`. The step expressions below write `(s-e)+1` explicitly.
+ **/
+kernel @bitonic_sort_1d<L, K>(stream<f32, K>[1<<L, 1] readonly a_in,
+                              stream<f32, K>[1<<L, 1] writeonly a_out) {
+
+    place i16 i, i16 j in [0:1<<L, 0] {
+        f32[K] val
+        f32[K] other
+    }
+
+    // Load this PE's K keys.
+    phase {
+        compute i16 i, i16 j in [0:1<<L, 0] {
+            await receive(val, a_in[i, j])
+        }
+    }
+
+    for i16 s in [0:L] {
+        for i16 e in [0:s+1] {
+            for i16 c in [0 : 1<<(s-e)] {
+
+                // Epoch 1: every low PE ships its key east to its partner.
+                phase {
+                    dataflow i16 i, i16 j in [0:1<<L, 0] {
+                        stream<f32> east = relative_stream(1<<(s-e), 0) {
+                            hops = auto,
+                            channel = s-e
+                        }
+                    }
+                    for i16 g in [0 : 1<<L : 1<<(s+2)] {
+                        compute i16 i, i16 j in [g + c : g + (1<<(s+1)) : 1<<((s-e)+1), 0] {
+                            await send(val, east)
+                        }
+                        compute i16 i, i16 j in [g + c + (1<<(s-e)) : g + (1<<(s+1)) : 1<<((s-e)+1), 0] {
+                            await receive(other, east)
+                        }
+                    }
+                    for i16 g in [1<<(s+1) : 1<<L : 1<<(s+2)] {
+                        compute i16 i, i16 j in [g + c : g + (1<<(s+1)) : 1<<((s-e)+1), 0] {
+                            await send(val, east)
+                        }
+                        compute i16 i, i16 j in [g + c + (1<<(s-e)) : g + (1<<(s+1)) : 1<<((s-e)+1), 0] {
+                            await receive(other, east)
+                        }
+                    }
+                }
+
+                // Epoch 2: the same channel now runs west, and both partners settle their keys.
+                // Ascending groups keep the smaller key low, descending groups the larger one.
+                phase {
+                    dataflow i16 i, i16 j in [0:1<<L, 0] {
+                        stream<f32> west = relative_stream(-(1<<(s-e)), 0) {
+                            hops = auto,
+                            channel = s-e
+                        }
+                    }
+                    for i16 g in [0 : 1<<L : 1<<(s+2)] {
+                        compute i16 i, i16 j in [g + c : g + (1<<(s+1)) : 1<<((s-e)+1), 0] {
+                            await receive(other, west)
+                            await map i32 k in [0:K] {
+                                val[k] = (other[k] if other[k] < val[k] else val[k])
+                            }
+                        }
+                        compute i16 i, i16 j in [g + c + (1<<(s-e)) : g + (1<<(s+1)) : 1<<((s-e)+1), 0] {
+                            await send(val, west)
+                            await map i32 k in [0:K] {
+                                val[k] = (other[k] if other[k] > val[k] else val[k])
+                            }
+                        }
+                    }
+                    for i16 g in [1<<(s+1) : 1<<L : 1<<(s+2)] {
+                        compute i16 i, i16 j in [g + c : g + (1<<(s+1)) : 1<<((s-e)+1), 0] {
+                            await receive(other, west)
+                            await map i32 k in [0:K] {
+                                val[k] = (other[k] if other[k] > val[k] else val[k])
+                            }
+                        }
+                        compute i16 i, i16 j in [g + c + (1<<(s-e)) : g + (1<<(s+1)) : 1<<((s-e)+1), 0] {
+                            await send(val, west)
+                            await map i32 k in [0:K] {
+                                val[k] = (other[k] if other[k] < val[k] else val[k])
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Store the sorted keys.
+    phase {
+        compute i16 i, i16 j in [0:1<<L, 0] {
+            await send(val, a_out[i, j])
+        }
+    }
+}

@@ -11,15 +11,17 @@ from spada.syntax.common.types import BIT_WIDTH
 from spada.syntax.spatial_ir import irnodes as spir, canonicalization, analysis, passes
 from spada.syntax.spatial_ir import copy_elimination
 from spada.syntax.spatial_ir import canonical_subgrids
+from spada.syntax.spatial_ir import stream_lifetime
 from spada.syntax.spatial_ir.canonicalization import PEBlock, Rectangle
 from spada.syntax.csl import constants as csl, preprocessing, tasks as tdag, statements as cslstmt, dsd_ops
 from spada.syntax.csl import benchmarking as cslbench
 from spada.syntax.csl import structures as cslstruct
+from spada.syntax.csl import routing as cslrouting
 from spada.syntax.csl import task_recycling, prune_unused_fields as csl_pruning
 from spada.syntax.csl.codefile import CodeFile
 from spada.syntax.csl.statements import name_to_csl, dtype_as_csl, expr_to_csl
 
-UniqueDSDDict = dict[str, list[tuple[str, cslstruct.DataStructureDescriptor]]]
+UniqueDSDDict = cslstruct.UniqueDSDDict
 
 
 def canonicalize_kernel(kernel: spir.Kernel) -> spir.Kernel:
@@ -37,11 +39,12 @@ def canonicalize_kernel(kernel: spir.Kernel) -> spir.Kernel:
     """
     kernel = canonicalization.inline_metaprogramming(kernel)
     kernel = canonicalization.canonicalize_phases(kernel)
+    kernel = canonicalization.uniquify_stream_names(kernel)
+    kernel = stream_lifetime.insert_implicit_closes(kernel)
+    kernel = canonicalization.number_stream_phases(kernel)
     kernel = canonicalization.reduce_streams(kernel)
     kernel = canonical_subgrids.canonicalize_subgrids(kernel)
     kernel = canonicalization.resolve_auto_hops(kernel)
-    from spada.syntax.spatial_ir.shift_bundles import coalesce_shift_bundles
-    coalesce_shift_bundles(kernel)
     kernel = canonicalization.inline_phases(kernel)
     return kernel
 
@@ -54,7 +57,9 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
                             task_fusion: bool = True,
                             copy_elision: bool = True,
                             prune_memory: bool = True,
-                            task_id_recycling: bool = True) -> list[CodeFile]:
+                            task_id_recycling: bool = True,
+                            close_elision: bool = True,
+                            disable_switching: bool = False) -> list[CodeFile]:
     """
     Lowers a routed Spatial IR kernel into Cerebras CSL code.
 
@@ -68,6 +73,9 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     :param copy_elision: If True, enables copy elision optimization pass.
     :param prune_memory: If True, enables unused field pruning optimization pass.
     :param task_id_recycling: If True, enables task ID recycling pass.
+    :param close_elision: If True, removes stream closes that no router has to act on.
+    :param disable_switching: If True, emits one route configuration per stream instead of merging
+                              them into router switch positions.
     :return: List of code-file objects that can be written to files. See ``write_code_to_files``.
     """
     # PRECONDITION: Rectangles of dataflow/compute/place do not intersect (comes from Spatial IR)
@@ -131,7 +139,18 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     routing_instructions: list[str] = []
     color_maps = []
 
+    # Verify stream lifetimes. This runs after channels have been resolved by
+    # ``_collect_colors_globally``, and before ``elide_redundant_closes`` so that no diagnostic can
+    # be hidden by the elision.
     channel_to_color = _collect_colors_globally(kernel, rectangles, use_memcpy_mode)
+    stream_lifetime.verify_stream_bounds(rectangles)
+    stream_lifetime.check_use_after_close(rectangles)
+    stream_lifetime.check_channel_conflicts(rectangles)
+
+    # Plan the router switch advances, then drop every close no router has to act on
+    cslrouting.plan_switch_advances(rectangles)
+    if close_elision:
+        stream_lifetime.elide_redundant_closes(rectangles, needs_advance=lambda stmt: bool(stmt.switch_advance))
 
     for rect in rectangles:
         # Create a unique CSL code file based on rectangle offset
@@ -157,8 +176,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     rect_size = x1 - x0, y1 - y0
 
     # Collect unique routes for all rectangles
-    routes_per_rectangle = _collect_routes(rectangles, color_maps)
-    shift_schedule_code = _emit_shift_schedules(kernel, channel_to_color)
+    routes_per_rectangle = cslrouting.collect_routes(rectangles, color_maps, disable_switching)
 
     if use_memcpy_mode:
         layout_code.write(f'''
@@ -256,9 +274,6 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
 
     for rinst in routing_instructions:
         layout_code.write(rinst + '\n')
-
-    if shift_schedule_code:
-        layout_code.write(shift_schedule_code)
 
     # Emit symbol names for arguments and kernel
     layout_code.write('\n    // Extern fields\n')
@@ -369,7 +384,8 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
             raise ValueError(f"Error in {e.args[0].lineinfo}. Undefined identifier \"{e.args[0].as_ir()}\".")
         raise
 
-    stream_to_adv = _bind_switch_advances(rect.metadata, kernel, dsds, header)
+    cslrouting.declare_switch_advances(rect, header, color_map, dsds)
+    _declare_queue_initialization(dsds, rect, footer, color_map)
 
     # Fuse tasks as much as possible to reduce number of resources
     if task_fusion:
@@ -443,7 +459,6 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
                         task_bindings,
                         benchmark_code.kernel_postamble,
                         indent='        ',
-                        stream_to_adv=stream_to_adv,
                     )
                 except KeyError as e:
                     identifier = e.args[0]
@@ -472,7 +487,6 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
                     task_bindings,
                     benchmark_code.kernel_postamble,
                     indent='    ',
-                    stream_to_adv=stream_to_adv,
                 )
             except KeyError as e:
                 identifier = e.args[0]
@@ -593,7 +607,7 @@ task exit_task() void {{
 
 
 def _collect_colors_globally(kernel: spir.Kernel, rectangles: list[Rectangle[PEBlock]],
-                             use_memcpy_mode: bool) -> dict[str, int]:
+                             use_memcpy_mode: bool) -> dict[int, int]:
     """
     Returns a mapping of each channel to a CSL color.
 
@@ -613,6 +627,7 @@ def _collect_colors_globally(kernel: spir.Kernel, rectangles: list[Rectangle[PEB
         for stream_decl in rect.metadata.dataflow.statements:
             if stream_decl.stream_name not in sends_recvs:
                 continue  # Unused stream
+            assert stream_decl.stream.routing is not None
             outbound, inbound = sends_recvs[stream_decl.stream_name]
             if stream_decl.stream.routing.resolved_channel == "auto":
                 if outbound:
@@ -630,6 +645,7 @@ def _collect_colors_globally(kernel: spir.Kernel, rectangles: list[Rectangle[PEB
     # Assign all "auto" channels
     for rect in rectangles:
         for stream_decl in rect.metadata.dataflow.statements:
+            assert stream_decl.stream.routing is not None
             if stream_decl.stream.routing.resolved_channel == "auto":
                 stream_decl.stream.routing.channel = max_channel + 1
                 if stream_decl.stream_name in auto_stream_is_written:
@@ -804,8 +820,8 @@ def _dsd_from_array(array_candidates: dict[str, tuple[spir.FieldDeclaration, lis
         extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
 
     # Find the index in the array
-    def _find_index(ind: spir.Expression) -> spir.Identifier:
-        candidates = []
+    def _find_index(ind: spir.Expression | spir.RangeExpression) -> spir.Identifier | None:
+        candidates: list[spir.Identifier] = []
         for n in ind.walk():
             if isinstance(n, spir.Identifier):
                 candidates.append(n)
@@ -818,7 +834,8 @@ def _dsd_from_array(array_candidates: dict[str, tuple[spir.FieldDeclaration, lis
 
     if isinstance(node, spir.ArraySlice):
         # Find and replace index with __index
-        idxvars = [_find_index(ind) for ind in node.indices if _find_index(ind) is not None]
+        idxvars = [_find_index(ind) for ind in node.indices]
+        idxvars = [ind for ind in idxvars if ind is not None]
         if use_index:
             assert len(
                 idxvars) == 1, f'Expected one index variable for 1D array, got {idxvars}.\n  In line {node.lineinfo}'
@@ -866,6 +883,45 @@ def _dsd_from_stream(stream_candidates: dict[str, tuple[spir.StreamDeclaration |
         name = name_to_csl(node)
 
     return cslstruct.MemoryDSD(dsd_type, name, extents, idxvars, indices)
+
+
+def _declare_queue_initialization(dsds: UniqueDSDDict, rect: PEBlock, footer: StringIO,
+                                  color_map: dict[str, int]) -> None:
+    """
+    Binds every fabric queue this PE uses to its color, which WSE-3 requires.
+
+    On WSE-2 a fabric queue picks its color up from the descriptor that uses it. WSE-3 does not:
+    a queue must be tied to a color with ``@initialize_queue`` before any transfer over it will
+    proceed, and a program that omits it simply hangs. Queues are handed out per channel (see
+    ``_collect_unique_dsds``), so each one is named by exactly one color here.
+
+    :param dsds: The descriptors collected for this rectangle.
+    :param rect: The PE block being generated, used for the switch-advance descriptors.
+    :param footer: The ``comptime`` block to write the bindings into.
+    :param color_map: Stream name to color number, for the switch-advance descriptors.
+    """
+    if not csl.ARCH == 'wse3':
+        return
+
+    # (queue kind, queue id) -> color expression. Both the data descriptors and the control
+    # descriptors that carry switch advances need their queue bound.
+    bindings: dict[tuple[str, int], str] = {}
+    for entries in dsds.values():
+        for _, dsd in entries:
+            if not isinstance(dsd, cslstruct.FabricDSD) or not dsd.color:
+                continue
+            direction = 'in' if dsd.dsd_type == cslstruct.DSDType.fabin else 'out'
+            kind = 'input_queue' if dsd.dsd_type == cslstruct.DSDType.fabin else 'output_queue'
+            bindings.setdefault((kind, dsd.queue), f'{dsd.color}_{direction}')
+
+    for statement in rect.metadata.compute.statements:
+        if isinstance(statement, spir.CloseStatement) and statement.switch_advance:
+            name = cslstmt.name_to_csl(stream_lifetime.underlying_stream(statement.stream_name))
+            queue = csl.OUTPUT_QUEUE_IDS[0]
+            bindings.setdefault(('output_queue', queue), f'@get_color({color_map[name + "_OUT"]})')
+
+    for (kind, queue), color in sorted(bindings.items()):
+        footer.write(f'    @initialize_queue(@get_{kind}({queue}), .{{ .color = {color} }});\n')
 
 
 def _collect_unique_dsds(
@@ -918,6 +974,83 @@ def _collect_unique_dsds(
     # TODO: Infer input/output queue ID based on concurrency
     input_queue_id_ctr = 0
     output_queue_id_ctr = 0
+
+    # Streams that share a channel share a color, and a color binds to exactly one fabric queue per
+    # PE -- the hardware rejects "two master input queues for the same color". Queues are therefore
+    # handed out per channel; streams on ``auto`` channels get a color to themselves, so they key on
+    # their own name.
+    channel_of_stream = {
+        declaration.stream_name.as_ir(): declaration.stream.routing.resolved_channel
+        for declaration in rect.dataflow.statements
+        if getattr(declaration.stream, 'routing', None) is not None
+    }
+
+    def queue_key(stream: spir.Identifier) -> str:
+        channel = channel_of_stream.get(stream.as_ir(), 'auto')
+        return stream.as_ir() if channel == 'auto' else f'channel {channel}'
+
+    input_queue_of: dict[str, int] = {}
+    output_queue_of: dict[str, int] = {}
+
+    def allocate_input_queue(stream: spir.Identifier) -> int:
+        nonlocal input_queue_id_ctr
+        key = queue_key(stream)
+        if key not in input_queue_of:
+            input_queue_of[key] = csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)]
+            input_queue_id_ctr += 1
+        return input_queue_of[key]
+
+    def allocate_output_queue(stream: spir.Identifier) -> int:
+        nonlocal output_queue_id_ctr
+        key = queue_key(stream)
+        if key not in output_queue_of:
+            output_queue_of[key] = csl.OUTPUT_QUEUE_IDS[output_queue_id_ctr % len(csl.OUTPUT_QUEUE_IDS)]
+            output_queue_id_ctr += 1
+        return output_queue_of[key]
+
+    def _visit_foreach(stmt: spir.ForeachStatement) -> None:
+        """
+        Registers the fabric input DSD for a ``foreach`` that draws from a stream.
+
+        An array ``receive`` is canonicalized into one of these (see ``_BulkCommunicationLowerer``),
+        so this is the path every bulk receive takes -- including one nested inside a sequential
+        ``for``, which is why this is a function rather than inline in the statement walk below.
+        """
+        # If the foreach statement has a stream generator, it is a DSD
+        # unless only the receive generator is given (streaming, no range provided).
+        stream_name = (
+            stmt.receive_stream.stream_name.array
+            if isinstance(stmt.receive_stream.stream_name, spir.ArraySlice) else stmt.receive_stream.stream_name)
+        if not stmt.parameter_range:
+            if stream_name not in stream_args:
+                raise SyntaxError(f'Foreach generator "{stream_name.as_ir()}" without a defined '
+                                  f'range must only be used with a kernel argument or extern_stream.'
+                                  f'\n  In line {stmt.lineinfo}')
+            # A data task will be created instead (handled in _generate_data_task)
+            return
+        if stream_name.as_ir() not in stream_candidates:
+            return
+        if memcpy_mode and stream_name in stream_args:
+            # If memcpy mode is enabled, the stream contents will have already been copied to the PE
+            dsd = _dsd_from_stream(stream_candidates, stream_name)
+            dsds[stream_name.as_ir()].append((f"{name_to_csl(stream_name)}_dsd", dsd))
+            return
+        dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
+        extents = stream_candidates[stream_name.as_ir()][1]
+        if extents is not None:  # Use buffer size
+            extents = extents if isinstance(extents, int) else extents.eval()
+        else:  # Infer from foreach range
+            if len(stmt.parameter_range) != 1:
+                raise SyntaxError(
+                    f'Expected one-dimensional foreach range for stream "{stream_name.as_ir()}", '
+                    f'got {stmt.parameter_range}.\n  In line {stmt.lineinfo}')
+            start, end, step = (stmt.parameter_range[0].start, stmt.parameter_range[0].stop,
+                                stmt.parameter_range[0].step)
+            extents = (end.eval() - start.eval()) // (step.eval() if step is not None else 1)
+        fabric_color = f'{name_to_csl(stream_name)}_color'
+        dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents, allocate_input_queue(stream_name))
+        dsds[stream_name.as_ir()].append((dsd_name, dsd))
+
     for stmt in rect.compute.statements:
         # Find out if compute block uses this stream for receive/send
         if isinstance(stmt, (spir.ReceiveStatement, spir.SendStatement)):
@@ -942,9 +1075,7 @@ def _collect_unique_dsds(
                             lambda a, b: a * b,
                             [s.eval() if not isinstance(s, int) else s for s in dtypes[stmt.local_array].shape], 1)
                 fabric_color = f'{name_to_csl(stream_name)}_color'
-                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
-                                          csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)])
-                input_queue_id_ctr += 1
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_input_queue(stream_name))
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
             elif isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
                 dsd_type = cslstruct.DSDType.fabout
@@ -962,9 +1093,7 @@ def _collect_unique_dsds(
                             lambda a, b: a * b,
                             [s.eval() if not isinstance(s, int) else s for s in dtypes[stmt.local_array].shape], 1)
                 fabric_color = f'{name_to_csl(stream_name)}_color'
-                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
-                                          csl.OUTPUT_QUEUE_IDS[output_queue_id_ctr % len(csl.OUTPUT_QUEUE_IDS)])
-                output_queue_id_ctr += 1
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_output_queue(stream_name))
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
             if isinstance(stmt, spir.SendStatement):
@@ -993,41 +1122,7 @@ def _collect_unique_dsds(
                         dsds[arr.as_ir()].append((f"{name_to_csl(arr)}_dsd", dsd))
 
         elif isinstance(stmt, spir.ForeachStatement):
-            # If the foreach statement has a stream generator, it is a DSD
-            # unless only the receive generator is given (streaming, no range provided).
-            stream_name = (
-                stmt.receive_stream.stream_name.array
-                if isinstance(stmt.receive_stream.stream_name, spir.ArraySlice) else stmt.receive_stream.stream_name)
-            if not stmt.parameter_range:
-                if stream_name not in stream_args:
-                    raise SyntaxError(f'Foreach generator "{stream_name.as_ir()}" without a defined '
-                                      f'range must only be used with a kernel argument or extern_stream.'
-                                      f'\n  In line {stmt.lineinfo}')
-                # A data task will be created instead (handled in _generate_data_task)
-            else:
-                if stream_name.as_ir() in stream_candidates:
-                    if memcpy_mode and stream_name in stream_args:
-                        # If memcpy mode is enabled, the stream contents will have already been copied to the PE
-                        dsd = _dsd_from_stream(stream_candidates, stream_name)
-                        dsds[stream_name.as_ir()].append((f"{name_to_csl(stream_name)}_dsd", dsd))
-                    else:
-                        dsd_name = f'{name_to_csl(stream_name)}_in_dsd'
-                        extents = stream_candidates[stream_name.as_ir()][1]
-                        if extents is not None:  # Use buffer size
-                            extents = extents if isinstance(extents, int) else extents.eval()
-                        else:  # Infer from foreach range
-                            if len(stmt.parameter_range) != 1:
-                                raise SyntaxError(
-                                    f'Expected one-dimensional foreach range for stream "{stream_name.as_ir()}", got {stmt.parameter_range}.\n  In line {stmt.lineinfo}'
-                                )
-                            start, end, step = stmt.parameter_range[0].start, stmt.parameter_range[
-                                0].stop, stmt.parameter_range[0].step
-                            extents = (end.eval() - start.eval()) // (step.eval() if step is not None else 1)
-                        fabric_color = f'{name_to_csl(stream_name)}_color'
-                        dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents,
-                                                  csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)])
-                        dsds[stream_name.as_ir()].append((dsd_name, dsd))
-                        input_queue_id_ctr += 1
+            _visit_foreach(stmt)
 
         def _visit_nested_send(substmt: spir.SendStatement):
             if substmt.stream_name.as_ir() not in stream_candidates:
@@ -1049,10 +1144,7 @@ def _collect_unique_dsds(
                         lambda a, b: a * b,
                         [s.eval() if not isinstance(s, int) else s for s in dtypes[substmt.local_array].shape], 1)
             fabric_color = f'{name_to_csl(stream_name)}_color'
-            nonlocal output_queue_id_ctr
-            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
-                                      csl.OUTPUT_QUEUE_IDS[output_queue_id_ctr % len(csl.OUTPUT_QUEUE_IDS)])
-            output_queue_id_ctr += 1
+            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_output_queue(stream_name))
             dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
         def _visit_nested_receive(substmt: spir.ReceiveStatement):
@@ -1078,19 +1170,39 @@ def _collect_unique_dsds(
                         lambda a, b: a * b,
                         [s.eval() if not isinstance(s, int) else s for s in dtypes[local_array].shape], 1)
             fabric_color = f'{name_to_csl(stream_name)}_color'
-            nonlocal input_queue_id_ctr
-            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
-                                      csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)])
-            input_queue_id_ctr += 1
+            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_input_queue(stream_name))
             dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
+        def _visit_local_array(operand):
+            """
+            Registers the memory DSD for the local side of a nested transfer.
+
+            A top-level send gets this from the explicit walk over ``stmt.local_array`` above; a
+            nested one is only reached through the visitor, which stops at the statement and never
+            descends to the operand.
+            """
+            name = operand.identifier if isinstance(operand, spir.TypedIdentifier) else operand
+            if not isinstance(name, spir.Identifier):
+                return
+            if name.as_ir() not in array_candidates or name.as_ir() in dsds:
+                return
+            dsds[name.as_ir()].append((f"{name_to_csl(name)}_dsd", _dsd_from_array(array_candidates, name)))
+
         def _visit_dsd(substmt, in_scope, in_assignment):
+            if isinstance(substmt, spir.ForeachStatement):
+                # Only reached for a foreach nested inside a sequential ``for``; a top-level one is
+                # registered by the statement walk above.
+                if in_scope:
+                    _visit_foreach(substmt)
+                return
             if isinstance(substmt, spir.SendStatement) and in_scope:
                 _visit_nested_send(substmt)
+                _visit_local_array(substmt.local_array)
                 return
             if isinstance(substmt, spir.ReceiveStatement):
                 if in_scope:
                     _visit_nested_receive(substmt)
+                    _visit_local_array(substmt.local_array)
                 return
             if (isinstance(substmt, spir.Identifier) and substmt.as_ir() in array_candidates and
                     substmt.as_ir() not in dsds):
@@ -1152,6 +1264,10 @@ class DSDVisitor(spir.NodeVisitor):
         super().__init__()
 
     def visit_ForeachStatement(self, node: spir.ForeachStatement):
+        # Nested inside a sequential ``for``, this foreach is not visited by the statement walk that
+        # registers stream DSDs, so report it here. ``in_for`` is false at the top level, where that
+        # walk has already handled it.
+        self.callback(node, self.in_for, self.in_assignment)
         old_scope = self.in_foreach
         self.in_foreach = True
         self.generic_visit(node)
@@ -1169,16 +1285,28 @@ class DSDVisitor(spir.NodeVisitor):
         self.generic_visit(node)
         self.in_for = old_scope
 
+    @property
+    def in_transfer_scope(self) -> bool:
+        """
+        Whether a send or receive here transfers a whole array and so needs a fabric DSD.
+
+        A sequential ``for`` counts: it lowers to a real CSL loop, and each iteration moves the
+        whole local array, exactly as one outside the loop would. Element accesses do *not* count
+        (see :meth:`visit_Identifier`) -- ``a[k]`` inside a sequential loop is one element per
+        iteration, which is a scalar access and not a DSD.
+        """
+        return self.in_foreach or self.in_map or self.in_for
+
     def visit_Identifier(self, node: spir.Identifier):
         self.callback(node, self.in_foreach or self.in_map, self.in_assignment)
         return
 
     def visit_SendStatement(self, node: spir.SendStatement):
-        self.callback(node, self.in_foreach or self.in_map, self.in_assignment)
+        self.callback(node, self.in_transfer_scope, self.in_assignment)
         return
 
     def visit_ReceiveStatement(self, node: spir.ReceiveStatement):
-        self.callback(node, self.in_foreach or self.in_map, self.in_assignment)
+        self.callback(node, self.in_transfer_scope, self.in_assignment)
         return
 
     def visit_ArraySlice(self, node: spir.ArraySlice):
@@ -1195,297 +1323,6 @@ class DSDVisitor(spir.NodeVisitor):
             self.generic_visit(node)
         self.in_assignment = old_assignment
         return
-
-
-def _route_dir(dx: int, dy: int):
-    """
-    Helper function that returns directions for routing: (source, target).
-    """
-    assert abs(dx + dy) == 1
-    if dx == -1:
-        return ('EAST', 'WEST')
-    elif dx == 1:
-        return ('WEST', 'EAST')
-    elif dy == -1:
-        return ('SOUTH', 'NORTH')
-    elif dy == 1:
-        return ('NORTH', 'SOUTH')
-
-
-def _collect_routes(rectangles: list[Rectangle[PEBlock]], color_maps: list[dict[str,
-                                                                                int]]) -> dict[tuple[int, int], str]:
-    """
-    Creates a parametric version of the Routing Graph (see the Spatial IR specification for more information) and
-    returns a dictionary of code segements to add to the layout CSL file based on the streams.
-
-    :param rectangles: All rectangles involved in this kernel.
-    :return: A dictionary mapping the starting point of each rectangle to a string representing the layout instructions.
-    """
-    INDENT = 12 * ' '
-    result = {}
-
-    # Create a routing graph
-    for rect, color_map in zip(rectangles, color_maps):
-        # Test whether a receive/send statement are called for creating inbound/outbound routes
-        sends_recvs = analysis.sends_and_receives(rect.metadata.compute)
-        inst = ''
-
-        # Make routing instructions unique
-        routing_instructions: set[str] = set()
-
-        # For each hop, make a color WEST-EAST/NORTH-SOUTH pair. For the first and last hop, pair with RAMP
-        for stream in rect.metadata.dataflow.statements:
-            if stream.stream_name not in sends_recvs:  # Skip unused streams
-                continue
-            sent, received = sends_recvs[stream.stream_name]
-            if received:
-                color_name_inbound = f'@get_color({color_map[name_to_csl(stream.stream_name) + "_IN"]})'
-            if sent:
-                color_name_outbound = f'@get_color({color_map[name_to_csl(stream.stream_name) + "_OUT"]})'
-
-            if isinstance(stream.stream, spir.ExternStreamDeclaration):
-                continue  # Extern streams do not have on-chip routing
-
-            if stream.stream.routing is not None and stream.stream.routing.counted_switch:
-                # Counted interval shifts are emitted from kernel.shift_schedules.
-                continue
-
-            if isinstance(stream.stream, spir.MulticastRangeStreamDeclaration):
-                if sent and received:
-                    raise ValueError(
-                        f"Multicast stream '{stream.stream_name.as_ir()}' is both sent and received "
-                        f"within the same compute rectangle [{rect.x_range[0]}:{rect.x_range[1]}, "
-                        f"{rect.y_range[0]}:{rect.y_range[1]}]. "
-                        "Sender and receiver compute blocks must be in separate rectangles for multicast streams.")
-                if not sent:
-                    # All multicast routing is emitted by the rectangle that sends this stream.
-                    continue
-                rng = stream.stream.multicast_range
-                start = int(rng.start.eval())
-                stop = int(rng.stop.eval())
-                axis = stream.stream.multicast_axis
-                is_negative = start < 0
-
-                if axis == 'y':
-                    if is_negative:
-                        tx_dir, rx_dir = 'NORTH', 'SOUTH'
-                    else:
-                        tx_dir, rx_dir = 'SOUTH', 'NORTH'
-
-                    def _coord(k):  # noqa: E731
-                        if k >= 0:
-                            return 'pe_x', f'pe_y + {k}'
-                        return 'pe_x', f'pe_y - {-k}'
-                else:
-                    if is_negative:
-                        tx_dir, rx_dir = 'WEST', 'EAST'
-                    else:
-                        tx_dir, rx_dir = 'EAST', 'WEST'
-
-                    def _coord(k):  # noqa: E731
-                        if k >= 0:
-                            return f'pe_x + {k}', 'pe_y'
-                        return f'pe_x - {-k}', 'pe_y'
-
-                # Sender: inject into fabric toward receivers.
-                routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{RAMP}, .tx = .{%s} } });\n' % (
-                    color_name_outbound, tx_dir)
-                if routing_inst not in routing_instructions:
-                    inst += routing_inst
-                    routing_instructions.add(routing_inst)
-
-                if is_negative:
-                    # Negative multicast: receivers at start, start-1, …, stop+1 (stop exclusive).
-                    k_last = stop + 1  # farthest receiver
-
-                    # Gap relay-only PEs between sender and first receiver (when start < -1).
-                    for k in range(-1, start, -1):
-                        cx, cy = _coord(k)
-                        routing_inst = INDENT + '@set_color_config(%s, %s, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                            cx, cy, color_name_outbound, rx_dir, tx_dir)
-                        if routing_inst not in routing_instructions:
-                            inst += routing_inst
-                            routing_instructions.add(routing_inst)
-
-                    # Intermediate receivers: forward toward farthest and deliver to RAMP.
-                    for k in range(start, k_last, -1):
-                        cx, cy = _coord(k)
-                        routing_inst = INDENT + '@set_color_config(%s, %s, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s, RAMP} } });\n' % (
-                            cx, cy, color_name_outbound, rx_dir, tx_dir)
-                        if routing_inst not in routing_instructions:
-                            inst += routing_inst
-                            routing_instructions.add(routing_inst)
-
-                    # Last (farthest) receiver: deliver to RAMP only, no forwarding.
-                    cx, cy = _coord(k_last)
-                    routing_inst = INDENT + '@set_color_config(%s, %s, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{RAMP} } });\n' % (
-                        cx, cy, color_name_outbound, rx_dir)
-                    if routing_inst not in routing_instructions:
-                        inst += routing_inst
-                        routing_instructions.add(routing_inst)
-                else:
-                    # Positive multicast: receivers at start, start+1, …, stop-1 (stop exclusive).
-                    # Gap relay-only PEs between sender and first receiver (when start > 1).
-                    for k in range(1, start):
-                        cx, cy = _coord(k)
-                        routing_inst = INDENT + '@set_color_config(%s, %s, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                            cx, cy, color_name_outbound, rx_dir, tx_dir)
-                        if routing_inst not in routing_instructions:
-                            inst += routing_inst
-                            routing_instructions.add(routing_inst)
-
-                    # Intermediate receivers: forward and simultaneously deliver to RAMP.
-                    for k in range(start, stop - 1):
-                        cx, cy = _coord(k)
-                        routing_inst = INDENT + '@set_color_config(%s, %s, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s, RAMP} } });\n' % (
-                            cx, cy, color_name_outbound, rx_dir, tx_dir)
-                        if routing_inst not in routing_instructions:
-                            inst += routing_inst
-                            routing_instructions.add(routing_inst)
-
-                    # Last receiver: deliver to RAMP only, no forwarding.
-                    k_last = stop - 1
-                    cx, cy = _coord(k_last)
-                    routing_inst = INDENT + '@set_color_config(%s, %s, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{RAMP} } });\n' % (
-                        cx, cy, color_name_outbound, rx_dir)
-                    if routing_inst not in routing_instructions:
-                        inst += routing_inst
-                        routing_instructions.add(routing_inst)
-                continue
-
-            if len(stream.stream.routing.hops) == 1:  # Inbound and outbound generated together
-                route = _route_dir(*stream.stream.routing.hops[0].offset)
-                if sent:
-                    routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                        color_name_outbound, 'RAMP', route[1])
-                    if routing_inst not in routing_instructions:
-                        inst += routing_inst
-                        routing_instructions.add(routing_inst)
-                if received:
-                    routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                        color_name_inbound, route[0], 'RAMP')
-                    if routing_inst not in routing_instructions:
-                        inst += routing_inst
-                        routing_instructions.add(routing_inst)
-            else:  # Multi-hop
-                if sent:
-                    first_hop = stream.stream.routing.hops[0]
-                    route = ('RAMP', _route_dir(*first_hop.offset)[1])
-                    routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                        color_name_outbound, route[0], route[1])
-                    if routing_inst not in routing_instructions:
-                        inst += routing_inst
-                        routing_instructions.add(routing_inst)
-                    cur_offx = 0
-                    cur_offy = 0
-                    for hop in stream.stream.routing.hops[1:]:
-                        route = _route_dir(*hop.offset)
-                        cur_offx += hop.offset[0]
-                        cur_offy += hop.offset[1]
-                        routing_inst = INDENT + '@set_color_config(pe_x + %d, pe_y + %d, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                            cur_offx, cur_offy, color_name_outbound, route[0], route[1])
-                        if routing_inst not in routing_instructions:
-                            inst += routing_inst
-                            routing_instructions.add(routing_inst)
-                if received:
-                    # The receiver only configures itself (pe_x + 0, pe_y + 0).
-                    # Intermediate PEs are configured by the sender block above,
-                    # which walks forward through hops[1:] relative to the sender PE.
-                    last_hop = stream.stream.routing.hops[-1]
-                    route = (_route_dir(*last_hop.offset)[0], 'RAMP')
-                    routing_inst = INDENT + '@set_color_config(pe_x, pe_y, %s, .{ .routes = .{ .rx = .{%s}, .tx = .{%s} } });\n' % (
-                        color_name_inbound, route[0], route[1])
-                    if routing_inst not in routing_instructions:
-                        inst += routing_inst
-                        routing_instructions.add(routing_inst)
-
-        result[(rect.x_range[0], rect.y_range[0])] = inst
-
-    return result
-
-
-def _emit_shift_schedules(kernel: spir.Kernel, channel_to_color: dict[int, int]) -> str:
-    """
-    Emit absolute @set_color_config with fabric switch pos1 for counted 1D
-    shift bundles, plus spa_switch_after / spa_color_schedule comments.
-
-    Each color carries one two-state program (one phase). Downstream routers
-    advance from pos0 to pos1 on a SWITCH_ADV control wavelet.
-    """
-    schedules = getattr(kernel, "shift_schedules", None)
-    if not schedules:
-        return ""
-
-    from collections import defaultdict
-    from spada.syntax.spatial_ir.shift_bundles import ColorSchedule
-
-    by_pe: dict[tuple[int, int, int], list[ColorSchedule]] = defaultdict(list)
-    for sched in schedules:
-        by_pe[(sched.x, sched.y, sched.channel)].append(sched)
-
-    lines = ["\n    // Counted shift-bundle color schedules\n"]
-    seen_config: set[str] = set()
-    for (x, y, channel), pe_scheds in sorted(by_pe.items()):
-        pe_scheds = sorted(pe_scheds, key=lambda s: s.phase_index)
-        if channel not in channel_to_color:
-            continue
-        if len(pe_scheds) > 1:
-            phases = [sched.phase_index for sched in pe_scheds]
-            raise ValueError(
-                f"Color {channel} on PE ({x},{y}) is used in phases {phases}; "
-                "counted switching assigns a distinct color pair per phase "
-                "because wave quotas differ."
-            )
-        color_expr = f"@get_color({channel_to_color[channel]})"
-        sched = pe_scheds[0]
-        step_txt = " ; ".join(
-            f"{step.as_pair()} waves={step.waves}" for step in sched.steps
-        )
-        lines.append(
-            f"    // spa_color_schedule phase={sched.phase_index} pe={x},{y} "
-            f"ch={channel} : {step_txt}\n"
-        )
-        first = sched.steps[0]
-        inject_only = first.rx == "RAMP" and len(sched.steps) == 1
-        if inject_only:
-            # The sender's router sees the control wavelet on RAMP. always_pop
-            # would consume the first opcode before it reaches downstream PEs.
-            switch_fields = [".pop_mode = .{ .no_pop = true }"]
-        else:
-            # Pop ADV on a real switch and NOP on pass-through hops; do not pop
-            # SWITCH_ADV after this PE has already reached pos1 (later inject).
-            switch_fields = [".pop_mode = .{ .pop_on_advance_nop = true }"]
-            if len(sched.steps) > 1:
-                nxt = sched.steps[1]
-                pos1 = _pos1_field(first, nxt)
-                if pos1 is not None:
-                    switch_fields.insert(0, f".pos1 = .{{ {pos1} }}")
-                lines.append(
-                    f"    // spa_switch_after phase={sched.phase_index} pe={x},{y} "
-                    f"ch={channel} waves={first.waves} rx={nxt.rx} tx={nxt.tx}\n"
-                )
-        config = (
-            f"    @set_color_config({x}, {y}, {color_expr}, "
-            f".{{ .routes = .{{ .rx = .{{{first.rx}}}, .tx = .{{{first.tx}}} }}, "
-            f".switches = .{{ {', '.join(switch_fields)} }} }});\n"
-        )
-        if config not in seen_config:
-            lines.append(config)
-            seen_config.add(config)
-    return "".join(lines)
-
-
-def _pos1_field(first, nxt) -> str | None:
-    """CSL pos1 may set only rx or only tx; the two-state lemma changes one."""
-    if first.rx != nxt.rx and first.tx == nxt.tx:
-        return f".rx = {nxt.rx}"
-    if first.tx != nxt.tx and first.rx == nxt.rx:
-        return f".tx = {nxt.tx}"
-    if first.rx == nxt.rx and first.tx == nxt.tx:
-        return None
-    raise ValueError(
-        f"Counted switch pos1 must change only rx or only tx, got {first} -> {nxt}"
-    )
 
 
 def _write_indented_block(current_code: StringIO, block: str, indent: str) -> None:
@@ -1577,86 +1414,6 @@ def _generate_data_task(
     current_code.write(f"\n}}\n")
 
 
-def _bind_switch_advances(pe_block: PEBlock, kernel: spir.Kernel, dsds: UniqueDSDDict,
-                          header: StringIO) -> dict[str, tuple]:
-    """
-    Map counted-switch send streams to their SWITCH_ADV program and emit
-    control-wavelet DSDs plus encoded payloads into ``header``.
-    """
-    from spada.syntax.spatial_ir.shift_bundles import SwitchAdvance
-
-    advances: list[SwitchAdvance] = getattr(kernel, "switch_advances", None) or []
-    if not advances or pe_block.dataflow is None:
-        return {}
-    by_channel = {adv.channel: adv for adv in advances}
-    stream_to_adv: dict[str, tuple] = {}
-    for stmt in pe_block.dataflow.statements:
-        routing = getattr(stmt.stream, "routing", None)
-        if routing is None or not routing.counted_switch:
-            continue
-        adv = by_channel.get(routing.channel)
-        if adv is None:
-            continue
-        key = stmt.stream_name.as_ir()
-        out_name, out_dsd = _fabout_dsd(dsds, key)
-        if out_dsd is None:
-            continue
-        ctrl_name = f'{name_to_csl(stmt.stream_name)}_ctrl_out_dsd'
-        stream_to_adv[key] = (adv, ctrl_name, out_dsd)
-
-    if not stream_to_adv:
-        return {}
-
-    header.write('const ctrl = @import_module("<control>");\n')
-    header.write('const tile_config = @import_module("<tile_config>");\n')
-    emitted_payloads: set[int] = set()
-    for adv, ctrl_name, out_dsd in stream_to_adv.values():
-        ctrl_dsd = cslstruct.FabricDSD(
-            cslstruct.DSDType.fabout, out_dsd.color, 1, out_dsd.queue, control=True)
-        header.write(f'const {ctrl_name} = {ctrl_dsd.as_csl()};\n')
-        if adv.channel in emitted_payloads:
-            continue
-        emitted_payloads.add(adv.channel)
-        header.write(_encode_switch_payload(adv))
-    header.write('\n')
-    return stream_to_adv
-
-
-def _fabout_dsd(dsds: UniqueDSDDict, stream_key: str):
-    for dsd_name, dsd in dsds.get(stream_key, []):
-        if isinstance(dsd, cslstruct.FabricDSD) and dsd.dsd_type == cslstruct.DSDType.fabout and not dsd.control:
-            return dsd_name, dsd
-    return None, None
-
-
-def _encode_switch_payload(adv) -> str:
-    n = len(adv.opcodes)
-    op_enum = {"SWITCH_ADV": "ctrl.opcode.SWITCH_ADV", "NOP": "ctrl.opcode.NOP"}
-    ops = ", ".join(op_enum[op] for op in adv.opcodes)
-    ignores = ", ".join("true" for _ in adv.opcodes)
-    prefix = f'switch_adv_ch{adv.channel}'
-    return (
-        f'const {prefix}_cmds = [{n}]ctrl.opcode{{ {ops} }};\n'
-        f'const {prefix}_ignore = [{n}]bool{{ {ignores} }};\n'
-        f'const {prefix}_pld: u32 = ctrl.encode_payload('
-        f'{n}, {prefix}_cmds, {prefix}_ignore, true, {{}});\n'
-    )
-
-
-def _emit_switch_advance_after_send(stmt: spir.SendStatement, stream_to_adv: dict) -> str:
-    stream_name = stmt.stream_name.array if isinstance(stmt.stream_name, spir.ArraySlice) else stmt.stream_name
-    entry = stream_to_adv.get(stream_name.as_ir())
-    if entry is None:
-        return ""
-    adv, ctrl_name, _out_dsd = entry
-    coord = "tile_config.fabric_coord.X" if adv.axis == "x" else "tile_config.fabric_coord.Y"
-    return (
-        f'if (tile_config.get_fabric_coord({coord}) != {adv.last_injector}) {{\n'
-        f'    @mov32({ctrl_name}, switch_adv_ch{adv.channel}_pld);\n'
-        f'}}'
-    )
-
-
 def _generate_task_code(rect: PEBlock,
                         task_index: int,
                         task: tdag.CSLTask,
@@ -1669,8 +1426,7 @@ def _generate_task_code(rect: PEBlock,
                         tasks: list[tdag.CSLTask],
                         task_bindings: task_recycling.TaskBindingPlan,
                         postamble: str,
-                        indent: str = '    ',
-                        stream_to_adv: dict | None = None):
+                        indent: str = '    '):
     """
     Generates a local task from a CSL task.
     This function converts statements to DSD operations or generates appropriate code.
@@ -1730,17 +1486,6 @@ def _generate_task_code(rect: PEBlock,
             if any(dsdop in line for line in lines for dsdop in dsd_ops.DSD_ASSIGNMENT_MAPPING):
                 # Asynchronous DSD op. DSD line already contains activation or unblocking
                 skip_activation = True
-
-            if stream_to_adv and isinstance(stmt, spir.SendStatement):
-                extra = _emit_switch_advance_after_send(stmt, stream_to_adv)
-                if extra:
-                    extra_lines = extra.splitlines()
-                    insert_at = next(
-                        (i for i, ln in enumerate(lines)
-                         if ln.lstrip().startswith(('@activate(', '@unblock('))),
-                        len(lines),
-                    )
-                    lines = lines[:insert_at] + extra_lines + lines[insert_at:]
 
             for line in lines:
                 current_code.write(f'{indent}{line}\n')

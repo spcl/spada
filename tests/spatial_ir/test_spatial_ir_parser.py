@@ -1,5 +1,6 @@
 from spada.syntax.spatial_ir import irnodes as spast, parser
 import os
+import pytest
 
 
 def test_spatial_roundtrip_laplacian():
@@ -153,6 +154,100 @@ def test_extern_stream():
     assert out_decl.stream.routing.resolved_channel == 3
 
 
+def test_spatial_roundtrip_bounded_streams():
+    """
+    Tests that the bound of a ``stream<T, BOUND>`` survives a roundtrip on a dataflow declaration.
+    """
+    file = os.path.join(os.path.dirname(__file__), 'samples', 'neighbor_exchange.sptl')
+    _rountrip_test(file)
+
+    program = parser.parse_file(file)
+    df_block = next(stmt for stmt in program.body if isinstance(stmt, spast.DataflowBlock))
+    assert 'stream<f32, K> eastwards' in df_block.statements[0].as_ir()
+    assert df_block.statements[0].dtype.bound is not None
+
+
+def test_unbounded_stream_has_no_bound():
+    """
+    Tests that a stream declared without a second template parameter has no bound.
+    """
+    code = """
+    kernel @test<N>(f32 coeff) {
+        dataflow u16 i, u16 j in [0:N, 0:N] {
+            stream<f32> eastwards = relative_stream(1, 0);
+        }
+    }"""
+    kernel = parser.parse_string(code)
+    df_block = next(stmt for stmt in kernel.body if isinstance(stmt, spast.DataflowBlock))
+    assert df_block.statements[0].dtype.bound is None
+    assert df_block.statements[0].as_ir().strip() == 'stream<f32> eastwards = relative_stream(1, 0)'
+
+
+def test_close_statement():
+    """
+    Tests parsing the ``close`` statement, both awaited and with a completion.
+    """
+    code = """
+    kernel @test<N>(stream<f32>[N] readonly inp) {
+        place u16 i, u16 j in [0:N, 0:N] {
+            f32 a
+        }
+        dataflow u16 i, u16 j in [0:N, 0:N] {
+            stream<f32> eastwards = relative_stream(1, 0);
+        }
+        compute u16 i, u16 j in [0:N, 0:N] {
+            await send(a, eastwards)
+            await eastwards.close()
+            completion c = inp[i].close()
+            await c
+        }
+    }"""
+    kernel = parser.parse_string(code)
+    compute = next(stmt for stmt in kernel.body if isinstance(stmt, spast.ComputeBlock))
+    _, awaited, with_completion, _ = compute.statements
+
+    assert isinstance(awaited, spast.CloseStatement)
+    assert awaited.completion_name is None
+    assert awaited.stream_name.as_ir() == 'eastwards'
+    assert awaited.as_ir().strip() == 'await eastwards.close()'
+
+    assert isinstance(with_completion, spast.CloseStatement)
+    assert with_completion.completion_name.name.as_ir() == 'c'
+    assert isinstance(with_completion.stream_name, spast.ArraySlice)
+    assert with_completion.as_ir().strip() == 'completion c = inp[i].close()'
+
+    ir_1 = kernel.as_ir()
+    assert parser.parse_string(ir_1).as_ir() == ir_1
+
+
+def _method_call_kernel(call: str) -> str:
+    return f"""
+    kernel @test<N>(f32 coeff) {{
+        dataflow u16 i, u16 j in [0:N, 0:N] {{
+            stream<f32> eastwards = relative_stream(1, 0);
+        }}
+        compute u16 i, u16 j in [0:N, 0:N] {{
+            await {call}
+        }}
+    }}"""
+
+
+def test_unknown_stream_method():
+    """
+    Tests that an unrecognized method on a stream raises a syntax error.
+    """
+    with pytest.raises(Exception, match='open'):
+        parser.parse_string(_method_call_kernel('eastwards.open()'))
+
+
+def test_close_rejects_arguments():
+    """
+    Tests that arguments to ``close`` are parsed, then rejected with a readable error.
+    """
+    with pytest.raises(Exception, match='takes no arguments'):
+        parser.parse_string(_method_call_kernel('eastwards.close(3)'))
+
+
 if __name__ == '__main__':
     test_spatial_roundtrip_laplacian()
     test_spatial_visitor()
@@ -163,3 +258,8 @@ if __name__ == '__main__':
     test_spatial_roundtrip_backward()
     test_extern_field()
     test_extern_stream()
+    test_spatial_roundtrip_bounded_streams()
+    test_unbounded_stream_has_no_bound()
+    test_close_statement()
+    test_unknown_stream_method()
+    test_close_rejects_arguments()

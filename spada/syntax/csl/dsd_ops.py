@@ -7,7 +7,7 @@ from typing import Literal, Optional
 from spada.syntax.spatial_ir import irnodes as spir
 from spada.syntax.csl import structures as cslstruct
 
-UniqueDSDDict = dict[str, list[tuple[str, cslstruct.DataStructureDescriptor]]]
+UniqueDSDDict = cslstruct.UniqueDSDDict
 
 
 @dataclass
