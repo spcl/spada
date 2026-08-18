@@ -1085,7 +1085,8 @@ def _collect_unique_dsds(
     # PE -- the hardware rejects "two master input queues for the same color". Queues are therefore
     # handed out per channel; streams on ``auto`` channels get a color to themselves, so they key on
     # their own name. Sequential channels may share a queue only when their occupancy spans on this
-    # PE do not overlap; see ``stream_lifetime.assign_fabric_queues``.
+    # PE do not overlap; see ``stream_lifetime.assign_fabric_queues``. On WSE-3 a data-task ID is
+    # that input queue, so inbound colors that bind a data task cannot share one.
     channel_of_stream = {
         declaration.stream_name.as_ir(): declaration.stream.routing.resolved_channel
         for declaration in rect.dataflow.statements
@@ -1098,9 +1099,11 @@ def _collect_unique_dsds(
 
     input_names = _streams_with_fabric_dsds(rect.compute, memcpy_mode, stream_args, inbound=True)
     output_names = _streams_with_fabric_dsds(rect.compute, memcpy_mode, stream_args, inbound=False)
+    exclusive_input_keys = _data_task_queue_keys(tasks, rect.compute, queue_key, input_names)
     input_queue_of = stream_lifetime.assign_fabric_queues(
         _queue_spans(rect.compute, input_names, queue_key, inbound=True), csl.INPUT_QUEUE_IDS,
-        kind='input', architecture=csl.ARCH, location=location)
+        kind='input', architecture=csl.ARCH, location=location,
+        exclusive_keys=exclusive_input_keys)
     output_queue_of = stream_lifetime.assign_fabric_queues(
         _queue_spans(rect.compute, output_names, queue_key, inbound=False), csl.OUTPUT_QUEUE_IDS,
         kind='output', architecture=csl.ARCH, location=location)
@@ -1464,6 +1467,41 @@ def _exit_task_hardware_id(used_ids: set[int], color_ids: set[int]) -> int:
     raise SyntaxError(
         'No free local task ID remains for exit_task '
         f'(occupied {sorted(occupied)}).')
+
+
+def _data_task_queue_keys(
+    tasks: list[tdag.CSLTask],
+    compute: spir.ComputeBlock,
+    queue_key,
+    input_names: set[spir.Identifier],
+) -> frozenset[str]:
+    """Return queue keys whose inbound color will bind a data task.
+
+    Used on WSE-3 so those colors each get their own input queue: the queue is
+    the data-task hardware ID and the comptime ``@initialize_queue`` bind. WSE-2
+    data-task IDs are colors, so occupancy pooling may still share queues there.
+
+    :param tasks: Tasks of this PE, already classified as local or data.
+    :param compute: The compute block those task statement indices refer to.
+    :param queue_key: Maps a stream identifier to its grouping key.
+    :param input_names: Streams that bind a fabric input queue on this PE.
+    :return: The exclusive keys, or empty when this generation may share queues.
+    """
+    if csl.ARCH != 'wse3':
+        return frozenset()
+    keys: set[str] = set()
+    for task in tasks:
+        if task.task_type != 'data':
+            continue
+        stmt = compute.statements[task.statements[0]]
+        if not isinstance(stmt, spir.ForeachStatement):
+            continue
+        sname = stmt.receive_stream.stream_name
+        if isinstance(sname, spir.ArraySlice):
+            sname = sname.array
+        if sname in input_names:
+            keys.add(queue_key(sname))
+    return frozenset(keys)
 
 
 def _data_task_color(rect: PEBlock, task_index: int, task: tdag.CSLTask, color_map: dict[str, int]) -> int:

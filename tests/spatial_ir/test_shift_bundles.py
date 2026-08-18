@@ -338,3 +338,31 @@ def test_a_scalar_receive_lowers_to_a_data_task():
             assert f'@initialize_queue(@get_input_queue({queue}),' in pe0, pe0
     else:
         assert re.search(r'@get_data_task_id\(@get_color\(\d+\)\)', pe0), pe0
+
+
+def test_sequential_data_task_colors_get_distinct_hardware_ids():
+    """R=2 binds two data tasks on one PE; they must not share a hardware ID.
+
+    On WSE-3 that ID is the input queue, so occupancy pooling must not remap the
+    first epoch's queue onto the second color. cslc rejects the shared ID as
+    "task ID bound to more than one task".
+    """
+    path = os.path.join(
+        os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'simple', 'exchange_bundle_1D.sptl'
+    )
+    kernel = parser.parse_file(path)
+    kernel = passes.concretize_parameters(kernel, M=3, D=3, R=2)
+    kernel = passes.constexpr_propagation(kernel)
+    files = lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
+    pe = next(f.code for f in files if f.filename == 'code_3_0.csl')
+    ids = re.findall(r'const dtask_\d+_id = (@get_data_task_id\([^;]+);', pe)
+    assert len(ids) == 2, pe
+    assert ids[0] != ids[1], pe
+    if constants.ARCH == 'wse3':
+        queues = re.findall(r'@get_data_task_id\(@get_input_queue\((\d+)\)\)', pe)
+        assert len(set(queues)) == 2, pe
+        inits = re.findall(
+            r'@initialize_queue\(@get_input_queue\((\d+)\), \.\{ \.color = (\w+) \}\)', pe)
+        by_queue = {queue: color for queue, color in inits}
+        for queue in queues:
+            assert queue in by_queue, pe

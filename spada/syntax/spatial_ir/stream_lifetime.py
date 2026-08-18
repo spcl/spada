@@ -741,7 +741,8 @@ def _never_concurrent(first: str, second: str, uses_per_rect: list[dict[spir.Ide
 
 
 def assign_fabric_queues(spans: dict[str, tuple[int, int]], queue_ids: list[int], *, kind: str,
-                         architecture: str, location: str) -> dict[str, int]:
+                         architecture: str, location: str,
+                         exclusive_keys: frozenset[str] | None = None) -> dict[str, int]:
     """
     Assigns hardware fabric queues to stream groups from their occupancy spans on one PE.
 
@@ -749,6 +750,10 @@ def assign_fabric_queues(spans: dict[str, tuple[int, int]], queue_ids: list[int]
     use on this PE to its last, including gaps between epochs: wavelets of that colour can still
     arrive in a gap, and remapping the queue onto another color while they sit there is what the
     hardware rejects. Two groups may share a queue only when those spans do not overlap.
+
+    Keys in ``exclusive_keys`` never share a queue, even when their spans are disjoint. That is
+    required on WSE-3 for inbound colors that bind a data task: the hardware ID *is* the input
+    queue, and ``@initialize_queue`` is a comptime one-to-one bind.
 
     The spans form an interval graph, so colouring them in start-time order is optimal.
 
@@ -759,6 +764,8 @@ def assign_fabric_queues(spans: dict[str, tuple[int, int]], queue_ids: list[int]
     :param kind: ``'input'`` or ``'output'``, for the diagnostic.
     :param architecture: The target name, for the diagnostic.
     :param location: The PE rectangle, for the diagnostic.
+    :param exclusive_keys: Groups that must each own a queue for the whole PE, typically WSE-3
+                           data-task colors.
     :return: Mapping of grouping key to a queue identifier from ``queue_ids``.
     """
     if not spans:
@@ -767,13 +774,15 @@ def assign_fabric_queues(spans: dict[str, tuple[int, int]], queue_ids: list[int]
         raise SyntaxError(
             f'{location} needs {kind} queues, but {architecture} has none that a program may use.')
 
+    exclusive_keys = exclusive_keys or frozenset()
     assigned: dict[str, int] = {}
     for key in sorted(spans, key=lambda name: (spans[name][0], spans[name][1], name)):
         start, end = spans[key]
         used = {
             assigned[other]
             for other in assigned
-            if start <= spans[other][1] and spans[other][0] <= end
+            if (key in exclusive_keys or other in exclusive_keys
+                or (start <= spans[other][1] and spans[other][0] <= end))
         }
         for queue in queue_ids:
             if queue not in used:
@@ -782,8 +791,15 @@ def assign_fabric_queues(spans: dict[str, tuple[int, int]], queue_ids: list[int]
         else:
             overlapping = sorted(
                 other for other, (other_start, other_end) in spans.items()
-                if other != key and start <= other_end and other_start <= end
+                if other != key and (
+                    key in exclusive_keys or other in exclusive_keys
+                    or (start <= other_end and other_start <= end))
             )
+            extra = ''
+            if key in exclusive_keys or exclusive_keys.intersection(overlapping):
+                extra = (
+                    '\n  note: on WSE-3 a data-task ID is its input queue, so two colors that bind '
+                    'a data task cannot share one')
             raise SyntaxError(
                 f'{location} would need {len(used) + 1} concurrent {kind} queues '
                 f'(live groups {[key] + overlapping}), but a PE can use at most '
@@ -791,7 +807,7 @@ def assign_fabric_queues(spans: dict[str, tuple[int, int]], queue_ids: list[int]
                 f'  note: a fabric queue is remapped when a new color uses it, and the hardware '
                 f'rejects that while wavelets remain\n'
                 f'  note: a channel keeps one queue for the whole of its lifetime on the PE, '
-                f'including gaps between epochs')
+                f'including gaps between epochs{extra}')
     return assigned
 
 

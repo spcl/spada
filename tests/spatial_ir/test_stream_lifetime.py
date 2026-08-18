@@ -496,5 +496,22 @@ def test_three_overlapping_spans_exhaust_two_queues():
             kind='input', architecture='wse2', location='PE (0, 0)')
 
 
+def test_exclusive_keys_do_not_share_a_queue_across_a_gap():
+    """WSE-3 data-task colors cannot share a queue even when their spans are disjoint."""
+    assigned = stream_lifetime.assign_fabric_queues(
+        {'channel 0': (0, 2), 'channel 1': (3, 5)}, [2, 3],
+        kind='input', architecture='wse3', location='PE (0, 0)',
+        exclusive_keys=frozenset({'channel 0', 'channel 1'}))
+    assert assigned['channel 0'] != assigned['channel 1']
+
+
+def test_exclusive_keys_exhaust_queues_when_too_many_data_tasks():
+    with pytest.raises(SyntaxError, match='data-task ID'):
+        stream_lifetime.assign_fabric_queues(
+            {'channel 0': (0, 1), 'channel 1': (2, 3), 'channel 2': (4, 5)}, [2, 3],
+            kind='input', architecture='wse3', location='PE (0, 0)',
+            exclusive_keys=frozenset({'channel 0', 'channel 1', 'channel 2'}))
+
+
 if __name__ == '__main__':
     pytest.main([__file__])
