@@ -955,18 +955,13 @@ def _collect_unique_dsds(
             stream_candidates[df_statement.stream_name.as_ir()] = (df_statement, buffer_size)
             if isinstance(df_statement.stream, spir.ExternStreamDeclaration):
                 stream_args.add(df_statement.stream_name)
-    # An array holding exactly one element is accessed as a scalar and needs no descriptor -- unless
-    # a transfer names it, which moves the whole buffer and so has to be able to describe it.
-    transfer_locals = preprocessing.local_transfer_operands(rect)
-
     for place_statement in rect.place.statements:
         if isinstance(place_statement, spir.FieldDeclaration):
             if isinstance(place_statement.dtype, spir.ArrayType):
                 try:
                     eval_shape = [s if isinstance(s, int) else s.eval() for s in place_statement.dtype.shape]
                     # If the product of the shape is 1, it is a scalar
-                    if ((not eval_shape or all(s == 1 for s in eval_shape)) and
-                            place_statement.field_name.as_ir() not in transfer_locals):
+                    if not eval_shape or all(s == 1 for s in eval_shape):
                         # Scalar, no DSD
                         continue
                 except ValueError:
@@ -1101,33 +1096,30 @@ def _collect_unique_dsds(
                 dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_output_queue(stream_name))
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
-            # The local side of a transfer needs a memory DSD of its own. A send also names the
-            # stream, which may itself be a place-block array; an array receive is canonicalized into
-            # a foreach and never gets here, but a one-element one (a promoted scalar) does.
             if isinstance(stmt, spir.SendStatement):
-                transfer_operands = (stmt.local_array, stmt.stream_name)
-            else:
-                transfer_operands = (stmt.local_array,)
-            for arr in transfer_operands:
-                if arr.as_ir() in array_candidates:
-                    _, shape = array_candidates[arr.as_ir()]
-                    if len(shape) == 1:
-                        dsd_type = cslstruct.DSDType.mem1d
-                        extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
-                        indices = ['__index']
-                    else:
-                        dsd_type = cslstruct.DSDType.mem4d
-                        extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
-                        indices = [f'__index_{i}' for i in range(len(shape))]
+                # If the send statement sends from a local array, create another DSD
+                # Do the same for the stream
+                # This case does not apply for receive statements, as they would be lowered to foreach statements
+                for arr in (stmt.local_array, stmt.stream_name):
+                    if arr.as_ir() in array_candidates:
+                        _, shape = array_candidates[arr.as_ir()]
+                        if len(shape) == 1:
+                            dsd_type = cslstruct.DSDType.mem1d
+                            extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
+                            indices = ['__index']
+                        else:
+                            dsd_type = cslstruct.DSDType.mem4d
+                            extents = [str(s) if isinstance(s, int) else s.as_ir() for s in shape]
+                            indices = [f'__index_{i}' for i in range(len(shape))]
 
-                    dsd = cslstruct.MemoryDSD(
-                        dsd_type,
-                        name_to_csl(arr),
-                        extents,
-                        indices,
-                        indices,
-                    )
-                    dsds[arr.as_ir()].append((f"{name_to_csl(arr)}_dsd", dsd))
+                        dsd = cslstruct.MemoryDSD(
+                            dsd_type,
+                            name_to_csl(arr),
+                            extents,
+                            indices,
+                            indices,
+                        )
+                        dsds[arr.as_ir()].append((f"{name_to_csl(arr)}_dsd", dsd))
 
         elif isinstance(stmt, spir.ForeachStatement):
             _visit_foreach(stmt)
