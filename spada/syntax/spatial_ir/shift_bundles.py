@@ -5,7 +5,7 @@ A run of consecutive PEs each shifting the same distance ``d`` along an axis has
 the router of source ``p + 1`` carries source ``p``'s words. One color per direction still suffices,
 because the routers can be time-multiplexed -- but only if every switch is triggered by something
 the PE that owns it knows locally, since a control wavelet advances *every* switch-configured router
-it reaches (see ``irspec/docs/spatial/routing.md``).
+it reaches (see ``irspec/docs/spatial/routing_wse.md``).
 
 Send order is what provides that. The sources go nearest-the-destinations first, so a source's
 router changes from injecting to relaying exactly when that source has finished its own send, which

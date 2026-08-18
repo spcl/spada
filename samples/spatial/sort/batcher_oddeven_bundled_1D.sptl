@@ -38,7 +38,7 @@
  * into the next -- an overlapping interval shift, which is what a bundle is. The low PEs of a
  * block take turns nearest-the-partner-first, handing their routers over to relay mode as they
  * finish; the high PEs are statically routed and pick their keys out of the stream with a
- * counter filter. See irspec/docs/spatial/routing.md.
+ * counter filter. See irspec/docs/spatial/routing_wse.md.
  *
  * Bundling is chosen by the channel assignment, since a bundle is what several overlapping
  * matchings on one channel become. It costs one filter per participating PE and saves the
