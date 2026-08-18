@@ -227,6 +227,27 @@ def test_codegen_avoids_local_task_id_color_overlap():
 
     assert 8 in colors, 'sample should force color 8 to be allocated'
     assert local_task_ids
-    assert local_task_ids.isdisjoint(colors), (
-        f'local task IDs overlap communication colors: ids={sorted(local_task_ids)}, colors={sorted(colors)}'
+    assert local_task_ids.isdisjoint(constants.RESERVED_LOCAL_TASK_IDS), (
+        f'local task IDs overlap memcpy reservations: ids={sorted(local_task_ids)}'
+    )
+    if constants.ARCH != 'wse3':
+        # On WSE-2 a data-task ID is its color, so the two sets must be disjoint.
+        assert local_task_ids.isdisjoint(colors), (
+            f'local task IDs overlap communication colors: ids={sorted(local_task_ids)}, '
+            f'colors={sorted(colors)}'
+        )
+
+
+def test_csl_runtime_task_recycling_sample_avoids_memcpy_local_task_ids():
+    """The merge sample's 14 local tasks used to land on memcpy's ID 21 on WSE-3."""
+    path = os.path.join(_CSL_RUNTIME_TASK_RECYCLING_SAMPLES, 'task_recycling_merge.sptl')
+    kernel = parser.parse_file(path)
+    kernel = passes.constexpr_propagation(kernel)
+    csl_files = lower_spatial_ir_to_csl(
+        kernel, task_fusion=False, copy_elision=True, prune_memory=True)
+    combined = '\n'.join(f.code for f in csl_files)
+    local_task_ids = {int(v) for v in re.findall(r'@get_local_task_id\((\d+)\)', combined)}
+    assert local_task_ids
+    assert local_task_ids.isdisjoint(constants.RESERVED_LOCAL_TASK_IDS), (
+        f'generated local task IDs overlap memcpy: {sorted(local_task_ids)}'
     )

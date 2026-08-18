@@ -410,7 +410,13 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         i: _data_task_color(rect.metadata, i, task, color_map)
         for i, task in enumerate(tasks) if task.task_type == 'data'
     }
-    task_bindings = task_recycling.plan_task_bindings(tasks, task_creation_behavior, set(color_map.values()),
+    # On WSE-2 a data-task ID *is* its color, so a local task must not reuse one.
+    # On WSE-3 data-task IDs are input queues 0–7; colors and local tasks do not
+    # share a namespace. memcpy's local tasks are reserved on both generations.
+    disallowed_task_ids = set(csl.RESERVED_LOCAL_TASK_IDS)
+    if csl.ARCH != 'wse3':
+        disallowed_task_ids |= set(color_map.values())
+    task_bindings = task_recycling.plan_task_bindings(tasks, task_creation_behavior, disallowed_task_ids,
                                                      data_task_colors)
 
     place_block_bytes = _place_block_storage_bytes(rect.metadata.place)
@@ -520,13 +526,13 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         if tasks[representative].blocked:
             footer.write(f'    @block(dtask_{representative}_id);\n')
 
-    max_task_id = max((slot.hardware_task_id for slot in task_bindings.local_slots), default=csl.LOCAL_TASK_IDS[0] - 1)
-
     # Create exit task that unblocks command stream
     exit_task_sequential = all(typ == tdag.InterTaskEdge.SEQUENCE for t in tasks for n, typ in t.outgoing if n == -1)
     exit_task_sequential &= not any(
         t.task_type == 'data' for t in tasks for n, _ in t.outgoing if n == -1)  # No data tasks
     exit_task_blocked = any(n == -1 and typ == tdag.InterTaskEdge.UNBLOCK for t in tasks for n, typ in t.outgoing)
+    hardware_exit_id = None if exit_task_sequential else _exit_task_hardware_id(
+        {slot.hardware_task_id for slot in task_bindings.local_slots}, set(color_map.values()))
 
     # Bind exit task
     if not exit_task_sequential:
@@ -607,7 +613,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
     if not exit_task_sequential:
         current_code.write(f'''
-const exit_task_id = @get_local_task_id({max_task_id + 1});
+const exit_task_id = @get_local_task_id({hardware_exit_id});
 task exit_task() void {{
     {benchmark_code.kernel_postamble}
     // On completion, unblock command stream
@@ -1436,6 +1442,28 @@ def _write_indented_block(current_code: StringIO, block: str, indent: str) -> No
         return
     for line in block.splitlines():
         current_code.write(f'{indent}{line}\n')
+
+
+def _exit_task_hardware_id(used_ids: set[int], color_ids: set[int]) -> int:
+    """Return a local-task ID for ``exit_task`` that nothing else has bound.
+
+    Walks the activatable range from 8 and skips IDs already taken by program
+    slots, by memcpy/system reservations, and on WSE-2 by colors (which are also
+    data-task IDs there).
+
+    :param used_ids: Hardware IDs already assigned to local-task slots.
+    :param color_ids: Colors allocated to this PE.
+    :return: A free activatable identifier.
+    """
+    occupied = set(used_ids) | set(csl.RESERVED_LOCAL_TASK_IDS)
+    if csl.ARCH != 'wse3':
+        occupied |= set(color_ids)
+    for tid in range(8, 31):
+        if tid not in occupied:
+            return tid
+    raise SyntaxError(
+        'No free local task ID remains for exit_task '
+        f'(occupied {sorted(occupied)}).')
 
 
 def _data_task_color(rect: PEBlock, task_index: int, task: tdag.CSLTask, color_map: dict[str, int]) -> int:
