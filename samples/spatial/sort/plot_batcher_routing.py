@@ -4,11 +4,13 @@ Visualize the channel assignment of the 1D Batcher samples.
 
 Versions
 --------
-  static   batcher_oddeven_1D.sptl. At distance d, offset r uses
-             fwd (east,  +d) : channel 2*((d - 1) + r)
-             bwd (west,  -d) : channel 2*((d - 1) + r) + 1
-           Stages that share d reuse those colors, so a PE that plays a
-           different role at the same d occupies several switch positions.
+  static   batcher_oddeven_1D.sptl. No router reconfiguration at all: a
+           channel is only reused where every PE keeps its role on it, so each
+           cell of the table holds a single switch position. The p = 1 stages
+           get their own block, since a PE's role there depends on the stage;
+           the p >= 2 stages of one distance d agree on roles and share:
+             p = 1  : fwd 2*((d - 1) + r),           bwd fwd + 1
+             p >= 2 : fwd 2*(n - 1) + 2*((d - 1) + r), bwd fwd + 1
   bundled  batcher_oddeven_bundled_1D.sptl. Each phase uses two colors, one
            per direction. Phases with d >= 2 whose comparators form a run of
            at least two sources are a shift bundle: sources inject then
@@ -97,12 +99,19 @@ class Cell:
     filter_init: int | None = None
 
 
-def fwd_channel_static(dist: int, offset: int) -> int:
-    return 2 * ((dist - 1) + offset)
+def fwd_channel_static(dist: int, offset: int, p: int, n: int) -> int:
+    """Eastbound channel of matching ``(dist, offset)`` of a stage with the given ``p``.
+
+    The p = 1 stages live in their own block of ``2*(n - 1)`` channels because a
+    PE's role on such a channel depends on the stage; the p >= 2 stages of one
+    distance agree on roles and so share a channel above that block.
+    """
+    block = 0 if p == 1 else 2 * (n - 1)
+    return block + 2 * ((dist - 1) + offset)
 
 
-def bwd_channel_static(dist: int, offset: int) -> int:
-    return fwd_channel_static(dist, offset) + 1
+def bwd_channel_static(dist: int, offset: int, p: int, n: int) -> int:
+    return fwd_channel_static(dist, offset, p, n) + 1
 
 
 def batcher_phases(n: int) -> list[Phase]:
@@ -117,7 +126,11 @@ def batcher_phases(n: int) -> list[Phase]:
         for r in range(dist):
             pairs = tuple((i, i + dist) for i in range(r, n, 1 << l))
             matchings.append(
-                Matching(l, 1, dist, r, pairs, fwd_channel_static(dist, r), bwd_channel_static(dist, r))
+                Matching(
+                    l, 1, dist, r, pairs,
+                    fwd_channel_static(dist, r, 1, n),
+                    bwd_channel_static(dist, r, 1, n),
+                )
             )
         phases.append(Phase(index, l, 1, dist, tuple(matchings)))
         index += 1
@@ -132,7 +145,11 @@ def batcher_phases(n: int) -> list[Phase]:
                     for lo in range(start, stop, 2 * dist):
                         pairs.append((lo, lo + dist))
                 matchings.append(
-                    Matching(l, p, dist, r, tuple(pairs), fwd_channel_static(dist, r), bwd_channel_static(dist, r))
+                    Matching(
+                        l, p, dist, r, tuple(pairs),
+                        fwd_channel_static(dist, r, p, n),
+                        bwd_channel_static(dist, r, p, n),
+                    )
                 )
             phases.append(Phase(index, l, p, dist, tuple(matchings)))
             index += 1
