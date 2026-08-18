@@ -253,20 +253,34 @@ def _bundled_batcher(l: int):
     return lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
 
 
-@pytest.mark.parametrize('l, phases', [(2, 3), (3, 6)])
-def test_a_batcher_phase_costs_two_colors(l: int, phases: int):
-    # The matchings of a phase are declared as one stream over the whole line and share its channel,
-    # so the count is per phase and per direction rather than per comparator.
-    layout = next(f.code for f in _bundled_batcher(l) if 'layout' in f.filename)
+def _colors_of(layout: str, pattern: str = '') -> set[int]:
     routes = layout[layout.index('// Routes'):]
-    assert len({int(color) for color in re.findall(r'@get_color\((\d+)\)', routes)}) == 2 * phases
+    return {int(color) for color in re.findall(r'@get_color\((\d+)\)[^;]*' + pattern, routes)}
 
 
-def test_the_batcher_runs_out_of_filters_before_it_runs_out_of_colors():
-    # A PE receives a bundle in every phase whose distance is at least two, and cannot filter more
-    # than three colors; L = 4 has six such phases.
-    with pytest.raises(SyntaxError, match='wavelet filters'):
-        _bundled_batcher(4)
+@pytest.mark.parametrize('l, colors', [(2, 6), (3, 10), (4, 18)])
+def test_the_batcher_fits_the_colors_it_has(l: int, colors: int):
+    # A bundled phase puts all of its matchings on one color pair; the phases left unbundled take a
+    # pair per matching, but share those across phases wherever their sources agree mod 2d.
+    from spada.syntax.csl import constants
+
+    used = _colors_of(next(f.code for f in _bundled_batcher(l) if 'layout' in f.filename))
+    assert len(used) == colors
+    assert len(used) <= len(constants.COLORS)
+
+
+def test_only_the_widest_batcher_phases_are_bundled():
+    # Bundling costs one filter at every participating PE and a PE has three, so the sample bundles
+    # the three widest phases only. Lowering at all is the check that no PE needs a fourth, since
+    # ``_check_filter_budget`` would refuse.
+    from spada.syntax.csl import constants
+
+    layout = next(f.code for f in _bundled_batcher(4) if 'layout' in f.filename)
+    used, filtered, switched = _colors_of(layout), _colors_of(layout, r'\.filter'), _colors_of(layout, r'\.switches')
+
+    assert len(filtered) == 2 * constants.FILTERS_PER_PE  # three phases, two directions each
+    assert filtered == switched  # a bundled color is one whose sources hand over to relay mode
+    assert not (used - filtered) & switched  # the pooled ones hold a single static configuration
 
 
 def test_batcher_scalar_receive_lowers_to_data_task():

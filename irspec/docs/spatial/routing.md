@@ -340,8 +340,9 @@ without being filtered.
     WSE-2 has four filters per PE, of which the `memcpy` module reserves one, so **three** are usable
     (`FILTERS_PER_PE`). A PE needs one per color it filters. *If a PE would need more, a compile error
     is raised*; the fix is to give some of the streams their own channels, which trades filters for
-    colors. `batcher_oddeven_bundled_1D.sptl` hits this at $2^4$ PEs, where a PE receives a bundle in
-    six phases.
+    colors. Three filters therefore means at most three bundled phases per PE, whatever the kernel:
+    `batcher_oddeven_bundled_1D.sptl` would want ten at $2^4$ PEs and bundles only its three widest
+    phases, which is where most of the colors are saved anyway.
 
     Reconfiguring a filter while wavelets are still in flight on its color is a data race, and the
     destination that terminates the stream cannot be reconfigured until the stream has drained,
@@ -352,6 +353,18 @@ Bundling applies only when every run it decomposes into has at least two sources
 than the shift distance, so that no PE is both a source and a destination; a shift of one PE is left
 alone, since a chain at distance one is already sequenced by ordinary switch positions. Anything
 else falls back to the per-hop lowering, and to the errors above if that conflicts.
+
+Which shifts are bundled is decided by the channel assignment rather than by an attribute: a bundle
+is what several overlapping matchings on *one* channel become, so giving each matching a channel of
+its own is how a kernel declines the trade. What it then costs is colors, and those can be won back
+by reusing a channel across phases. Two unbundled shifts may share one safely when they agree on
+axis and signed distance and their sources agree modulo twice that distance, because a PE's role —
+source, relay or destination — is then a function of its position modulo twice the distance alone,
+so one static configuration serves every phase in the pool. Sharing on any other basis risks a PE
+that sends on the color in one phase and receives on it in another, which needs a two-sided switch
+change that a sender cannot drive (see *Lowering to Switches*), and nothing in the compiler
+currently rejects it. `batcher_oddeven_bundled_1D.sptl` pools on exactly this rule, and
+`batcher_oddeven_1D.sptl` is the same rule written out as arithmetic.
 
 This arrangement is the one used in Schnyder's *Distributed Sorting on the Cerebras Wafer-Scale
 Engine* (fig. 7.6) for the 2D reduce-scatter, and is known to run on WSE-2.

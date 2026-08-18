@@ -9,23 +9,34 @@
  * Each drawn comparator is two messages (low -> high, then high -> low).
  * Lower index keeps min; higher index keeps max.
  *
- * This is the bundled variant of batcher_oddeven_1D: a whole phase uses two colors, one per
- * direction, where the static version needs one per matching. The comparators of a phase at
- * distance d partition the line into alternating blocks of d PEs, and each block ships its
- * keys d steps into the next -- an overlapping interval shift, which is what a bundle is. The
- * low PEs of a block take turns nearest-the-partner-first, handing their routers over to relay
- * mode as they finish; the high PEs are statically routed and pick their key out of the stream
- * with a counter filter. See irspec/docs/spatial/routing.md.
+ * This is the bundled variant of batcher_oddeven_1D. The comparators of a phase at distance d
+ * partition the line into alternating blocks of d PEs, and each block ships its keys d steps
+ * into the next -- an overlapping interval shift, which is what a bundle is. The low PEs of a
+ * block take turns nearest-the-partner-first, handing their routers over to relay mode as they
+ * finish; the high PEs are statically routed and pick their key out of the stream with a
+ * counter filter. See irspec/docs/spatial/routing.md.
  *
- * Both streams of a phase are declared once for the whole line, which is what puts every
- * matching of that phase on one channel. Colors are not reused across phases: the router
- * configurations depend on d, and a color holds one set of them.
+ * Bundling is chosen by the channel assignment, since a bundle is what several overlapping
+ * matchings on one channel become. It costs one filter per participating PE and saves the
+ * colors the matchings would otherwise need, and a PE has only three filters, so only the three
+ * widest phases are bundled -- the rule 4*d >= N picks exactly those for any L >= 3, and they
+ * are where the saving is largest. A bundled color cannot be reused by a later phase: its
+ * sources advance to pos1 and nothing resets them.
  *
- * What caps L here is the three filters a PE can use, not the 21 colors. A PE needs one per
- * phase it receives a bundle in, and only the d = 1 phases are unbundled (a chain of shifts
- * of one is sequenced by ordinary switch positions), so the count is the number of phases
- * with d >= 2: three at L = 3, six at L = 4. Beyond L = 3 the phases have to go back to a
- * color per matching, as batcher_oddeven_1D does.
+ * The phases left unbundled are routed per matching, as in batcher_oddeven_1D, but their colors
+ * are pooled across phases. Two of them may share when they agree on direction, distance, and
+ * the source residue mod 2d, because a PE's role is then decided by its position mod 2d alone
+ * and one static configuration serves every phase in the pool. Sharing on any looser rule would
+ * let a PE send on a color in one phase and receive on it in another, which needs two switch
+ * advances from a sender that can only emit one.
+ *
+ *   bundled (4*d >= N)  : fwd N + 2*(l*(L+1) + p),      bwd fwd + 1
+ *   pooled              : fwd 2*((2*d - 2) + c),        bwd fwd + 1
+ *
+ * with c = r for p = 1 and c = d + r for p >= 2; the pooled blocks for successive d are disjoint
+ * because the block for d runs from 2*d-2 to 4*d-3, and unbundled phases have 4*d < N, so every
+ * pooled channel stays below N. Colors: 10 at L = 3 and 18 at L = 4, of the 21 available. L = 5
+ * would need 34, which is what caps this kernel.
  *
  * Example L=3 (n=8):
  *   (l=1,p=1) dist 1: (0,1)(2,3)(4,5)(6,7)
@@ -35,7 +46,7 @@
  *   (l=3,p=2) dist 2: (2,4)(3,5)
  *   (l=3,p=3) dist 1: (1,2)(3,4)(5,6)
  *
- * Constraints: 1 <= L <= 3
+ * Constraints: 1 <= L <= 4
  **/
 kernel @batcher_oddeven_1d<L>(
     stream<f32, 1>[1<<L, 1] readonly  inp,
@@ -56,19 +67,30 @@ kernel @batcher_oddeven_1d<L>(
     for i16 l in [1:L+1] {
         // p = 1: all PEs participate, dist = 1<<(l-1).
         phase {
-            dataflow i16 i, i16 j in [0:1<<L, 0] {
-                stream<f32, 1> fwd = relative_stream(1<<(l-1), 0) {
-                    hops = auto,
-                    channel = auto
-                }
-                stream<f32, 1> bwd = relative_stream(-(1<<(l-1)), 0) {
-                    hops = auto,
-                    channel = auto
-                }
-            }
-
-            // Offset r is one disjoint matching; together they are the phase's shift.
+            // Offset r is one disjoint matching. The matchings share a channel where the phase is
+            // bundled, and take one each where it is not, which is what turns bundling off.
             for i16 r in [0:1<<(l-1)] {
+                dataflow i16 i, i16 j in [r:1<<L:1<<l, 0] {
+                    stream<f32, 1> fwd = relative_stream(1<<(l-1), 0) {
+                        hops = auto,
+                        channel = ((1<<L) + (2 * ((l * (L+1)) + 1))) if (((1<<(l-1)) << 2) >= (1<<L)) else (2 * (((2 * (1<<(l-1))) - 2) + r))
+                    }
+                    stream<f32, 1> bwd = relative_stream(-(1<<(l-1)), 0) {
+                        hops = auto,
+                        channel = (((1<<L) + (2 * ((l * (L+1)) + 1))) if (((1<<(l-1)) << 2) >= (1<<L)) else (2 * (((2 * (1<<(l-1))) - 2) + r))) + 1
+                    }
+                }
+                dataflow i16 i, i16 j in [(r + (1<<(l-1))):1<<L:1<<l, 0] {
+                    stream<f32, 1> fwd = relative_stream(1<<(l-1), 0) {
+                        hops = auto,
+                        channel = ((1<<L) + (2 * ((l * (L+1)) + 1))) if (((1<<(l-1)) << 2) >= (1<<L)) else (2 * (((2 * (1<<(l-1))) - 2) + r))
+                    }
+                    stream<f32, 1> bwd = relative_stream(-(1<<(l-1)), 0) {
+                        hops = auto,
+                        channel = (((1<<L) + (2 * ((l * (L+1)) + 1))) if (((1<<(l-1)) << 2) >= (1<<L)) else (2 * (((2 * (1<<(l-1))) - 2) + r))) + 1
+                    }
+                }
+
                 compute i16 i, i16 j in [r:1<<L:1<<l, 0] {
                     await send(val, fwd)
                     await receive(tmp, bwd)
@@ -85,19 +107,29 @@ kernel @batcher_oddeven_1d<L>(
         // p = 2 .. l: skip first/last dist PEs of each 2^l box, dist = 1<<(l-p).
         for i16 p in [2:l+1] {
             phase {
-                dataflow i16 i, i16 j in [0:1<<L, 0] {
-                    stream<f32, 1> fwd = relative_stream(1<<(l-p), 0) {
-                        hops = auto,
-                        channel = auto
-                    }
-                    stream<f32, 1> bwd = relative_stream(-(1<<(l-p)), 0) {
-                        hops = auto,
-                        channel = auto
-                    }
-                }
-
                 for i16 r in [0:1<<(l-p)] {
                     for i16 b in [0:1<<L:1<<l] {
+                        dataflow i16 i, i16 j in [(b + ((1<<(l-p)) + r)):((b + (1<<l)) - (1<<(l-p))) + r:2 * (1<<(l-p)), 0] {
+                            stream<f32, 1> fwd = relative_stream(1<<(l-p), 0) {
+                                hops = auto,
+                                channel = ((1<<L) + (2 * ((l * (L+1)) + p))) if (((1<<(l-p)) << 2) >= (1<<L)) else (2 * (((2 * (1<<(l-p))) - 2) + ((1<<(l-p)) + r)))
+                            }
+                            stream<f32, 1> bwd = relative_stream(-(1<<(l-p)), 0) {
+                                hops = auto,
+                                channel = (((1<<L) + (2 * ((l * (L+1)) + p))) if (((1<<(l-p)) << 2) >= (1<<L)) else (2 * (((2 * (1<<(l-p))) - 2) + ((1<<(l-p)) + r)))) + 1
+                            }
+                        }
+                        dataflow i16 i, i16 j in [(b + ((2 * (1<<(l-p))) + r)):(b + (1<<l)) + r:2 * (1<<(l-p)), 0] {
+                            stream<f32, 1> fwd = relative_stream(1<<(l-p), 0) {
+                                hops = auto,
+                                channel = ((1<<L) + (2 * ((l * (L+1)) + p))) if (((1<<(l-p)) << 2) >= (1<<L)) else (2 * (((2 * (1<<(l-p))) - 2) + ((1<<(l-p)) + r)))
+                            }
+                            stream<f32, 1> bwd = relative_stream(-(1<<(l-p)), 0) {
+                                hops = auto,
+                                channel = (((1<<L) + (2 * ((l * (L+1)) + p))) if (((1<<(l-p)) << 2) >= (1<<L)) else (2 * (((2 * (1<<(l-p))) - 2) + ((1<<(l-p)) + r)))) + 1
+                            }
+                        }
+
                         compute i16 i, i16 j in [(b + ((1<<(l-p)) + r)):((b + (1<<l)) - (1<<(l-p))) + r:2 * (1<<(l-p)), 0] {
                             await send(val, fwd)
                             await receive(tmp, bwd)

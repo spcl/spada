@@ -1,9 +1,10 @@
 #!/bin/sh
 # E2E test: the bundled 1D Batcher odd-even mergesort (2^L PEs, one f32 key per PE).
 # Kernel: batcher_oddeven_bundled_1D.sptl  params: L
-# Same result as batcher_oddeven_1D, but each phase runs on two colors instead of one per
-# comparator: OUT_out[:, 0, 0] == sort(inp[:, 0, 0]).
-# L <= 3, which is where the three filters a PE can use run out.
+# Same result as batcher_oddeven_1D, but the three widest phases run on two colors each instead
+# of one per comparator: OUT_out[:, 0, 0] == sort(inp[:, 0, 0]).
+# L <= 4: three phases is what the filter budget allows, and at L = 5 the phases left unbundled
+# need more than the 21 colors.
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -48,3 +49,4 @@ PYEOF
 run_batcher 1
 run_batcher 2
 run_batcher 3
+run_batcher 4

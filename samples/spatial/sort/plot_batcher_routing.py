@@ -11,11 +11,17 @@ Versions
            the p >= 2 stages of one distance d agree on roles and share:
              p = 1  : fwd 2*((d - 1) + r),           bwd fwd + 1
              p >= 2 : fwd 2*(n - 1) + 2*((d - 1) + r), bwd fwd + 1
-  bundled  batcher_oddeven_bundled_1D.sptl. Each phase uses two colors, one
-           per direction. Phases with d >= 2 whose comparators form a run of
-           at least two sources are a shift bundle: sources inject then
-           relay (pos0 / pos1), destinations stay put and pick their word
-           with a counter filter. Colors are not reused across phases.
+  bundled  Each phase uses two colors, one per direction. Phases with d >= 2
+           whose comparators form a run of at least two sources are a shift
+           bundle: sources inject then relay (pos0 / pos1), destinations stay
+           put and pick their word with a counter filter. Colors are not
+           reused across phases. This is what the sample did before the filter
+           budget capped it at L = 3; kept here for comparison.
+  hybrid   batcher_oddeven_bundled_1D.sptl as it stands. Only the three widest
+           phases bundle, which is exactly the three filters a PE has: the
+           rule is 4*d >= n. The rest are routed per matching, on colors
+           pooled across phases by the source residue mod 2d, so that a PE's
+           role on a pooled color is the same in every phase that uses it.
 
 Views
 -----
@@ -51,7 +57,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 
 
-VERSIONS = ("static", "bundled")
+VERSIONS = ("static", "bundled", "hybrid")
 MIN_BUNDLE_DISTANCE = 2
 MIN_BUNDLE_LENGTH = 2
 
@@ -156,16 +162,51 @@ def batcher_phases(n: int) -> list[Phase]:
     return phases
 
 
-def assign_channels(phases: list[Phase], version: str) -> list[Phase]:
+def is_bundled(phase: Phase, n: int, version: str) -> bool:
+    """Whether ``version`` serializes a phase's matchings onto one colour pair."""
+    if version == "static" or phase.dist < MIN_BUNDLE_DISTANCE:
+        return False
+    if version == "bundled":
+        return True
+    return 4 * phase.dist >= n  # hybrid: the three widest phases, one per filter
+
+
+def assign_channels(phases: list[Phase], version: str, n: int) -> list[Phase]:
     """Rewrite matching channels to match the sample of ``version``."""
     if version == "static":
         return phases
+    log_n = int(math.log2(n))
     assigned = []
     for ph in phases:
-        fwd, bwd = 2 * ph.index, 2 * ph.index + 1
-        matchings = tuple(replace(m, fwd=fwd, bwd=bwd) for m in ph.matchings)
-        assigned.append(replace(ph, matchings=matchings))
-    return assigned
+        matchings = []
+        for m in ph.matchings:
+            if version == "bundled":
+                fwd = 2 * ph.index
+            elif is_bundled(ph, n, version):
+                fwd = n + 2 * (ph.l * (log_n + 1) + ph.p)
+            else:
+                # Pooled: the source residue mod 2d decides the colour, so phases that agree on
+                # it agree on every router configuration and can share.
+                residue = m.offset if ph.p == 1 else ph.dist + m.offset
+                fwd = 2 * ((2 * ph.dist - 2) + residue)
+            matchings.append(replace(m, fwd=fwd, bwd=fwd + 1))
+        assigned.append(replace(ph, matchings=tuple(matchings)))
+    return _compact_channels(assigned)
+
+
+def _compact_channels(phases: list[Phase]) -> list[Phase]:
+    """
+    Renumbers the channels densely, as the compiler's colour allocation does.
+
+    A hand-written channel formula generally leaves gaps, and only the channels a kernel actually
+    uses are given a colour, in ascending order. Renumbering here is what makes the drawn channel
+    axis the colour axis of the emitted layout.
+    """
+    used = sorted({ch for ph in phases for m in ph.matchings for ch in (m.fwd, m.bwd)})
+    color_of = {channel: index for index, channel in enumerate(used)}
+    return [replace(ph, matchings=tuple(replace(m, fwd=color_of[m.fwd], bwd=color_of[m.bwd])
+                                        for m in ph.matchings))
+            for ph in phases]
 
 
 def channel_count(phases: list[Phase]) -> int:
@@ -244,15 +285,12 @@ def _draw_network(ax, phases: list[Phase], n: int, version: str) -> None:
 
     handles = []
     for ch in range(n_channels):
-        if version == "static":
-            arrow = "↓" if ch % 2 == 0 else "↑"
-            kind = "fwd" if ch % 2 == 0 else "bwd"
-            label = f"{arrow} ch {ch} ({kind})"
+        arrow = "↓" if ch % 2 == 0 else "↑"
+        kind = "fwd" if ch % 2 == 0 else "bwd"
+        if version == "bundled":
+            label = f"{arrow} ch {ch} (p{ch // 2} {kind})"
         else:
-            phase = ch // 2
-            arrow = "↓" if ch % 2 == 0 else "↑"
-            kind = "fwd" if ch % 2 == 0 else "bwd"
-            label = f"{arrow} ch {ch} (p{phase} {kind})"
+            label = f"{arrow} ch {ch} ({kind})"
         handles.append(
             Line2D([0], [0], color=channel_color(ch, n_channels), lw=2.0, label=label)
         )
@@ -386,17 +424,13 @@ def pe_table(phases: list[Phase], n: int, version: str) -> list[list[Cell]]:
         pairs = tuple(pair for m in ph.matchings for pair in m.pairs)
         if not pairs:
             continue
-        if version == "bundled":
+        if is_bundled(ph, n, version):
             fwd, bwd = ph.matchings[0].fwd, ph.matchings[0].bwd
-            if ph.dist >= MIN_BUNDLE_DISTANCE:
-                for start, length in _shift_runs(pairs, ph.dist):
-                    if length >= MIN_BUNDLE_LENGTH:
-                        _install_bundle(configs, filters, start, length, ph.dist, fwd, bwd)
-                    else:
-                        _install_ordinary_pair(configs, start, start + ph.dist, fwd, bwd)
-            else:
-                for lo, hi in pairs:
-                    _install_ordinary_pair(configs, lo, hi, fwd, bwd)
+            for start, length in _shift_runs(pairs, ph.dist):
+                if length >= MIN_BUNDLE_LENGTH:
+                    _install_bundle(configs, filters, start, length, ph.dist, fwd, bwd)
+                else:
+                    _install_ordinary_pair(configs, start, start + ph.dist, fwd, bwd)
         else:
             for m in ph.matchings:
                 for lo, hi in m.pairs:
@@ -484,7 +518,7 @@ def _draw_table(ax, phases: list[Phase], n: int, version: str) -> None:
 
 
 def plot(n: int, view: str, version: str, outfile: str | None, show: bool) -> None:
-    phases = assign_channels(batcher_phases(n), version)
+    phases = assign_channels(batcher_phases(n), version, n)
     if view == "network":
         n_slots = sum(max(len(ph.matchings), 1) for ph in phases)
         fig, ax = plt.subplots(figsize=(max(8, 0.7 * n_slots + 0.8 * len(phases)), max(4, 0.45 * n)))
@@ -528,8 +562,9 @@ def main() -> None:
         nargs="+",
         choices=VERSIONS + ("all",),
         default=["static"],
-        help="static (one color per matching) and/or bundled (two colors per phase). "
-        "'all' is both. Repeatable.",
+        help="static (one color per matching), bundled (two per phase) and/or hybrid (the "
+        "sample: the three widest phases bundled, the rest pooled). 'all' is every one. "
+        "Repeatable.",
     )
     parser.add_argument(
         "--view",

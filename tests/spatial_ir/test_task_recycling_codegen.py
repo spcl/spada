@@ -60,14 +60,14 @@ def test_csl_runtime_task_recycling_sample_lowers(filename: str):
 def test_data_tasks_install_the_state_of_a_recycled_successor():
     """A data task handing control to a recycled slot must install that slot's state first.
 
-    Without the assignment the dispatcher runs whichever branch was installed last -- in the
-    bundled Batcher at L=3 that meant a PE silently skipped its comparator and the fabric
-    deadlocked behind the send it never made.
+    Without the assignment the dispatcher runs whichever branch was installed last, which means a
+    PE silently skips its comparator and the fabric deadlocks behind the send it never made. The
+    bundled Batcher reaches that shape once it has enough phases sharing a colour, at L=4.
     """
     sample = os.path.join(
         os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort', 'batcher_oddeven_bundled_1D.sptl')
     kernel = parser.parse_file(sample)
-    kernel = passes.concretize_parameters(kernel, L=3)
+    kernel = passes.concretize_parameters(kernel, L=4)
     kernel = passes.constexpr_propagation(kernel)
 
     csl_files = lower_spatial_ir_to_csl(kernel)
