@@ -1,0 +1,68 @@
+/**
+ * One channel, two epochs, and nothing else.
+ *
+ * PE0 sends a word to PE1 in one phase and another word in the next, both on channel 0.
+ * The channel is a reusable resource, so this is legal -- but PE1 receives twice on it, and
+ * the data task a channel binds is the color itself. The two receives therefore have to
+ * share one hardware task and take turns, which is what this sample exercises.
+ *
+ * Constraints: R >= 1 (repeats the pair of epochs R times).
+ **/
+kernel @data_task_two_epochs<R>(
+    stream<f32, 2>[2, 1] readonly  inp,
+    stream<f32, 2>[2, 1] writeonly out
+) {
+    place i16 i, i16 j in [0:2, 0] {
+        f32[2] val
+        f32 a
+        f32 b
+    }
+
+    phase {
+        compute i16 i, i16 j in [0:2, 0] {
+            await receive(val, inp[i, j])
+            a = val[0]
+            b = val[1]
+        }
+    }
+
+    for i16 r in [0:R] {
+        phase {
+            dataflow i16 i, i16 j in [0:2, 0] {
+                stream<f32, 1> first = relative_stream(1, 0) {
+                    hops = auto,
+                    channel = 0
+                }
+            }
+            compute i16 i, i16 j in [0:1, 0] {
+                await send(a, first)
+            }
+            compute i16 i, i16 j in [1:2, 0] {
+                await receive(a, first)
+            }
+        }
+
+        phase {
+            dataflow i16 i, i16 j in [0:2, 0] {
+                stream<f32, 1> second = relative_stream(1, 0) {
+                    hops = auto,
+                    channel = 0
+                }
+            }
+            compute i16 i, i16 j in [0:1, 0] {
+                await send(b, second)
+            }
+            compute i16 i, i16 j in [1:2, 0] {
+                await receive(b, second)
+            }
+        }
+    }
+
+    phase {
+        compute i16 i, i16 j in [0:2, 0] {
+            val[0] = a
+            val[1] = b
+            await send(val, out[i, j])
+        }
+    }
+}
