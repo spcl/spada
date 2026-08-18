@@ -1,0 +1,135 @@
+/**
+ * Odd-even transposition sort over N = 2^L PEs, with the N rounds as a runtime loop.
+ *
+ * Each PE holds K keys. Sequence k is element k of every PE; the K sequences are sorted
+ * independently. After the network, PE i holds the i-th key of each sequence.
+ *
+ * Algorithm
+ * ---------
+ * Round t compares neighbours (2i, 2i+1) when t is even and (2i+1, 2i+2) when t is odd.
+ * N rounds suffice. Every comparator is one hop: on a line a longer exchange occupies the
+ * same links as several one-hop ones and does not cut the round count, which is already
+ * Theta(N).
+ *
+ * One channel per (round parity, direction) -- four in all -- so each PE's role on each
+ * channel is fixed for the whole run. Sharing a channel across parities would make every
+ * interior PE alternate send/receive on it; on WSE-2 that turnaround overshoots the
+ * receiver (see irspec/docs/spatial/routing_wse.md).
+ *
+ * Why the rounds are a loop
+ * -------------------------
+ * The same N rounds can be written as a compile-time `for` around two `phase` blocks.
+ * The compiler unrolls that into N phases, so code and compile time grow with N, and
+ * each phase boundary is a barrier. Here the rounds are a sequential `for` inside each
+ * compute block, which lowers to a CSL loop: the body is emitted once, and there is no
+ * per-round barrier.
+ *
+ * A phase boundary is an epoch boundary -- streams close, a channel may change hands,
+ * routers may advance. This network needs none of that. With roles fixed, no router
+ * switches and no channel is reassigned. Round t's values arrive before round t+1's
+ * because a channel is a FIFO.
+ *
+ * Role alternation is a per-PE-parity split, which a `compute` subgrid already expresses.
+ * The two ends sit out every odd round and so run a shorter body:
+ *
+ *   PE 0             low in even rounds, idle in odd rounds
+ *   PE 2, 4, .. N-2  low in even rounds, high in odd rounds
+ *   PE 1, 3, .. N-3  high in even rounds, low in odd rounds
+ *   PE N-1           high in even rounds, idle in odd rounds
+ *
+ *
+ * Constraints: L >= 1, K >= 1. WSE-2 and WSE-3.
+ *
+ **/
+kernel @odd_even_sort_1d_looped<L, K>(stream<f32, K>[1<<L, 1] readonly a_in,
+                                      stream<f32, K>[1<<L, 1] writeonly a_out) {
+
+    place i16 i, i16 j in [0:1<<L, 0] {
+        f32[K] val
+        f32[K] other
+    }
+
+    // One epoch for the whole run: these four channels never change hands, so they are
+    // declared at kernel level rather than per phase.
+    dataflow i16 i, i16 j in [0:1<<L, 0] {
+        stream<f32> east_even = relative_stream(1, 0) {
+            hops = auto,
+            channel = 0
+        }
+        stream<f32> west_even = relative_stream(-1, 0) {
+            hops = auto,
+            channel = 1
+        }
+        stream<f32> east_odd = relative_stream(1, 0) {
+            hops = auto,
+            channel = 2
+        }
+        stream<f32> west_odd = relative_stream(-1, 0) {
+            hops = auto,
+            channel = 3
+        }
+    }
+
+    // Load this PE's K keys.
+    compute i16 i, i16 j in [0:1<<L, 0] {
+        await receive(val, a_in[i, j])
+    }
+
+    // PE 0: low partner in every even round, idle in every odd round.
+    compute i16 i, i16 j in [0:1, 0] {
+        for i32 t in [0 : 1<<(L-1)] {
+            await send(val, east_even)
+            await receive(other, west_even)
+            await map i32 k in [0:K] {
+                val[k] = (other[k] if other[k] < val[k] else val[k])
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // Even-indexed interior PEs: low in even rounds, high in odd rounds.
+    compute i16 i, i16 j in [2 : (1<<L)-1 : 2, 0] {
+        for i32 t in [0 : 1<<(L-1)] {
+            await send(val, east_even)
+            await receive(other, west_even)
+            await map i32 k in [0:K] {
+                val[k] = (other[k] if other[k] < val[k] else val[k])
+            }
+            await receive(other, east_odd)
+            await send(val, west_odd)
+            await map i32 k in [0:K] {
+                val[k] = (other[k] if other[k] > val[k] else val[k])
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // Odd-indexed interior PEs: high in even rounds, low in odd rounds.
+    compute i16 i, i16 j in [1 : (1<<L)-1 : 2, 0] {
+        for i32 t in [0 : 1<<(L-1)] {
+            await receive(other, east_even)
+            await send(val, west_even)
+            await map i32 k in [0:K] {
+                val[k] = (other[k] if other[k] > val[k] else val[k])
+            }
+            await send(val, east_odd)
+            await receive(other, west_odd)
+            await map i32 k in [0:K] {
+                val[k] = (other[k] if other[k] < val[k] else val[k])
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // PE N-1: high partner in every even round, idle in every odd round.
+    compute i16 i, i16 j in [(1<<L)-1 : 1<<L, 0] {
+        for i32 t in [0 : 1<<(L-1)] {
+            await receive(other, east_even)
+            await send(val, west_even)
+            await map i32 k in [0:K] {
+                val[k] = (other[k] if other[k] > val[k] else val[k])
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+}

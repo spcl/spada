@@ -58,9 +58,9 @@ all.
     routers never advance. The epoch boundaries around it are then buying only *ordering* — and the
     fabric already delivers a channel's wavelets in order. Such a sequence of phases can be
     collapsed into a single epoch with a sequential `for` in the compute blocks, which lowers to a
-    real loop and so costs code and compile time independent of the number of rounds. Compare
-    `samples/spatial/sorting/odd_even_sort_1D.sptl` with
-    `samples/spatial/sorting/odd_even_sort_1D_looped.sptl`.
+    real loop and so costs code and compile time independent of the number of rounds.
+    `samples/spatial/sorting/odd_even_sort_1D_looped.sptl` is the example: N odd-even rounds on four
+    static channels, one CSL loop, no per-round barrier.
 
     This does *not* generalize to channels that switch: a router's positions are a static sequence,
     so the epoch a configuration belongs to has to be visible to the compiler.
@@ -108,9 +108,9 @@ after all data of the epoch.
     eastward channel and every interior PE alternates between sending and receiving on it, so every
     close is a turnaround and every receiver has a switch-configured neighbour behind it. That
     kernel deadlocks on WSE-2 and runs on WSE-3, where the turnaround costs one position and one
-    message and nothing overshoots. `samples/spatial/sorting/odd_even_sort_1D.sptl` avoids it by
-    giving each round parity its own pair of channels: each PE's role on a channel is then fixed,
-    no router switches at all, and no close emits a message.
+    message and nothing overshoots. `samples/spatial/sorting/odd_even_sort_1D_looped.sptl` avoids it
+    by giving each round parity its own pair of channels: each PE's role on a channel is then
+    fixed, no router switches at all, and no close emits a message.
 
 Because the control message travels the path of the retired configuration in order behind the data,
 a receiving PE needs to emit nothing to advance its own router: the ordering required by the

@@ -469,5 +469,53 @@ def test_bitonic_sort_is_rejected_on_wse2():
         _lower_bitonic(2)
 
 
+###
+# odd_even_sort_1D_looped: N rounds as a runtime loop on four static channels
+###
+
+_ODD_EVEN_LOOPED = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial',
+                                'sorting', 'odd_even_sort_1D_looped.sptl')
+
+
+def _lower_odd_even_looped(L: int, K: int = 4) -> dict[str, str]:
+    kernel = parser.parse_file(_ODD_EVEN_LOOPED)
+    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, L=L, K=K))
+    return {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)}
+
+
+def test_odd_even_sort_looped_uses_four_static_channels():
+    """
+    One channel per (round parity, direction). Roles never change, so no router switches and the
+    rounds stay a CSL loop of N/2 iterations rather than N unrolled phases.
+    """
+    files = _lower_odd_even_looped(3)
+    colors = set(int(c) for c in re.findall(r'@get_color\((\d+)\)', files['layout.csl']))
+    assert colors == {0, 1, 2, 3}, sorted(colors)
+    assert '.switches' not in files['layout.csl']
+
+    # L = 1 drops the interior rectangles (N = 2 has only the two endpoints).
+    ends = _lower_odd_even_looped(1, K=1)
+    assert 'code_0_0.csl' in ends and 'code_1_0.csl' in ends
+    assert 'code_2_0.csl' not in ends
+
+    interior = files['code_2_0.csl']
+    assert 'for (@range(i32, 0, 4, 1))' in interior, interior
+    # The loop body is emitted once: two even-round transfers and two odd-round transfers, not
+    # four copies of each for the four even/odd pairs at N = 8.
+    assert interior.count('fabout_dsd') == 2, interior
+    assert interior.count('fabin_dsd') == 2, interior
+
+
+def test_odd_even_sort_looped_code_is_independent_of_n():
+    """Lowering cost and the interior PE program stay flat as N grows."""
+    small = _lower_odd_even_looped(3)
+    large = _lower_odd_even_looped(6)
+    assert 'for (@range(i32, 0, 32, 1))' in large['code_2_0.csl']
+    # Same four PE roles, so the same number of code files; the loop trip count is the only
+    # difference that scales with L.
+    assert len(small) == len(large)
+    assert abs(len(small['code_2_0.csl']) - len(large['code_2_0.csl'])) < 64
+
+
 if __name__ == '__main__':
     pytest.main([__file__])
