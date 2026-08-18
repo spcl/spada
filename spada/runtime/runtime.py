@@ -94,6 +94,63 @@ class ProgramMetadata:
 ########################################################
 
 
+def memcpy_data_type(dtype: np.dtype) -> "crt.MemcpyDataType":
+    """
+    Pick the transfer width for a kernel argument of ``dtype``.
+
+    :param dtype: The dtype the kernel declared for the argument.
+    :return: The ``MemcpyDataType`` to pass alongside the buffer.
+    """
+    if dtype.itemsize == 4:
+        return crt.MemcpyDataType.MEMCPY_32BIT
+    if dtype.itemsize == 2:
+        return crt.MemcpyDataType.MEMCPY_16BIT
+    raise ValueError(f"Cannot transfer {dtype} arrays: the SDK moves either 16 or 32 bits per "
+                     f"element, so a kernel argument must be 2 or 4 bytes wide.")
+
+
+def memcpy_word_dtype(dtype: np.dtype) -> np.dtype:
+    """
+    Give the host-buffer dtype for a kernel argument of ``dtype``, one element per 32-bit word.
+
+    ``memcpy_h2d`` and ``memcpy_d2h`` reject a buffer whose elements are not 32 bits ("Internal
+    data type of any memcpy_d2h() or memcpy_h2d() operation should be 32 bit") even when the
+    device-side array is 16-bit: ``MEMCPY_16BIT`` means only the low half of each word travels.
+
+    :param dtype: The dtype the kernel declared for the argument.
+    :return: ``dtype`` itself when it is already 32 bits wide, else a 32-bit word dtype.
+    """
+    return dtype if dtype.itemsize == 4 else np.dtype(np.uint32)
+
+
+def as_memcpy_words(data: np.ndarray) -> np.ndarray:
+    """
+    Widen a 16-bit array into the 32-bit words ``memcpy_h2d`` expects.
+
+    The widening is bit-for-bit rather than by value, so that a negative ``i16`` and an ``f16``
+    both arrive on the device unchanged.
+
+    :param data: A contiguous array in the dtype the kernel declared.
+    :return: ``data`` itself when it is already 32 bits wide, else a widened copy.
+    """
+    if data.dtype.itemsize == 4:
+        return data
+    return data.view(np.uint16).astype(np.uint32)
+
+
+def from_memcpy_words(words: np.ndarray, dtype: np.dtype) -> np.ndarray:
+    """
+    Undo :func:`as_memcpy_words` for data copied back from the device.
+
+    :param words: The buffer ``memcpy_d2h`` filled.
+    :param dtype: The dtype the kernel declared for the output.
+    :return: ``words`` reinterpreted in ``dtype``, keeping the shape.
+    """
+    if dtype.itemsize == 4:
+        return words
+    return words.astype(np.uint16).view(dtype)
+
+
 def flatten_copy(
     name: str, data: np.ndarray, shape: List[int], runtime: crt.SdkRuntime, metadata: ProgramMetadata, benchmark: bool
 ):
@@ -117,14 +174,14 @@ def flatten_copy(
 
     runtime.memcpy_h2d(
         buffer_id,
-        src.ravel(),
+        as_memcpy_words(src).ravel(),
         metadata.inputs[name].rect_offset_used[0],  # PE offset in x direction
         metadata.inputs[name].rect_offset_used[1],  # PE offset in y direction
         shape[0],  # Width (number of PEs in x)
         shape[1],  # Height (number of PEs in y)
         shape[2],
         streaming=not metadata.memcpy_mode,  # Use streaming if not in memcpy mode
-        data_type=crt.MemcpyDataType.MEMCPY_32BIT if data.dtype == np.float32 else crt.MemcpyDataType.MEMCPY_16BIT,
+        data_type=memcpy_data_type(data.dtype),
         order=crt.MemcpyOrder.ROW_MAJOR if not metadata.inputs[name].column_major else crt.MemcpyOrder.COL_MAJOR,
         nonblock=not benchmark,  # Non-blocking copy if not benchmarking
     )
@@ -145,11 +202,11 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
     if buffer_id is None:
         raise ValueError(f"Buffer ID for '{name}' not found in program.")
 
-    # The SDK returns A[h][w][elem_per_pe]; allocate a buffer in that layout.
-    sdk_buf = np.empty((shape[1], shape[0], shape[2]), dtype=data.dtype)
+    # The SDK returns A[h][w][elem_per_pe]; allocate a buffer in that layout, one element per word.
+    words = np.empty((shape[1], shape[0], shape[2]), dtype=memcpy_word_dtype(data.dtype))
 
     runtime.memcpy_d2h(
-        sdk_buf.ravel(),
+        words.ravel(),
         buffer_id,
         metadata.outputs[name].rect_offset_used[0],  # PE offset in x direction
         metadata.outputs[name].rect_offset_used[1],  # PE offset in y direction
@@ -157,13 +214,13 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
         shape[1],  # Height (number of PEs in y)
         shape[2],
         streaming=not metadata.memcpy_mode,  # Use streaming if not in memcpy mode
-        data_type=crt.MemcpyDataType.MEMCPY_32BIT if data.dtype == np.float32 else crt.MemcpyDataType.MEMCPY_16BIT,
+        data_type=memcpy_data_type(data.dtype),
         order=crt.MemcpyOrder.ROW_MAJOR if not metadata.outputs[name].column_major else crt.MemcpyOrder.COL_MAJOR,
         nonblock=False,  # Blocking copy to ensure data is ready after copy
     )
 
     # Transpose back from (h, w, elem) to (w, h, elem) to match our convention.
-    np.copyto(data, sdk_buf.transpose(1, 0, 2))
+    np.copyto(data, from_memcpy_words(words, data.dtype).transpose(1, 0, 2))
 
 
 def convert_timestamp(hw_timestamp: npt.NDArray[np.uint32]) -> npt.NDArray[np.uint64]:
