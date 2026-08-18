@@ -145,9 +145,10 @@ Next, we describe the condition under which the routing behavior is undefined:
     and write $(S_1, (i_1, j_1), S_2, (i_2, j_2)) \mapsto (S_3, (i_3, j_3), S_4, (i_4, j_4))$
     if $S_2, (i_2, j_2) \longmapsto S_3, (i_3, j_3)$.
 
-!!! danger "Error: Undefined Behavior"
-    If two paths $P_1$ and $P_1$ in the routing graph use the same channel, share a PE, and
+!!! danger "Error: Concurrent Channel Use"
+    If two paths $P_1$ and $P_2$ in the routing graph use the same channel, share a PE, and
     their corresponding stream edges are not ordered by empties-before, then the behavior is undefined.
+    *This raises a compile error whenever the missing ordering can be established statically.*
 
 
 This is because the two messages may interfere with each other
@@ -155,6 +156,29 @@ and the order in which they are processed may become nondeterministic.
 Recall that sending onto the same stream [must be synchronized using completions
 to avoid data races](../spatial#streaming-data-with-send). Hence, sending through the same stream multiple times
 in the same phases is ok as long as the sends (and receives) are correctly synchronized.
+
+The constructive way to establish the ordering between two streams that share a channel is to
+[close](../spatial#closing-streams-with-close) the earlier one. Closing a stream ends its *epoch*:
+on every PE of the path, the channel is released and may be taken over by the next stream.
+
+!!! abstract "Definition: Channel Epoch"
+    An *epoch* of a channel $C$ at PE $(i, j)$ is a maximal interval during which a single stream
+    that uses $C$ occupies $(i, j)$. It begins at the first use of that stream and ends at its
+    `close` (which, for a [bounded](../spatial#streams) stream, is implicit after its `BOUND`
+    elements have been transferred, and, for any stream, is implicit at the end of its phase).
+
+!!! abstract "Lemma: Sufficient Condition for Channel Reuse"
+    Let $F_1$ and $F_2$ be two streams that use the same channel $C$, and let $(i, j)$ be a PE
+    shared by their paths. Let $S_c$ be the `close` of $F_1$ at $(i, j)$ and $S_u$ the first use of
+    $F_2$ at $(i, j)$. If $S_c, (i, j) \longmapsto S_u, (i, j)$ for every shared PE $(i, j)$,
+    then the stream edges of $F_1$ empty-before those of $F_2$ and the reuse of $C$ is well-defined.
+
+Note that a phase boundary satisfies the condition of the lemma at every PE, which is why streams
+in different phases may share a channel without an explicit `close`.
+
+Within a single epoch, a stream may not be used in two different route configurations at the same
+PE. In particular, a PE that both receives from and sends on the same channel must close the
+channel in between, since the two uses require incompatible router configurations.
 
 Keep in mind that PEs transition between phases asynchronously,
 that is, a PE may advance to the next phase before another PE has completed the current phase.
@@ -167,3 +191,4 @@ to receive.
     where all streams are point-to-point paths.
     If multicasting is used, the correctness conditions must be adapted accordingly, 
     especially when considering multiple phases.
+

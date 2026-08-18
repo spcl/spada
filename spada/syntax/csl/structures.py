@@ -21,6 +21,11 @@ class DataStructureDescriptor:
         raise NotImplementedError
 
 
+#: The descriptors collected for one PE, keyed by the Spatial IR name they belong to, each entry
+#: pairing the CSL identifier the descriptor is declared under with the descriptor itself.
+UniqueDSDDict = dict[str, list[tuple[str, DataStructureDescriptor]]]
+
+
 @dataclass
 class MemoryDSD(DataStructureDescriptor):
     """

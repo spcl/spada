@@ -142,7 +142,10 @@ completion : "completion" identifier "="
 ?prefix : completion | "await"
 
 // Free function call
-function_call: prefix bare_id "(" [call_arguments] ")" 
+function_call: prefix bare_id "(" [call_arguments] ")"
+
+// Method call on a stream (e.g., `await s.close()`).
+method_call : prefix (identifier | subscript) "." bare_id "(" [call_arguments] ")"
 
 await_completion : "await" identifier
 
@@ -161,7 +164,7 @@ async_stmt : prefix "async" compute_body
 awaitall_stmt : "awaitall"
 
 // Top-level statements that are direct children of `compute` blocks
-?base_stmt : (function_call | await_completion | map_stmt | foreach_stmt | async_stmt | for_stmt | awaitall_stmt)
+?base_stmt : (function_call | method_call | await_completion | map_stmt | foreach_stmt | async_stmt | for_stmt | awaitall_stmt)
 
 assignment : (subscript | identifier) "=" value_expr
 

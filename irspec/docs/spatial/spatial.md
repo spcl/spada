@@ -22,11 +22,16 @@ A stream corresponds to an abstract way to communicate between PEs or the host d
 
 For any scalar type `T`,  `stream<T>` indicates the corresponding element type sent over the stream.
 
-Streams do not send a predetermined number of elements, but the sender and receiver must agree on the number of elements sent and received.
-This can be done explicitly (when the size is known from the parameters) or implicitly (by sending a completion signal with/after the last element).
+A stream type may carry a second template parameter, its **bound**: `stream<T, BOUND>`.
+If the bound is given, then exactly `BOUND` elements are transferred over the stream, after which
+the stream [closes itself](#closing-streams-with-close). Such a stream is called *bounded*.
+For kernel arguments, the bound also determines the size of the host-side transfer
+(it is what enables, e.g., memcpy mode in CSL).
 
-Kernel arguments that are streams may have a second template parameter `stream<T, K>`. If the second parameter is given, then
-exactly `K` elements are transferred over the stream. This is useful for enabling, e.g., memcpy mode in CSL.
+A stream without a bound is *unbounded*: it does not send a predetermined number of elements,
+but the sender and receiver must agree on the number of elements sent and received.
+This can be done explicitly (when the size is known from the parameters) or implicitly (by sending a completion signal with/after the last element).
+An unbounded stream must be [closed explicitly](#closing-streams-with-close) before its channel can be reused.
 
 ### Arrays
 
@@ -580,6 +585,9 @@ completion completion_name = async {
   // Statements
 }
 
+// Close a stream (asynchronous)
+completion completion_name = stream_name.close();
+
 // Await a completion
 await completion_name;
 ```
@@ -814,6 +822,74 @@ completion completion_name = foreach type k, type x in [0:K], receive(stream_nam
 }
 ```
 
+### Closing Streams with `close`
+
+Inside a `compute` block, the `close` statement ends the lifetime of a stream on the PE that
+executes it.
+
+```rust
+completion completion_name = stream_name.close();
+// Or, as a shorthand:
+await stream_name.close();
+```
+
+The completion semantics are the same as those of `send` and `receive`: the completion is triggered
+when the close has been *issued* on this PE, not when every other participant has observed it.
+
+The interval between the first use of a stream on a PE and its `close` is called an *epoch* of the
+stream. Only within an epoch may a stream be used. Once a stream has been closed, its
+[`channel`](#routing-declarations) is free and may be reused by another stream; see
+[Semantics of Routing Declarations](../routing#undefined-behavior).
+
+!!! danger "Error: Use After Close"
+    Using a stream after it has been closed on the same PE (with `send`, `receive`, `foreach`, or
+    another `close`) is an error. *This raises a compile error whenever the use is ordered after
+    the close in [local order](../async#local-order). A use that is not ordered with respect to a
+    `close` on another PE is undefined behavior.*
+
+!!! danger "Error: Unclosed Stream"
+    Closing a stream is *collective*: every PE that sends on or receives from a stream must close
+    it. *Failing to close a stream on one of its participants raises a compile error where
+    detectable.*
+
+A stream that carries a [bound](#streams) closes itself once `BOUND` elements have been transferred;
+an explicit `close` on a bounded stream is redundant but legal. An unbounded stream is only closed
+by an explicit `close`.
+
+!!! note "Note: Verification of Bounds"
+    When the compiler can infer stream bounds statically, it may generate a compiler error.
+    Otherwise, no diagnostic is emitted.
+
+At the end of a [phase](#phases), every stream that is in scope is implicitly closed. This is
+equivalent to injecting a `close` for each such stream on each participating PE immediately *after*
+the phase's implicit `await` statements. The order matters: the implicit `await`s may be waiting on
+operations that are still using those streams, so the streams are only closed once every such
+operation has completed.
+
+??? example "Example: Reusing a channel within a phase"
+    Two streams that share a channel may be used one after the other in the same phase, as long as
+    the first is closed on every PE it passes through before the second is used.
+    ```rust
+    dataflow i32 i, i32 j in [0:4, 0] {
+      stream<f32> westwards = relative_stream(-1, 0) {
+        hops = [(-1, 0)],
+        channel = 0
+      };
+      stream<f32> eastwards = relative_stream(1, 0) {
+        hops = [(1, 0)],
+        channel = 0
+      };
+    }
+    compute i32 i, i32 j in [0:4, 0] {
+      await send(a, westwards)
+      await westwards.close()
+      await foreach i32 k, f32 x in [0:K], receive(eastwards) {
+        a[k] = x
+      }
+      await eastwards.close()
+    }
+    ```
+
 ### Processing arrays asynchronously with `map`
 
 Inside a `compute` block, the `map` statement is used to apply a computation to each element of an array.
@@ -913,8 +989,14 @@ Within each phase, there can be at most one `compute` block defined per PE.
 If multiple `compute` blocks are defined per PE per phase, the behavior is undefined.
 After each `compute` block, there is a set of implicit `await` statements
 that wait for all completions to be triggered before starting the next `compute` block.
+Every stream that is in scope and has not yet been closed is then implicitly
+[closed](#closing-streams-with-close), after those `await`s, since the outstanding completions may
+belong to operations on those very streams.
 Note that this does *not* imply that all PEs have executed the `compute` block.
 No `compute` block may be defined in the outermost scope.
+
+Since streams do not outlive the phase in which they are used, a
+[stream edge](../routing#the-routing-graph) must be entirely contained within a phase.
 
 Phases run in the order they are defined in the code from each PE's point of view.
 That is, a PE goes through its phases in-order.
