@@ -29,7 +29,7 @@ L=2
 N=4
 K=4
 FOLDER="bitonic_sort_1d_sptl"
-SAMPLES_DIR="$(cd "$SCRIPT_DIR/../../samples/spatial/sorting" && pwd)"
+SAMPLES_DIR="$(cd "$SCRIPT_DIR/../../samples/spatial/sort" && pwd)"
 
 sptlc "$SAMPLES_DIR/bitonic_sort_1D.sptl" "$FOLDER" -p L=$L -p K=$K
 

@@ -423,7 +423,7 @@ def test_switch_positions_beyond_capacity_are_rejected():
 # bitonic_sort_1D: the heaviest channel reuse in the samples
 ###
 
-_BITONIC = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sorting',
+_BITONIC = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort',
                         'bitonic_sort_1D.sptl')
 
 
@@ -474,7 +474,7 @@ def test_bitonic_sort_is_rejected_on_wse2():
 ###
 
 _ODD_EVEN_LOOPED = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial',
-                                'sorting', 'odd_even_sort_1D_looped.sptl')
+                                'sort', 'odd_even_sort_1D_looped.sptl')
 
 
 def _lower_odd_even_looped(L: int, K: int = 4) -> dict[str, str]:

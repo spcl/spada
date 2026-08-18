@@ -10,7 +10,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/_lib.sh"
 
-SAMPLES_DIR="$(cd "$SCRIPT_DIR/../../samples/spatial/sorting" && pwd)"
+SAMPLES_DIR="$(cd "$SCRIPT_DIR/../../samples/spatial/sort" && pwd)"
 FOLDER="odd_even_sort_1d_looped_sptl"
 
 run_sort() {
