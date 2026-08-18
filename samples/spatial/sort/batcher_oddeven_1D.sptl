@@ -11,11 +11,19 @@
  *
  * Static channel assignment (no router reconfiguration):
  *   At distance d, the d interleaved matchings (offset r = 0 .. d-1) overlap
- *   on the 1D mesh, so each (d, r) pair gets its own colors:
- *     fwd (east,  +d) : channel 2*(((d - 1) + r))
- *     bwd (west,  -d) : channel 2*(((d - 1) + r)) + 1
- *   Stages that share the same d reuse those colors (identical hop table).
- *   Total colors = 2*(N - 1). Intended for small N (e.g. L <= 3).
+ *   on the 1D mesh, so each (d, r) pair gets its own colors. A channel may only
+ *   be reused by a later stage if every PE keeps the same role on it: a PE that
+ *   sends on a channel and later receives on it would have to swap both the
+ *   input and the output of its router, and on WSE-2 that costs two switch
+ *   advances, of which a sender can only ever emit one (the first advance takes
+ *   RAMP off its input, so the second never leaves the PE).
+ *
+ *   The p = 1 stages each get their own block, since a PE's role there depends
+ *   on the stage. The p >= 2 stages of any distance d agree on roles -- sender
+ *   iff index = d + r (mod 2d) -- and so share one pair of channels:
+ *     p = 1  : fwd 2*((2^(l-1) - 1) + r),          bwd fwd + 1
+ *     p >= 2 : fwd 2*(N - 1) + 2*((d - 1) + r),    bwd fwd + 1
+ *   Total colors = 3*N - 4. Intended for small N (e.g. L <= 3).
  *
  * Example L=3 (n=8):
  *   (l=1,p=1) dist 1: (0,1)(2,3)(4,5)(6,7)
@@ -90,21 +98,21 @@ kernel @batcher_oddeven_1d<L>(
                         dataflow i16 i, i16 j in [(b + ((1<<(l-p)) + r)):((b + (1<<l)) - (1<<(l-p))) + r:2 * (1<<(l-p)), 0] {
                             stream<f32> fwd = relative_stream(1<<(l-p), 0) {
                                 hops = auto,
-                                channel = 2 * (((1<<(l-p)) - 1) + r)
+                                channel = (2 * ((1<<L) - 1)) + (2 * (((1<<(l-p)) - 1) + r))
                             }
                             stream<f32> bwd = relative_stream(-(1<<(l-p)), 0) {
                                 hops = auto,
-                                channel = (2 * (((1<<(l-p)) - 1) + r)) + 1
+                                channel = ((2 * ((1<<L) - 1)) + (2 * (((1<<(l-p)) - 1) + r))) + 1
                             }
                         }
                         dataflow i16 i, i16 j in [(b + ((2 * (1<<(l-p))) + r)):(b + (1<<l)) + r:2 * (1<<(l-p)), 0] {
                             stream<f32> fwd = relative_stream(1<<(l-p), 0) {
                                 hops = auto,
-                                channel = 2 * (((1<<(l-p)) - 1) + r)
+                                channel = (2 * ((1<<L) - 1)) + (2 * (((1<<(l-p)) - 1) + r))
                             }
                             stream<f32> bwd = relative_stream(-(1<<(l-p)), 0) {
                                 hops = auto,
-                                channel = (2 * (((1<<(l-p)) - 1) + r)) + 1
+                                channel = ((2 * ((1<<L) - 1)) + (2 * (((1<<(l-p)) - 1) + r))) + 1
                             }
                         }
 
