@@ -4,7 +4,7 @@ import re
 import pytest
 
 from spada.lowering.spatial_ir_to_csl import lower_spatial_ir_to_csl
-from spada.syntax.csl import task_recycling
+from spada.syntax.csl import constants, task_recycling
 from spada.syntax.csl import tasks as tdag
 from spada.syntax.spatial_ir import parser, passes
 
@@ -151,38 +151,44 @@ def test_data_tasks_install_the_state_of_a_recycled_successor():
 def test_a_reused_channel_binds_one_data_task_that_dispatches_on_its_epoch():
     """Several receives on one channel at one PE share the data task the channel binds.
 
-    A data task's hardware ID is the color, so binding two of them is not merely wasteful
-    but rejected by cslc ("task ID '0' bound to more than one task"). Each PE of the chain
-    receives on the same channel in every one of its phases, so its receives all land in one
-    dispatcher that has to tell the epochs apart.
+    A data task's hardware ID is the color on WSE-2 and the input queue on WSE-3, so binding
+    two of them is not merely wasteful but rejected by cslc ("task ID '0' bound to more than
+    one task"). Each PE of the chain receives on the same channel in every one of its phases,
+    so its receives all land in one dispatcher that has to tell the epochs apart.
     """
     csl_files = _scalar_exchange_chain()
 
     shared = 0
     for file in csl_files:
         code = file.code
-        colors: dict[str, list[str]] = {}
-        for task_index, color in re.findall(r'const dtask_(\d+)_id = @get_data_task_id\(@get_color\((\d+)\)\)', code):
-            colors.setdefault(color, []).append(task_index)
+        builtin = r'@get_input_queue' if constants.ARCH == 'wse3' else r'@get_color'
+        hardware_ids: dict[str, list[str]] = {}
+        for task_index, hw in re.findall(
+                rf'const dtask_(\d+)_id = @get_data_task_id\({builtin}\((\d+)\)\)', code):
+            hardware_ids.setdefault(hw, []).append(task_index)
 
         bound = re.findall(r'@bind_data_task\(\w+, dtask_(\d+)_id\);', code)
-        assert len(bound) == len(colors), (
-            f'{file.filename}: binds {len(bound)} data tasks for {len(colors)} colors')
+        assert len(bound) == len(hardware_ids), (
+            f'{file.filename}: binds {len(bound)} data tasks for {len(hardware_ids)} hardware IDs')
 
-        for color, task_indices in colors.items():
+        dispatchers = re.findall(r'task dtask_color_(\d+)\([^)]*\) void \{(.*?)\n\}', code, re.S)
+        for hw, task_indices in hardware_ids.items():
             if len(task_indices) == 1:
                 continue
             shared += 1
-            dispatcher = re.search(rf'task dtask_color_{color}\([^)]*\) void \{{(.*?)\n\}}', code, re.S)
-            assert dispatcher, f'{file.filename}: color {color} is reused but has no dispatcher'
-            body = dispatcher.group(1)
-            states = re.findall(r'(?:else )?if \(__dtask_color_' + color + r'_state == (\d+)\)', body)
+            body = next(
+                (b for _, b in dispatchers if all(f'@block(dtask_{t}_id);' in b for t in task_indices)),
+                None)
+            assert body, (
+                f'{file.filename}: hardware ID {hw} is reused but has no dispatcher that blocks '
+                f'{task_indices}')
+            states = re.findall(r'(?:else )?if \(__dtask_color_\d+_state == (\d+)\)', body)
             assert states == [str(state) for state in range(len(task_indices))], (
-                f'{file.filename}: color {color} dispatches on {states} for {len(task_indices)} receives')
+                f'{file.filename}: hardware ID {hw} dispatches on {states} for {len(task_indices)} receives')
             # A branch that keeps its color live would take the next epoch's wavelets as its own.
             for task_index in task_indices:
                 assert f'@block(dtask_{task_index}_id);' in body, (
-                    f'{file.filename}: dtask_{task_index} does not block color {color} when it is done')
+                    f'{file.filename}: dtask_{task_index} does not block when it is done')
 
     assert shared, 'the chain no longer reuses a channel for several receives at one PE'
 

@@ -11,7 +11,7 @@ import re
 import pytest
 
 from spada.lowering.spatial_ir_to_csl import canonicalize_kernel, lower_spatial_ir_to_csl
-from spada.syntax.csl import routing as cslrouting
+from spada.syntax.csl import constants, routing as cslrouting
 from spada.syntax.spatial_ir import canonicalization, parser, passes
 from spada.syntax.spatial_ir.shift_bundles import detect_shift_bundles
 
@@ -330,3 +330,11 @@ def test_a_scalar_receive_lowers_to_a_data_task():
     pe0 = next(f.code for f in files if 'code_0_0' in f.filename)
     assert 'task dtask_' in pe0
     assert 'tmp = __x' in pe0
+    if constants.ARCH == 'wse3':
+        assert re.search(r'@get_data_task_id\(@get_input_queue\(\d+\)\)', pe0), pe0
+        assert '@get_data_task_id(@get_color(' not in pe0
+        queues = re.findall(r'@get_data_task_id\(@get_input_queue\((\d+)\)\)', pe0)
+        for queue in queues:
+            assert f'@initialize_queue(@get_input_queue({queue}),' in pe0, pe0
+    else:
+        assert re.search(r'@get_data_task_id\(@get_color\(\d+\)\)', pe0), pe0

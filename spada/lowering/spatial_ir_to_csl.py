@@ -434,8 +434,9 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     # Declare each data task ID. Data tasks that share a color are aliases of one hardware ID, and
     # a state variable selects which of them the shared task runs as.
     for slot in task_bindings.data_slots:
+        id_expr = _data_task_id_builtin(rect.metadata, slot, tasks, dsds)
         for task_index in slot.task_indices:
-            current_code.write(f'const dtask_{task_index}_id = @get_data_task_id(@get_color({slot.color}));\n')
+            current_code.write(f'const dtask_{task_index}_id = {id_expr};\n')
         if slot.recycled:
             representative = slot.representative_task_index
             current_code.write(f'var {task_bindings.data_state_var(representative)}: u16 = '
@@ -1439,7 +1440,10 @@ def _write_indented_block(current_code: StringIO, block: str, indent: str) -> No
 
 def _data_task_color(rect: PEBlock, task_index: int, task: tdag.CSLTask, color_map: dict[str, int]) -> int:
     """
-    Returns the color a data task listens on, which is also its hardware task ID.
+    Returns the color a data task listens on.
+
+    On WSE-2 that color is also the hardware task ID. On WSE-3 the ID is the
+    input queue bound to this color; see ``_data_task_id_builtin``.
 
     :param task_index: Only used to name the task in the error message.
     """
@@ -1453,6 +1457,66 @@ def _data_task_color(rect: PEBlock, task_index: int, task: tdag.CSLTask, color_m
     if name_to_csl(sname) + '_IN' in color_map:
         return color_map[name_to_csl(sname) + '_IN']
     raise ValueError(f'Cannot find color for stream "{name_to_csl(sname)}" in data task {task_index}')
+
+
+def _input_queue_for_data_slot(
+    rect: PEBlock,
+    slot: task_recycling.DataTaskSlot,
+    tasks: list[tdag.CSLTask],
+    dsds: UniqueDSDDict,
+) -> int:
+    """Return the fabric input queue the receives in ``slot`` share.
+
+    On WSE-3 a data task's hardware ID is that queue, which
+    ``_declare_queue_initialization`` has already bound to the slot's color.
+
+    :param rect: The PE block being generated.
+    :param slot: The data-task slot whose color the receives listen on.
+    :param tasks: All tasks of this PE.
+    :param dsds: Fabric descriptors of this PE, which record the queue assignment.
+    :return: The input-queue identifier.
+    """
+    queues: set[int] = set()
+    for task_index in slot.task_indices:
+        task = tasks[task_index]
+        stmt = rect.compute.statements[task.statements[0]]
+        assert isinstance(stmt, spir.ForeachStatement)
+        sname = stmt.receive_stream.stream_name
+        if isinstance(sname, spir.ArraySlice):
+            sname = sname.array
+        for _, dsd in dsds.get(sname.as_ir(), []):
+            if isinstance(dsd, cslstruct.FabricDSD) and dsd.dsd_type == cslstruct.DSDType.fabin:
+                queues.add(dsd.queue)
+    if len(queues) != 1:
+        found = sorted(queues) if queues else 'none'
+        raise SyntaxError(
+            f'WSE-3 data task on color {slot.color} needs exactly one input queue, found {found}.\n'
+            "  note: @get_data_task_id takes an input_queue on WSE-3, not a color")
+    return next(iter(queues))
+
+
+def _data_task_id_builtin(
+    rect: PEBlock,
+    slot: task_recycling.DataTaskSlot,
+    tasks: list[tdag.CSLTask],
+    dsds: UniqueDSDDict,
+) -> str:
+    """Return the ``@get_data_task_id(...)`` expression for ``slot``.
+
+    WSE-2 constructs a data-task ID from the color the receive listens on.
+    WSE-3 constructs it from the input queue already bound to that color;
+    passing the color is rejected as ``expected 'input_queue' expression, got: 'color'``.
+
+    :param rect: The PE block being generated.
+    :param slot: The data-task slot, whose color is the receive's fabric color.
+    :param tasks: All tasks of this PE, indexed as in the slot.
+    :param dsds: Fabric descriptors of this PE, which record the queue assignment.
+    :return: A CSL expression of type ``data_task_id``.
+    """
+    if csl.ARCH == 'wse3':
+        queue = _input_queue_for_data_slot(rect, slot, tasks, dsds)
+        return f'@get_data_task_id(@get_input_queue({queue}))'
+    return f'@get_data_task_id(@get_color({slot.color}))'
 
 
 def _generate_data_task_slot(
