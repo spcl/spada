@@ -1,13 +1,35 @@
 /**
- * 1D Batcher odd-even mergesort over N = 2^L PEs, one f32 key per PE.
- * Ascending: after the network, PE i holds the i-th smallest input.
+ * 1D Batcher odd-even mergesort over N = 2^L PEs, each holding K f32 keys: N*K keys in all.
+ * Ascending: after the network, PE i holds keys i*K .. i*K + (K-1) of the sorted sequence.
  *
  * Merge stages l = 1 .. L, each of width 2^l. Within stage l:
  *   p = 1: every PE in each 2^l box compares at dist = 2^{l-1}
  *   p = 2 .. l: skip box endpoints, compare at dist = 2^{l-p}
  *
- * Each drawn comparator is two messages (low -> high, then high -> low).
- * Lower index keeps min; higher index keeps max.
+ * Each drawn comparator is two messages (low -> high, then high -> low), a block of K keys each.
+ * Lower index keeps the small keys; higher index keeps the large ones.
+ *
+ * A block per PE
+ * --------------
+ * Every PE keeps its block sorted. The load phase establishes that and every comparator preserves
+ * it, because a comparator becomes a *compare-split*, which is the standard block form of one: the
+ * partners trade blocks, the lower index keeps the K smallest of the 2K keys and the higher index
+ * the K largest, and both halves come out ascending since each is a merge of two ascending runs.
+ * A network that sorts N keys sorts N sorted blocks this way, so concatenating the blocks left to
+ * right gives the sorted sequence. K = 1 is the one-key-per-PE network again, and K need not be a
+ * power of two.
+ *
+ * Two ascending runs are merged by a K-step walk with one index into each. No bounds guard is
+ * needed: the walk takes K steps and each step advances exactly one index, so the low PE reads
+ * val[pv] and tmp[pt] with pv + pt = m <= K-1, and the high PE, walking down from the two block
+ * ends, keeps (K-1-pv) + (K-1-pt) = m <= K-1. The walk cannot run in place -- it writes the m-th
+ * result while still reading val at an index it has already passed -- so it writes res and copies
+ * back.
+ *
+ * The load phase sorts the block with an insertion network. Its inner trip count is K-1 rather
+ * than the m of a plain insertion sort, because a compute-level loop bound has to be a
+ * compile-time expression; the surplus trips clamp onto the (0, 1) pair, and a compare-exchange of
+ * an ordered pair is a no-op.
  *
  * Static channel assignment (no router reconfiguration):
  *   At distance d, the d interleaved matchings (offset r = 0 .. d-1) overlap
@@ -23,7 +45,8 @@
  *   iff index = d + r (mod 2d) -- and so share one pair of channels:
  *     p = 1  : fwd 2*((2^(l-1) - 1) + r),          bwd fwd + 1
  *     p >= 2 : fwd 2*(N - 1) + 2*((d - 1) + r),    bwd fwd + 1
- *   Total colors = 3*N - 4. Intended for small N (e.g. L <= 3).
+ *   Total colors = 3*N - 4, whatever K is: a wider block is more wavelets on a
+ *   channel, not more channels. Intended for small N (e.g. L <= 3).
  *
  * Example L=3 (n=8):
  *   (l=1,p=1) dist 1: (0,1)(2,3)(4,5)(6,7)
@@ -33,21 +56,38 @@
  *   (l=3,p=2) dist 2: (2,4)(3,5)
  *   (l=3,p=3) dist 1: (1,2)(3,4)(5,6)
  *
- * Constraints: L >= 1
+ * Constraints: L >= 1, K >= 1
  **/
-kernel @batcher_oddeven_1d<L>(
-    stream<f32, 1>[1<<L, 1] readonly  inp,
-    stream<f32, 1>[1<<L, 1] writeonly out
+kernel @batcher_oddeven_1d<L, K>(
+    stream<f32, K>[1<<L, 1] readonly  inp,
+    stream<f32, K>[1<<L, 1] writeonly out
 ) {
     place i16 i, i16 j in [0:1<<L, 0] {
-        f32 val
-        f32 tmp
+        f32[K] val   // this PE's block, ascending
+        f32[K] tmp   // the partner's block
+        f32[K] res   // merge target
+        f32 x
+        f32 y
+        i16 pv  // walk into val
+        i16 pt  // walk into tmp
+        i16 pr  // where the walk writes
+        i16 take
     }
 
-    // Load one key per PE.
+    // Load this PE's block and sort it, which is the invariant the comparators below rely on.
     phase {
         compute i16 i, i16 j in [0:1<<L, 0] {
             await receive(val, inp[i, j])
+            for i16 m in [1:K] {
+                for i16 s in [0:K-1] {
+                    pv = ((m - s) - 1) if ((m - s) - 1) > 0 else 0
+                    pt = pv + 1
+                    x = val[pv]
+                    y = val[pt]
+                    val[pv] = x if x < y else y
+                    val[pt] = y if x < y else x
+                }
+            }
         }
     }
 
@@ -80,12 +120,39 @@ kernel @batcher_oddeven_1d<L>(
                 compute i16 i, i16 j in [r:1<<L:1<<l, 0] {
                     await send(val, fwd)
                     await receive(tmp, bwd)
-                    val = tmp if tmp < val else val
+                    // Keep the K smallest: merge upwards from the two block starts.
+                    pv = 0
+                    pt = 0
+                    for i16 m in [0:K] {
+                        x = val[pv]
+                        y = tmp[pt]
+                        take = 1 if x <= y else 0
+                        res[m] = x if take == 1 else y
+                        pv = pv + take
+                        pt = pt + (1 - take)
+                    }
+                    await map i16 m in [0:K] {
+                        val[m] = res[m]
+                    }
                 }
                 compute i16 i, i16 j in [(r + (1<<(l-1))):1<<L:1<<l, 0] {
                     await receive(tmp, fwd)
                     await send(val, bwd)
-                    val = tmp if tmp > val else val
+                    // Keep the K largest: merge downwards from the two block ends.
+                    pv = K - 1
+                    pt = K - 1
+                    for i16 m in [0:K] {
+                        x = val[pv]
+                        y = tmp[pt]
+                        take = 1 if x >= y else 0
+                        pr = (K - 1) - m
+                        res[pr] = x if take == 1 else y
+                        pv = pv - take
+                        pt = pt - (1 - take)
+                    }
+                    await map i16 m in [0:K] {
+                        val[m] = res[m]
+                    }
                 }
             }
         }
@@ -119,12 +186,39 @@ kernel @batcher_oddeven_1d<L>(
                         compute i16 i, i16 j in [(b + ((1<<(l-p)) + r)):((b + (1<<l)) - (1<<(l-p))) + r:2 * (1<<(l-p)), 0] {
                             await send(val, fwd)
                             await receive(tmp, bwd)
-                            val = tmp if tmp < val else val
+                            // Keep the K smallest: merge upwards from the two block starts.
+                            pv = 0
+                            pt = 0
+                            for i16 m in [0:K] {
+                                x = val[pv]
+                                y = tmp[pt]
+                                take = 1 if x <= y else 0
+                                res[m] = x if take == 1 else y
+                                pv = pv + take
+                                pt = pt + (1 - take)
+                            }
+                            await map i16 m in [0:K] {
+                                val[m] = res[m]
+                            }
                         }
                         compute i16 i, i16 j in [(b + ((2 * (1<<(l-p))) + r)):(b + (1<<l)) + r:2 * (1<<(l-p)), 0] {
                             await receive(tmp, fwd)
                             await send(val, bwd)
-                            val = tmp if tmp > val else val
+                            // Keep the K largest: merge downwards from the two block ends.
+                            pv = K - 1
+                            pt = K - 1
+                            for i16 m in [0:K] {
+                                x = val[pv]
+                                y = tmp[pt]
+                                take = 1 if x >= y else 0
+                                pr = (K - 1) - m
+                                res[pr] = x if take == 1 else y
+                                pv = pv - take
+                                pt = pt - (1 - take)
+                            }
+                            await map i16 m in [0:K] {
+                                val[m] = res[m]
+                            }
                         }
                     }
                 }
@@ -132,7 +226,7 @@ kernel @batcher_oddeven_1d<L>(
         }
     }
 
-    // Write sorted keys back to the host.
+    // Write the sorted blocks back to the host.
     phase {
         compute i16 i, i16 j in [0:1<<L, 0] {
             await send(val, out[i, j])

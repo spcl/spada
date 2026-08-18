@@ -458,5 +458,43 @@ def test_auto_channel_kernels_emit_no_closes():
     assert all(not _closed_streams(rect.metadata.compute) for rect in rects)
 
 
+###
+# assign_fabric_queues
+###
+
+
+def test_sequential_spans_share_a_queue():
+    """A queue is remapped only when the previous color's span on this PE has ended."""
+    assigned = stream_lifetime.assign_fabric_queues(
+        {'channel 0': (0, 2), 'channel 1': (3, 5)}, [0, 1],
+        kind='input', architecture='wse2', location='PE (0, 0)')
+    assert assigned == {'channel 0': 0, 'channel 1': 0}
+
+
+def test_overlapping_spans_take_distinct_queues():
+    assigned = stream_lifetime.assign_fabric_queues(
+        {'channel 0': (0, 4), 'channel 1': (2, 6)}, [0, 1],
+        kind='input', architecture='wse2', location='PE (0, 0)')
+    assert assigned['channel 0'] != assigned['channel 1']
+
+
+def test_a_channel_keeps_its_queue_across_a_gap():
+    """
+    Wavelets of a reused color can still arrive between its epochs, so a different color that
+    sits in the gap cannot steal the queue.
+    """
+    assigned = stream_lifetime.assign_fabric_queues(
+        {'channel 0': (0, 10), 'channel 1': (3, 5)}, [0, 1],
+        kind='input', architecture='wse2', location='PE (0, 0)')
+    assert assigned['channel 0'] != assigned['channel 1']
+
+
+def test_three_overlapping_spans_exhaust_two_queues():
+    with pytest.raises(SyntaxError, match='concurrent input queues'):
+        stream_lifetime.assign_fabric_queues(
+            {'channel 0': (0, 10), 'channel 1': (2, 8), 'channel 2': (4, 6)}, [0, 1],
+            kind='input', architecture='wse2', location='PE (0, 0)')
+
+
 if __name__ == '__main__':
     pytest.main([__file__])

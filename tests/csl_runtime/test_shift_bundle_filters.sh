@@ -15,6 +15,9 @@
 #     network, and a wavelet nobody keeps is dropped by the terminating router,
 #   * the counter delivers iff counter <= max_counter, counting modulo limit1 + 1 from
 #     init_counter.
+#
+# The probe runs against whichever generation WSE_ARCH selects, so the same contract can be
+# confirmed on both.
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -28,7 +31,7 @@ compile_and_run() {
     width=$((2 * m))
 
     rm -rf "$OUT"
-    cslc --arch=wse2 "$SRC/layout.csl" -o "$OUT" \
+    cslc --arch="${WSE_ARCH:-wse2}" "$SRC/layout.csl" -o "$OUT" \
         --fabric-dims=$((7 + width)),3 --fabric-offsets=4,1 --memcpy --channels=1 \
         --params=M:$m,K:$k,FILTER:$filter
     timeout -s 9 240 cs_python "$SRC/run.py" "$OUT" --M "$m" --K "$k" --filter "$filter"

@@ -244,11 +244,11 @@ def test_a_pe_cannot_use_more_filters_than_the_hardware_has():
         cslrouting._check_filter_budget(entries)
 
 
-def _bundled_batcher(l: int):
+def _bundled_batcher(l: int, k: int = 1):
     path = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort',
                         'batcher_oddeven_bundled_1D.sptl')
     kernel = parser.parse_file(path)
-    kernel = passes.concretize_parameters(kernel, L=l)
+    kernel = passes.concretize_parameters(kernel, L=l, K=k)
     kernel = passes.constexpr_propagation(kernel)
     return lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
 
@@ -258,7 +258,7 @@ def _colors_of(layout: str, pattern: str = '') -> set[int]:
     return {int(color) for color in re.findall(r'@get_color\((\d+)\)[^;]*' + pattern, routes)}
 
 
-@pytest.mark.parametrize('l, colors', [(2, 6), (3, 10), (4, 18)])
+@pytest.mark.parametrize('l, colors', [(2, 6), (3, 10)])
 def test_the_batcher_fits_the_colors_it_has(l: int, colors: int):
     # A bundled phase puts all of its matchings on one color pair; the phases left unbundled take a
     # pair per matching, but share those across phases wherever their sources agree mod 2d.
@@ -269,13 +269,25 @@ def test_the_batcher_fits_the_colors_it_has(l: int, colors: int):
     assert len(used) <= len(constants.COLORS)
 
 
-def test_only_the_widest_batcher_phases_are_bundled():
-    # Bundling costs one filter at every participating PE and a PE has three, so the sample bundles
-    # the three widest phases only. Lowering at all is the check that no PE needs a fourth, since
-    # ``_check_filter_budget`` would refuse.
+def test_sixteen_keys_need_three_overlapping_input_queues():
+    """
+    At L = 4 a reused inbound color stays live across a gap that already holds two other colors.
+    WSE-2 has two input queues, so lowering must refuse rather than remap a busy queue.
+    """
     from spada.syntax.csl import constants
 
-    layout = next(f.code for f in _bundled_batcher(4) if 'layout' in f.filename)
+    if len(constants.INPUT_QUEUE_IDS) >= 3:
+        pytest.skip(f'{constants.ARCH} has {len(constants.INPUT_QUEUE_IDS)} input queues, enough for L=4')
+    with pytest.raises(SyntaxError, match='concurrent input queues'):
+        _bundled_batcher(4)
+
+
+def test_only_the_widest_batcher_phases_are_bundled():
+    # Bundling costs one filter at every participating PE and a PE has three, so the sample bundles
+    # every phase that satisfies 4d >= N. At L = 3 that is already three phases (d = 4, 2, 2).
+    from spada.syntax.csl import constants
+
+    layout = next(f.code for f in _bundled_batcher(3) if 'layout' in f.filename)
     used, filtered, switched = _colors_of(layout), _colors_of(layout, r'\.filter'), _colors_of(layout, r'\.switches')
 
     assert len(filtered) == 2 * constants.FILTERS_PER_PE  # three phases, two directions each
@@ -283,12 +295,29 @@ def test_only_the_widest_batcher_phases_are_bundled():
     assert not (used - filtered) & switched  # the pooled ones hold a single static configuration
 
 
-def test_batcher_scalar_receive_lowers_to_data_task():
+def test_a_wider_block_costs_wavelets_not_colors():
+    # The Batcher trades K keys per comparator instead of one. A bundle of M sources then carries
+    # M*K wavelets per epoch, of which each destination keeps the K its filter windows out -- the
+    # colors and the filters stay as they are, only the counters grow.
+    narrow = next(f.code for f in _bundled_batcher(3, 1) if 'layout' in f.filename)
+    wide = next(f.code for f in _bundled_batcher(3, 4) if 'layout' in f.filename)
+
+    assert _colors_of(wide) == _colors_of(narrow)
+    assert _colors_of(wide, r'\.filter') == _colors_of(narrow, r'\.filter')
+    # At L=3 the bundled phases have two and four sources, so cycles of 8 and 16 words.
+    assert '.limit1 = 7, .max_counter = 3' in wide
+    assert '.limit1 = 15, .max_counter = 3' in wide
+    assert '.init_counter = (pe_x - 1) * 4' in wide
+
+
+def test_a_scalar_receive_lowers_to_a_data_task():
+    # A bundle destination that keeps a single key holds it in a scalar, which arrives as the
+    # argument of a data task rather than as a move out of the fabric.
     path = os.path.join(
-        os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort', 'batcher_oddeven_1D.sptl'
+        os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'simple', 'exchange_bundle_1D.sptl'
     )
     kernel = parser.parse_file(path)
-    kernel = passes.concretize_parameters(kernel, L=1)
+    kernel = passes.concretize_parameters(kernel, M=2, D=2, R=1)
     kernel = passes.constexpr_propagation(kernel)
     files = lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
     pe_codes = [f.code for f in files if 'code_' in f.filename]

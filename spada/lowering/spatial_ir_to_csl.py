@@ -7,6 +7,7 @@ import copy
 import functools
 from io import StringIO
 import textwrap
+from typing import Optional
 from spada.syntax.common.types import BIT_WIDTH
 from spada.syntax.spatial_ir import irnodes as spir, canonicalization, analysis, passes
 from spada.syntax.spatial_ir import copy_elimination
@@ -383,7 +384,9 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     dtypes = _collect_identifier_types(rect.metadata, kernel.arguments)
 
     try:
-        dsds = _collect_unique_dsds(tasks, rect.metadata, header, dtypes, kernel, use_memcpy_mode)
+        dsds = _collect_unique_dsds(
+            tasks, rect.metadata, header, dtypes, kernel, use_memcpy_mode,
+            location=f'PEs [{rect.x_range[0]}:{rect.x_range[1]}, {rect.y_range[0]}:{rect.y_range[1]}]')
     except KeyError as e:
         if e.args and isinstance(e.args[0], spir.Identifier):
             raise ValueError(f"Error in {e.args[0].lineinfo}. Undefined identifier \"{e.args[0].as_ir()}\".")
@@ -948,6 +951,83 @@ def _declare_queue_initialization(dsds: UniqueDSDDict, rect: PEBlock, footer: St
         footer.write(f'    @initialize_queue(@get_{kind}({queue}), .{{ .color = {color} }});\n')
 
 
+def _queue_spans(compute: spir.ComputeBlock, names: set[spir.Identifier], queue_key,
+                 inbound: bool) -> dict[str, tuple[int, int]]:
+    """
+    Occupancy of each queue key along the linearized send/receive order of this PE.
+
+    Nested transfers in a loop body are ordered by the walk, so sequential halo exchanges in one
+    ``for`` do not look concurrent. Uses of the same channel still collapse to one span, so a
+    colour that comes back after a gap keeps its queue for the whole of that span.
+
+    :param compute: The compute block being lowered.
+    :param names: Streams that actually bind a fabric queue in this direction.
+    :param queue_key: Maps a stream identifier to its grouping key (channel, or the name itself).
+    :param inbound: True to walk receives, False to walk sends.
+    :return: Mapping of grouping key to ``(first_use, last_use)`` in linearized order.
+    """
+    points: list[spir.Identifier] = []
+    for statement in compute.statements:
+        for node in statement.walk():
+            stream = _fabric_transfer_stream(node, inbound)
+            if stream is None or stream not in names:
+                continue
+            points.append(stream)
+
+    spans: dict[str, tuple[int, int]] = {}
+    for index, stream in enumerate(points):
+        key = queue_key(stream)
+        if key in spans:
+            start, _ = spans[key]
+            spans[key] = (start, index)
+        else:
+            spans[key] = (index, index)
+    return spans
+
+
+def _fabric_transfer_stream(node: spir.SpatialNode, inbound: bool) -> Optional[spir.Identifier]:
+    """
+    The stream a node transfers in the requested direction, or ``None``.
+    """
+    if inbound:
+        if isinstance(node, spir.ReceiveStatement):
+            return stream_lifetime.underlying_stream(node.stream_name)
+        if (isinstance(node, spir.ForeachStatement) and node.parameter_range
+                and node.receive_stream is not None):
+            return stream_lifetime.underlying_stream(node.receive_stream.stream_name)
+        return None
+    if isinstance(node, spir.SendStatement):
+        return stream_lifetime.underlying_stream(node.stream_name)
+    return None
+
+
+def _streams_with_fabric_dsds(compute: spir.ComputeBlock, memcpy_mode: bool,
+                              stream_args: set[spir.Identifier], inbound: bool) -> set[spir.Identifier]:
+    """
+    Streams that lower to a fabric DSD in one direction, so they need a hardware queue.
+
+    A data-task receive (``foreach`` with no range) binds the color itself and does not take a
+    queue. Memcpy arguments are already in local memory, so they do not either.
+
+    :param compute: The compute block being lowered.
+    :param memcpy_mode: Whether memcpy mode is used.
+    :param stream_args: Kernel-argument streams, which memcpy has already copied.
+    :param inbound: True for receives, False for sends.
+    :return: The stream identifiers that need a queue in that direction.
+    """
+    result: set[spir.Identifier] = set()
+    argument_names = {name.as_ir() for name in stream_args}
+    for statement in compute.statements:
+        for node in statement.walk():
+            name = _fabric_transfer_stream(node, inbound)
+            if name is None:
+                continue
+            if memcpy_mode and name.as_ir() in argument_names:
+                continue
+            result.add(name)
+    return result
+
+
 def _collect_unique_dsds(
     tasks: list[tdag.CSLTask],
     rect: PEBlock,
@@ -955,6 +1035,7 @@ def _collect_unique_dsds(
     dtypes: dict[spir.Identifier, spir.IRType],
     kernel: spir.Kernel,
     memcpy_mode: bool,
+    location: str = 'PEs',
 ) -> UniqueDSDDict:
     """
     Returns a list of DSDs and generates them in the header.
@@ -982,27 +1063,22 @@ def _collect_unique_dsds(
     for place_statement in rect.place.statements:
         if isinstance(place_statement, spir.FieldDeclaration):
             if isinstance(place_statement.dtype, spir.ArrayType):
-                try:
-                    eval_shape = [s if isinstance(s, int) else s.eval() for s in place_statement.dtype.shape]
-                    # If the product of the shape is 1, it is a scalar
-                    if not eval_shape or all(s == 1 for s in eval_shape):
-                        # Scalar, no DSD
-                        continue
-                except ValueError:
-                    # Dynamic shape, must create a DSD
-                    pass
+                # An array declared without extents is a scalar and gets no DSD. One of a single
+                # element still gets one: CSL takes it as an array wherever a DSD is called for and
+                # rejects the bare name as an operand -- "only DSD/DSR operands are allowed for
+                # async operations" for a transfer, and a type error for a move between two memory
+                # locations.
+                if not place_statement.dtype.shape:
+                    continue
 
                 array_candidates[place_statement.field_name.as_ir()] = (place_statement, place_statement.dtype.shape)
 
     # Find used DSDs in compute block
-    # TODO: Infer input/output queue ID based on concurrency
-    input_queue_id_ctr = 0
-    output_queue_id_ctr = 0
-
     # Streams that share a channel share a color, and a color binds to exactly one fabric queue per
     # PE -- the hardware rejects "two master input queues for the same color". Queues are therefore
     # handed out per channel; streams on ``auto`` channels get a color to themselves, so they key on
-    # their own name.
+    # their own name. Sequential channels may share a queue only when their occupancy spans on this
+    # PE do not overlap; see ``stream_lifetime.assign_fabric_queues``.
     channel_of_stream = {
         declaration.stream_name.as_ir(): declaration.stream.routing.resolved_channel
         for declaration in rect.dataflow.statements
@@ -1013,23 +1089,27 @@ def _collect_unique_dsds(
         channel = channel_of_stream.get(stream.as_ir(), 'auto')
         return stream.as_ir() if channel == 'auto' else f'channel {channel}'
 
-    input_queue_of: dict[str, int] = {}
-    output_queue_of: dict[str, int] = {}
+    input_names = _streams_with_fabric_dsds(rect.compute, memcpy_mode, stream_args, inbound=True)
+    output_names = _streams_with_fabric_dsds(rect.compute, memcpy_mode, stream_args, inbound=False)
+    input_queue_of = stream_lifetime.assign_fabric_queues(
+        _queue_spans(rect.compute, input_names, queue_key, inbound=True), csl.INPUT_QUEUE_IDS,
+        kind='input', architecture=csl.ARCH, location=location)
+    output_queue_of = stream_lifetime.assign_fabric_queues(
+        _queue_spans(rect.compute, output_names, queue_key, inbound=False), csl.OUTPUT_QUEUE_IDS,
+        kind='output', architecture=csl.ARCH, location=location)
 
     def allocate_input_queue(stream: spir.Identifier) -> int:
-        nonlocal input_queue_id_ctr
         key = queue_key(stream)
         if key not in input_queue_of:
-            input_queue_of[key] = csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)]
-            input_queue_id_ctr += 1
+            raise SyntaxError(
+                f'{location}: no input queue was reserved for {key} (stream "{stream.as_ir()}").')
         return input_queue_of[key]
 
     def allocate_output_queue(stream: spir.Identifier) -> int:
-        nonlocal output_queue_id_ctr
         key = queue_key(stream)
         if key not in output_queue_of:
-            output_queue_of[key] = csl.OUTPUT_QUEUE_IDS[output_queue_id_ctr % len(csl.OUTPUT_QUEUE_IDS)]
-            output_queue_id_ctr += 1
+            raise SyntaxError(
+                f'{location}: no output queue was reserved for {key} (stream "{stream.as_ir()}").')
         return output_queue_of[key]
 
     def _visit_foreach(stmt: spir.ForeachStatement) -> None:

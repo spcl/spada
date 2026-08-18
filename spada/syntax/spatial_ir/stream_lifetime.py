@@ -13,6 +13,7 @@ The passes in this module are deliberately separate so that each can be tested o
 * :func:`verify_stream_bounds` -- checks ``stream<T, BOUND>`` against the transferred element count.
 * :func:`check_use_after_close` -- rejects any use of a stream past its close.
 * :func:`check_channel_conflicts` -- rejects concurrent use of a channel.
+* :func:`assign_fabric_queues` -- colors live channel spans onto hardware fabric queues.
 * :func:`elide_redundant_closes` -- drops closes whose channel is never reused.
 """
 from collections import defaultdict
@@ -737,6 +738,61 @@ def _never_concurrent(first: str, second: str, uses_per_rect: list[dict[spir.Ide
                     return False
 
     return used_anywhere
+
+
+def assign_fabric_queues(spans: dict[str, tuple[int, int]], queue_ids: list[int], *, kind: str,
+                         architecture: str, location: str) -> dict[str, int]:
+    """
+    Assigns hardware fabric queues to stream groups from their occupancy spans on one PE.
+
+    A group is one channel (or one ``auto`` stream). It occupies a single interval from its first
+    use on this PE to its last, including gaps between epochs: wavelets of that colour can still
+    arrive in a gap, and remapping the queue onto another color while they sit there is what the
+    hardware rejects. Two groups may share a queue only when those spans do not overlap.
+
+    The spans form an interval graph, so colouring them in start-time order is optimal.
+
+    :param spans: Mapping of grouping key to an inclusive ``(first_use, last_use)`` statement index
+                  pair on this PE.
+    :param queue_ids: The hardware queue identifiers this direction may use, in the order they
+                      should be handed out.
+    :param kind: ``'input'`` or ``'output'``, for the diagnostic.
+    :param architecture: The target name, for the diagnostic.
+    :param location: The PE rectangle, for the diagnostic.
+    :return: Mapping of grouping key to a queue identifier from ``queue_ids``.
+    """
+    if not spans:
+        return {}
+    if not queue_ids:
+        raise SyntaxError(
+            f'{location} needs {kind} queues, but {architecture} has none that a program may use.')
+
+    assigned: dict[str, int] = {}
+    for key in sorted(spans, key=lambda name: (spans[name][0], spans[name][1], name)):
+        start, end = spans[key]
+        used = {
+            assigned[other]
+            for other in assigned
+            if start <= spans[other][1] and spans[other][0] <= end
+        }
+        for queue in queue_ids:
+            if queue not in used:
+                assigned[key] = queue
+                break
+        else:
+            overlapping = sorted(
+                other for other, (other_start, other_end) in spans.items()
+                if other != key and start <= other_end and other_start <= end
+            )
+            raise SyntaxError(
+                f'{location} would need {len(used) + 1} concurrent {kind} queues '
+                f'(live groups {[key] + overlapping}), but a PE can use at most '
+                f'{len(queue_ids)} on {architecture}.\n'
+                f'  note: a fabric queue is remapped when a new color uses it, and the hardware '
+                f'rejects that while wavelets remain\n'
+                f'  note: a channel keeps one queue for the whole of its lifetime on the PE, '
+                f'including gaps between epochs')
+    return assigned
 
 
 ###

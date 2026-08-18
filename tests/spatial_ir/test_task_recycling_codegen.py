@@ -11,6 +11,67 @@ from spada.syntax.spatial_ir import parser, passes
 _CSL_RUNTIME_TASK_RECYCLING_SAMPLES = os.path.join(
     os.path.dirname(__file__), '..', 'csl_runtime', 'samples')
 
+# Two PEs trading a scalar back and forth for R phases, both directions pinned to a channel of
+# their own so that every phase reuses them. Each receive is a data task on that channel, and each
+# send a local task, so R controls how many of both a PE ends up with: past the local task IDs the
+# hardware has, the slots start being recycled, and the receives of one channel have to share the
+# one data task its color binds. Those are the two shapes the tests below check.
+_SCALAR_EXCHANGE_CHAIN = """
+kernel @scalar_exchange_chain<R>(
+    stream<f32, 1>[2, 1] readonly  inp,
+    stream<f32, 1>[2, 1] writeonly out
+) {
+    place i16 i, i16 j in [0:2, 0] {
+        f32 val
+        f32 tmp
+    }
+    phase {
+        compute i16 i, i16 j in [0:2, 0] {
+            await receive(val, inp[i, j])
+        }
+    }
+    for i16 r in [0:R] {
+        phase {
+            dataflow i16 i, i16 j in [0:2, 0] {
+                stream<f32, 1> fwd = relative_stream(1, 0) {
+                    hops = auto,
+                    channel = 0
+                }
+                stream<f32, 1> bwd = relative_stream(-1, 0) {
+                    hops = auto,
+                    channel = 1
+                }
+            }
+            compute i16 i, i16 j in [0:1, 0] {
+                await send(val, fwd)
+                await receive(tmp, bwd)
+                val = tmp if tmp < val else val
+            }
+            compute i16 i, i16 j in [1:2, 0] {
+                await receive(tmp, fwd)
+                await send(val, bwd)
+                val = tmp if tmp > val else val
+            }
+        }
+    }
+    phase {
+        compute i16 i, i16 j in [0:2, 0] {
+            await send(val, out[i, j])
+        }
+    }
+}
+"""
+
+# Twelve phases outrun the local task IDs of either generation, so the slots are recycled there.
+_CHAIN_PHASES = 12
+
+
+def _scalar_exchange_chain(phases: int = _CHAIN_PHASES):
+    kernel = parser.parse_string(_SCALAR_EXCHANGE_CHAIN)
+    kernel = passes.concretize_parameters(kernel, R=phases)
+    kernel = passes.constexpr_propagation(kernel)
+    return lower_spatial_ir_to_csl(kernel)
+
 
 def test_task_recycling_codegen_uses_else_if_dispatch_for_recycled_slots():
     sample = os.path.join(
@@ -61,16 +122,9 @@ def test_data_tasks_install_the_state_of_a_recycled_successor():
     """A data task handing control to a recycled slot must install that slot's state first.
 
     Without the assignment the dispatcher runs whichever branch was installed last, which means a
-    PE silently skips its comparator and the fabric deadlocks behind the send it never made. The
-    bundled Batcher reaches that shape once it has enough phases sharing a colour, at L=4.
+    PE silently skips a phase of its own and the fabric deadlocks behind the send it never made.
     """
-    sample = os.path.join(
-        os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort', 'batcher_oddeven_bundled_1D.sptl')
-    kernel = parser.parse_file(sample)
-    kernel = passes.concretize_parameters(kernel, L=4)
-    kernel = passes.constexpr_propagation(kernel)
-
-    csl_files = lower_spatial_ir_to_csl(kernel)
+    csl_files = _scalar_exchange_chain()
 
     checked = 0
     for file in csl_files:
@@ -80,7 +134,7 @@ def test_data_tasks_install_the_state_of_a_recycled_successor():
             hardware_ids.setdefault(hardware_id, []).append(task_index)
         recycled = {task for tasks in hardware_ids.values() if len(tasks) > 1 for task in tasks}
 
-        for body in re.findall(r'task dtask_\d+\([^)]*\) void \{(.*?)\n\}', code, re.S):
+        for body in re.findall(r'task dtask_(?:color_)?\d+\([^)]*\) void \{(.*?)\n\}', code, re.S):
             for match in re.finditer(r'@(?:activate|unblock)\(task_(\d+)_id\);', body):
                 if match.group(1) not in recycled:
                     continue
@@ -91,24 +145,18 @@ def test_data_tasks_install_the_state_of_a_recycled_successor():
                     f'slot state assignment, but by "{preceding}"')
                 checked += 1
 
-    assert checked, 'sample no longer exercises a data task triggering a recycled local task'
+    assert checked, 'the chain no longer exercises a data task triggering a recycled local task'
 
 
 def test_a_reused_channel_binds_one_data_task_that_dispatches_on_its_epoch():
-    """Two receives on one channel at one PE share the data task the channel binds.
+    """Several receives on one channel at one PE share the data task the channel binds.
 
     A data task's hardware ID is the color, so binding two of them is not merely wasteful
-    but rejected by cslc ("task ID '0' bound to more than one task"). The static Batcher
-    reaches that shape at L=3, where a PE compares against its neighbour in two phases that
-    the sample gives the same channel.
+    but rejected by cslc ("task ID '0' bound to more than one task"). Each PE of the chain
+    receives on the same channel in every one of its phases, so its receives all land in one
+    dispatcher that has to tell the epochs apart.
     """
-    sample = os.path.join(
-        os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort', 'batcher_oddeven_1D.sptl')
-    kernel = parser.parse_file(sample)
-    kernel = passes.concretize_parameters(kernel, L=3)
-    kernel = passes.constexpr_propagation(kernel)
-
-    csl_files = lower_spatial_ir_to_csl(kernel)
+    csl_files = _scalar_exchange_chain()
 
     shared = 0
     for file in csl_files:
@@ -136,7 +184,7 @@ def test_a_reused_channel_binds_one_data_task_that_dispatches_on_its_epoch():
                 assert f'@block(dtask_{task_index}_id);' in body, (
                     f'{file.filename}: dtask_{task_index} does not block color {color} when it is done')
 
-    assert shared, 'sample no longer reuses a channel for two receives at one PE'
+    assert shared, 'the chain no longer reuses a channel for several receives at one PE'
 
 
 def test_data_tasks_sharing_a_channel_must_take_turns():

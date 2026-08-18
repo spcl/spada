@@ -1,3 +1,5 @@
+import os
+import re
 import pytest
 from spada.lowering import spatial_ir_to_csl as s2c
 from spada.syntax.spatial_ir import parser, passes
@@ -205,6 +207,63 @@ kernel @scan<K> (stream<f32, K>[1, 1] readonly src,
     assert 'for (@range' in code, code
     # A scalar recurrence, not a vector add over a DSD.
     assert '@fadds(a_dsd' not in code, code
+
+
+@pytest.mark.parametrize('k', [1, 4])
+def test_an_array_of_one_element_still_gets_a_dsd(k: int):
+    """
+    A single-element array is a scalar in all but name, but CSL keeps treating it as an array: the
+    bare name is rejected as the operand of a transfer or of a move between memory locations. It
+    therefore needs a DSD like any other array, whatever its extent.
+    """
+    kernel = parser.parse_string(code="""
+kernel @blockcopy<K> (stream<f32, K>[1, 1] readonly src,
+                      stream<f32, K>[1, 1] writeonly dst) {
+    place i16 i, i16 j in [0, 0] {
+        f32[K] val
+        f32[K] res
+    }
+    compute i16 i, i16 j in [0, 0] {
+        await receive(res, src[i, j])
+        await map i16 m in [0:K] {
+            val[m] = res[m]
+        }
+        await send(val, dst[i, j])
+    }
+}""")
+    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, K=k))
+    code = {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel)}['code_0_0.csl']
+
+    # Every operand of every move is a DSD, whatever the arrays happen to be called.
+    moves = re.findall(r'@fmovs\((\w+), (\w+)[,)]', code)
+    assert moves, code
+    for destination, source in moves:
+        assert destination.endswith('_dsd') and source.endswith('_dsd'), code
+
+
+def test_a_reused_color_keeps_its_input_queue_across_a_gap():
+    """
+    On the interior Batcher PE, one inbound color is used on both sides of another. Sharing the
+    queue across that gap is what the simulator rejects: remapping it onto the middle color while
+    wavelets of the outer color remain. The outer color must keep the queue for its whole span.
+    """
+    path = os.path.join(
+        os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort', 'batcher_oddeven_1D.sptl'
+    )
+    kernel = parser.parse_file(path)
+    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, L=3, K=1))
+    files = {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)}
+    code = files['code_2_0.csl']
+
+    colors = dict(re.findall(r'const (\w+)_color_in: color = @get_color\((\d+)\);', code))
+    queues = dict(re.findall(
+        r'const (\w+)_in_dsd = @get_dsd\(fabin_dsd, .*?input_queue = @get_input_queue\((\d+)\)',
+        code))
+    # fwd__17 and fwd__37 share a color and straddle bwd__30.
+    assert colors['fwd__17'] == colors['fwd__37']
+    assert colors['fwd__17'] != colors['bwd__30']
+    assert queues['fwd__17'] == queues['fwd__37']
+    assert queues['fwd__17'] != queues['bwd__30']
 
 
 if __name__ == '__main__':

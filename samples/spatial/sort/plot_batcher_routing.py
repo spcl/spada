@@ -33,13 +33,15 @@ Views
            WSE-2 stores them (a both-sides change is split through a relay
            intermediate). Stacked bands are pos0, pos1, … in that order.
            A destination filter is the small ``fN`` in the cell, N being
-           the filter's init_counter.
+           the filter's init_counter; ``--k`` widens the windows the way K
+           keys per PE do, which scales every init_counter by K.
 
 Examples
 --------
   python samples/spatial/sort/plot_batcher_routing.py --n 8
   python samples/spatial/sort/plot_batcher_routing.py --n 8 --version bundled --view table
   python samples/spatial/sort/plot_batcher_routing.py --n 8 --version static bundled --view table
+  python samples/spatial/sort/plot_batcher_routing.py --n 8 --version hybrid --view table --k 4
 """
 
 from __future__ import annotations
@@ -370,10 +372,10 @@ def _install_ordinary_pair(configs: list[list[list[Route]]], lo: int, hi: int, f
         _install_hop(configs, mid, bwd, Route("EAST", _tx("WEST")))
 
 
-def _window_init(pe: int, first: int, step: int) -> int:
-    """``init_counter`` of a one-word destination filter, as ``_window_start`` emits it."""
+def _window_init(pe: int, first: int, step: int, words: int) -> int:
+    """``init_counter`` of a destination filter keeping ``words`` of them, as ``_window_start`` emits it."""
     offset = 1 - first if step > 0 else first + 1
-    return pe + offset if step > 0 else offset - pe
+    return (pe + offset if step > 0 else offset - pe) * words
 
 
 def _install_bundle(
@@ -384,6 +386,7 @@ def _install_bundle(
     dist: int,
     fwd: int,
     bwd: int,
+    words: int,
 ) -> None:
     """Eastbound inject-then-relay plus westbound mirror, with destination filters."""
     src_lo, src_hi = start, start + length
@@ -397,7 +400,7 @@ def _install_bundle(
     # Stream travels east: last destination terminates, the others copy-and-forward.
     for pe in range(dst_lo, dst_hi - 1):
         _install_hop(configs, pe, fwd, Route("WEST", _tx("RAMP", "EAST")))
-        filters[pe][fwd] = _window_init(pe, dst_lo, 1)
+        filters[pe][fwd] = _window_init(pe, dst_lo, 1, words)
     _install_hop(configs, dst_hi - 1, fwd, Route("WEST", _tx("RAMP")))
     filters[dst_hi - 1][fwd] = 0
 
@@ -409,13 +412,13 @@ def _install_bundle(
     # Stream travels west: lowest destination terminates.
     for pe in range(src_lo + 1, src_hi):
         _install_hop(configs, pe, bwd, Route("EAST", _tx("RAMP", "WEST")))
-        filters[pe][bwd] = _window_init(pe, src_hi - 1, -1)
+        filters[pe][bwd] = _window_init(pe, src_hi - 1, -1, words)
     _install_hop(configs, src_lo, bwd, Route("EAST", _tx("RAMP")))
     filters[src_lo][bwd] = 0
 
 
-def pe_table(phases: list[Phase], n: int, version: str) -> list[list[Cell]]:
-    """Build the resolved per-PE switch table of ``version``."""
+def pe_table(phases: list[Phase], n: int, version: str, words: int = 1) -> list[list[Cell]]:
+    """Build the resolved per-PE switch table of ``version``, for ``words`` keys per PE."""
     n_channels = channel_count(phases)
     configs: list[list[list[Route]]] = [[[] for _ in range(n_channels)] for _ in range(n)]
     filters: list[list[int | None]] = [[None] * n_channels for _ in range(n)]
@@ -428,7 +431,7 @@ def pe_table(phases: list[Phase], n: int, version: str) -> list[list[Cell]]:
             fwd, bwd = ph.matchings[0].fwd, ph.matchings[0].bwd
             for start, length in _shift_runs(pairs, ph.dist):
                 if length >= MIN_BUNDLE_LENGTH:
-                    _install_bundle(configs, filters, start, length, ph.dist, fwd, bwd)
+                    _install_bundle(configs, filters, start, length, ph.dist, fwd, bwd, words)
                 else:
                     _install_ordinary_pair(configs, start, start + ph.dist, fwd, bwd)
         else:
@@ -442,9 +445,9 @@ def pe_table(phases: list[Phase], n: int, version: str) -> list[list[Cell]]:
     ]
 
 
-def _draw_table(ax, phases: list[Phase], n: int, version: str) -> None:
+def _draw_table(ax, phases: list[Phase], n: int, version: str, words: int) -> None:
     """Resolved per-PE switch positions; destination filters as a small ``fN``."""
-    table = pe_table(phases, n, version)
+    table = pe_table(phases, n, version, words)
     n_channels = channel_count(phases)
     ax.set_xlim(-0.5, n_channels - 0.5)
     ax.set_ylim(n - 0.5, -0.5)
@@ -453,7 +456,7 @@ def _draw_table(ax, phases: list[Phase], n: int, version: str) -> None:
     ax.set_xlabel("Channel")
     ax.set_ylabel("PE")
     ax.set_title(
-        f"Resolved switch positions ({version}, WSE-2), n={n} ({n_channels} colors); "
+        f"Resolved switch positions ({version}, WSE-2), n={n}, K={words} ({n_channels} colors); "
         "stacked bands are pos0, pos1, ...; fN is the filter init_counter"
     )
     ax.set_aspect("equal")
@@ -517,7 +520,7 @@ def _draw_table(ax, phases: list[Phase], n: int, version: str) -> None:
     ax.legend(handles=handles, title="rx→tx", loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=8)
 
 
-def plot(n: int, view: str, version: str, outfile: str | None, show: bool) -> None:
+def plot(n: int, view: str, version: str, words: int, outfile: str | None, show: bool) -> None:
     phases = assign_channels(batcher_phases(n), version, n)
     if view == "network":
         n_slots = sum(max(len(ph.matchings), 1) for ph in phases)
@@ -526,7 +529,7 @@ def plot(n: int, view: str, version: str, outfile: str | None, show: bool) -> No
     elif view == "table":
         n_channels = channel_count(phases)
         fig, ax = plt.subplots(figsize=(max(8, 0.45 * n_channels), max(4, 0.5 * n)))
-        _draw_table(ax, phases, n, version)
+        _draw_table(ax, phases, n, version, words)
     else:
         raise ValueError(f"unknown view {view}")
 
@@ -558,6 +561,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--n", type=int, default=8, help="number of PEs, power of two (default 8)")
     parser.add_argument(
+        "--k",
+        type=int,
+        default=1,
+        help="keys per PE (default 1). A comparator trades K of them, so a bundle's cycle is "
+        "K times longer and every destination filter starts K times further back.",
+    )
+    parser.add_argument(
         "--version",
         nargs="+",
         choices=VERSIONS + ("all",),
@@ -579,13 +589,14 @@ def main() -> None:
     for version in versions:
         outfile = args.out
         if outfile is None and not args.show:
-            outfile = f"samples/spatial/sort/batcher_routing_{version}_n{args.n}_{args.view}.pdf"
+            suffix = "" if args.k == 1 else f"_k{args.k}"
+            outfile = f"samples/spatial/sort/batcher_routing_{version}_n{args.n}{suffix}_{args.view}.pdf"
         elif outfile is not None and len(versions) > 1:
             if outfile.endswith(".pdf"):
                 outfile = f"{outfile[:-4]}_{version}.pdf"
             else:
                 outfile = f"{outfile}_{version}"
-        plot(args.n, args.view, version, outfile, args.show)
+        plot(args.n, args.view, version, args.k, outfile, args.show)
 
 
 if __name__ == "__main__":
