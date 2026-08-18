@@ -12,6 +12,7 @@ nav:
     - Asynchronous Semantics: spatial/async.md
     - Routing Semantics: spatial/routing.md
     - Parameterized Semantics: spatial/parametric.md
+    - Routing Semantics on Cerebras WSE: spatial/routing_wse.md
     - Examples: spatial/examples.md
   - Dataflow Task IR: dataflowtask/dataflowtask.md
 

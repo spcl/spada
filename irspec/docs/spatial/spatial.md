@@ -857,9 +857,8 @@ an explicit `close` on a bounded stream is redundant but legal. An unbounded str
 by an explicit `close`.
 
 !!! note "Note: Verification of Bounds"
-    Where the number of elements transferred over a bounded stream can be determined statically, it
-    must match the stream's bound, otherwise a compile error is raised. Where it cannot be
-    determined statically, no diagnostic is emitted.
+    When the compiler can infer stream bounds statically, it may generate a compiler error.
+    Otherwise, no diagnostic is emitted.
 
 At the end of a [phase](#phases), every stream that is in scope is implicitly closed. This is
 equivalent to injecting a `close` for each such stream on each participating PE immediately *after*
