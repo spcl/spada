@@ -403,14 +403,20 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         if len(tasks) != len_for_reporting:
             print(f'P{rect.x_range[0]},{rect.y_range[0]}: Reduced from {len_for_reporting} to {len(tasks)} tasks.')
 
-    task_bindings = task_recycling.plan_task_bindings(tasks, task_creation_behavior, set(color_map.values()))
+    data_task_colors = {
+        i: _data_task_color(rect.metadata, i, task, color_map)
+        for i, task in enumerate(tasks) if task.task_type == 'data'
+    }
+    task_bindings = task_recycling.plan_task_bindings(tasks, task_creation_behavior, set(color_map.values()),
+                                                     data_task_colors)
 
     place_block_bytes = _place_block_storage_bytes(rect.metadata.place)
 
     print(f'Stats P{rect.x_range[0]},{rect.y_range[0]}: {place_block_bytes} bytes/PE, '
           f'{sum(1 if t.task_type == "local" else 0 for t in tasks)} local tasks across '
           f'{len(task_bindings.local_slots)} local task IDs, '
-          f'{sum(1 if t.task_type == "data" else 0 for t in tasks)} data tasks, '
+          f'{sum(1 if t.task_type == "data" else 0 for t in tasks)} data tasks across '
+          f'{len(task_bindings.data_slots)} colors, '
           f'{len(set(color_map.values()))} colors')
 
     # Declare each logical local task ID alias.
@@ -422,24 +428,15 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
             current_code.write(f'var {task_bindings.state_var(representative)}: u16 = '
                                f'{task_bindings.invalid_state_literal(representative)};\n')
 
-    # Declare each data task ID.
-    for i, task in enumerate(tasks):
-        if task.task_type != "data":
-            continue
-
-        stmt = rect.metadata.compute.statements[task.statements[0]]
-        assert isinstance(stmt, spir.ForeachStatement)
-        sname = stmt.receive_stream.stream_name
-        if isinstance(sname, spir.ArraySlice):
-            sname = sname.array
-        if name_to_csl(sname) + "_H2D" in color_map:
-            color = color_map[name_to_csl(sname) + "_H2D"]
-        elif name_to_csl(sname) + "_IN" in color_map:
-            color = color_map[name_to_csl(sname) + "_IN"]
-        else:
-            print(color_map)
-            raise ValueError(f'Cannot find color for stream "{name_to_csl(sname)}" in data task {i}')
-        current_code.write(f'const dtask_{i}_id = @get_data_task_id(@get_color({color}));\n')
+    # Declare each data task ID. Data tasks that share a color are aliases of one hardware ID, and
+    # a state variable selects which of them the shared task runs as.
+    for slot in task_bindings.data_slots:
+        for task_index in slot.task_indices:
+            current_code.write(f'const dtask_{task_index}_id = @get_data_task_id(@get_color({slot.color}));\n')
+        if slot.recycled:
+            representative = slot.representative_task_index
+            current_code.write(f'var {task_bindings.data_state_var(representative)}: u16 = '
+                               f'{task_bindings.data_state(representative)};\n')
 
     # Generate each local slot as one hardware task.
     for slot in task_bindings.local_slots:
@@ -510,15 +507,14 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         if not slot.recycled and tasks[slot.representative_task_index].blocked:
             footer.write(f'    @block(task_{slot.representative_task_index}_id);\n')
 
-    # Generate each data task.
-    for i, task in enumerate(tasks):
-        if task.task_type != 'data':
-            continue
-        _generate_data_task(rect.metadata, i, task, current_code, header, footer, dsds, dtypes, color_map, tasks,
-                            task_bindings)
-        footer.write(f'    @bind_data_task(dtask_{i}, dtask_{i}_id);\n')
-        if task.blocked:
-            footer.write(f'    @block(dtask_{i}_id);\n')
+    # Generate each color's data task, dispatching between the receives that share it.
+    for slot in task_bindings.data_slots:
+        _generate_data_task_slot(rect.metadata, slot, current_code, header, dsds, dtypes, tasks, task_bindings)
+        representative = slot.representative_task_index
+        footer.write(f'    @bind_data_task({task_bindings.data_function_name(slot)}, '
+                     f'dtask_{representative}_id);\n')
+        if tasks[representative].blocked:
+            footer.write(f'    @block(dtask_{representative}_id);\n')
 
     max_task_id = max((slot.hardware_task_id for slot in task_bindings.local_slots), default=csl.LOCAL_TASK_IDS[0] - 1)
 
@@ -559,6 +555,14 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         current_code.write(f'    {task_bindings.state_var(representative)} = '
                            f'{task_bindings.invalid_state_literal(representative)};\n')
 
+    # Reset recycled data-slot state to the receive that runs first on each color.
+    for slot in task_bindings.data_slots:
+        if not slot.recycled:
+            continue
+        representative = slot.representative_task_index
+        current_code.write(f'    {task_bindings.data_state_var(representative)} = '
+                           f'{task_bindings.data_state(representative)};\n')
+
     # Reset data task counters and re-block dedicated tasks.
     for i, task in enumerate(tasks):
         if task.task_type == "data":
@@ -569,7 +573,10 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
             if stmt.parameter_range:
                 param_range = stmt.parameter_range[0]
                 current_code.write(f'    __num_dtask_{i} = {param_range.start.as_ir()};\n')
-        if task.task_type == 'data' and task.blocked:
+        # Blocking a shared color is the first receive's business: the later ones are installed and
+        # unblocked by their predecessors, and blocking here would hold up the first one.
+        if (task.task_type == 'data' and task.blocked
+                and i == task_bindings.data_slot(i).representative_task_index):
             current_code.write(f'    @block(dtask_{i}_id);\n')
         if task.task_type == 'local' and task.blocked and not task_bindings.is_recycled_local_task(i):
             current_code.write(f'    @block(task_{i}_id);\n')
@@ -1350,93 +1357,169 @@ def _write_indented_block(current_code: StringIO, block: str, indent: str) -> No
         current_code.write(f'{indent}{line}\n')
 
 
-def _generate_data_task(
+def _data_task_color(rect: PEBlock, task_index: int, task: tdag.CSLTask, color_map: dict[str, int]) -> int:
+    """
+    Returns the color a data task listens on, which is also its hardware task ID.
+
+    :param task_index: Only used to name the task in the error message.
+    """
+    stmt = rect.compute.statements[task.statements[0]]
+    assert isinstance(stmt, spir.ForeachStatement)
+    sname = stmt.receive_stream.stream_name
+    if isinstance(sname, spir.ArraySlice):
+        sname = sname.array
+    if name_to_csl(sname) + '_H2D' in color_map:
+        return color_map[name_to_csl(sname) + '_H2D']
+    if name_to_csl(sname) + '_IN' in color_map:
+        return color_map[name_to_csl(sname) + '_IN']
+    raise ValueError(f'Cannot find color for stream "{name_to_csl(sname)}" in data task {task_index}')
+
+
+def _generate_data_task_slot(
+    rect: PEBlock,
+    slot: task_recycling.DataTaskSlot,
+    current_code: StringIO,
+    header: StringIO,
+    dsds: UniqueDSDDict,
+    dtypes: dict[spir.Identifier, spir.IRType],
+    tasks: list[tdag.CSLTask],
+    task_bindings: task_recycling.TaskBindingPlan,
+):
+    """
+    Generates the one CSL data task that a color binds.
+
+    A color that carries a single receive becomes that receive's task. A color reused by several
+    receives becomes a dispatcher over them, in the order they run, selected by the slot's state
+    variable -- the same shape :mod:`spada.syntax.csl.task_recycling` gives an overrun local task,
+    except that here sharing is forced rather than chosen.
+
+    :param rect: The rectangle PE block to generate.
+    :param slot: The color and the data tasks bound to it.
+    :param current_code: The caret to the code generator at the current position (global).
+    :param header: A code generator stream for a file's header (where the declarations are).
+    :param dsds: A dictionary mapping names to unique data structure descriptor objects.
+    :param dtypes: A dictionary mapping identifiers to their defined types.
+    :param tasks: A list of all tasks in the kernel.
+    :param task_bindings: The binding plan, which supplies the state variable and the states.
+    """
+    generated = [index for index in slot.task_indices
+                 if _declare_data_task_counter(rect, index, tasks[index], current_code)]
+    if not generated:
+        return
+
+    representative = rect.compute.statements[tasks[generated[0]].statements[0]]
+    argtype_csl = dtype_as_csl(representative.stream_variable.dtype)
+    argname = name_to_csl(representative.stream_variable.identifier)
+    current_code.write(f'task {task_bindings.data_function_name(slot)}({argname}: {argtype_csl}) void {{\n')
+
+    if len(generated) == 1:
+        _generate_data_task_body(rect, generated[0], tasks[generated[0]], current_code, header, dsds, dtypes,
+                                 tasks, task_bindings, argname, indent='    ', self_block=False)
+    else:
+        state_var = task_bindings.data_state_var(generated[0])
+        for branch, task_index in enumerate(generated):
+            keyword = 'if' if branch == 0 else 'else if'
+            current_code.write(f'    {keyword} ({state_var} == {task_bindings.data_state(task_index)}) {{\n')
+            _generate_data_task_body(rect, task_index, tasks[task_index], current_code, header, dsds, dtypes,
+                                     tasks, task_bindings, argname, indent='        ', self_block=True)
+            current_code.write('    }\n')
+    current_code.write('}\n')
+
+
+def _declare_data_task_counter(rect: PEBlock, task_index: int, task: tdag.CSLTask,
+                              current_code: StringIO) -> bool:
+    """
+    Declares the counter that tells a data task when it has received its last wavelet.
+
+    :return: Whether the task has a body to generate at all.
+    """
+    assert task.task_type == 'data'
+    assert len(task.statements) == 1
+
+    stmt_id = task.statements[0]
+    if not isinstance(stmt_id, int) or stmt_id < 0:
+        return False
+    stmt = rect.compute.statements[stmt_id]
+    assert isinstance(stmt, spir.ForeachStatement)
+    if stmt.parameter_range:
+        assert len(stmt.parameter_range) == 1, 'Only one-dimensional foreach loops are supported in data tasks'
+        var_dtype_csl = dtype_as_csl(stmt.variables[0].dtype)
+        current_code.write(f'var __num_dtask_{task_index}: {var_dtype_csl} = '
+                           f'{stmt.parameter_range[0].start.as_ir()};\n')
+    return True
+
+
+def _generate_data_task_body(
     rect: PEBlock,
     task_index: int,
     task: tdag.CSLTask,
     current_code: StringIO,
     header: StringIO,
-    footer: StringIO,
     dsds: UniqueDSDDict,
     dtypes: dict[spir.Identifier, spir.IRType],
-    color_map: dict[str, int],
     tasks: list[tdag.CSLTask],
     task_bindings: task_recycling.TaskBindingPlan,
+    argname: str,
+    indent: str,
+    self_block: bool,
 ):
     """
-    Generates a data task from a foreach loop.
+    Generates what one data task does with a wavelet, without the surrounding task frame.
 
-    :param rect: The rectangle PE block to generate.
-    :param task: The data task to generate.
-    :param current_code: The caret to the code generator at the current position (global).
-    :param header: A code generator stream for a file's header (where the declarations are).
-    :param footer: A code generator stream for a file's footer (the comptime block where the array would be exported).
-    :param dsds: A dictionary mapping names to unique data structure descriptor objects.
-    :param dtypes: A dictionary mapping identifiers to their defined types.
-    :param color_map: Dictionary mapping each stream to its respective color id ({name}_color also works).
-    :param tasks: A list of all tasks in the kernel.
-    :param task_bindings: The local-task binding plan, needed to install the state of a recycled
-                          successor slot before handing control to it.
+    :param argname: The wavelet parameter of the generated task, which the receives sharing a color
+                    have in common; a receive that names it differently gets an alias.
+    :param self_block: Whether the task blocks its color once its last wavelet has arrived. Set for a
+                       shared color, where leaving it live would let the next epoch's wavelets be
+                       taken by this branch.
     """
     #   * If index is requested: before unblocking task, set k; inc at end of task
     #   * Wavelet-triggered task as fallback
-    assert task.task_type == 'data'
-    assert len(task.statements) == 1
-
-    stmt_id = task.statements[0]
-    if isinstance(stmt_id, int) and stmt_id >= 0:
-        stmt = rect.compute.statements[stmt_id]
-        assert isinstance(stmt, spir.ForeachStatement)
-    else:
-        return
+    stmt = rect.compute.statements[task.statements[0]]
+    assert isinstance(stmt, spir.ForeachStatement)
     next_task, itedge = task.outgoing[0]
     next_task_type = tasks[next_task].task_type if next_task != -1 else 'local'
     itedge_code = 'unblock' if itedge == tdag.InterTaskEdge.UNBLOCK else 'activate'
 
-    # If a range was specified, write counter and add code to execute next task
     if stmt.parameter_range:
-        assert len(stmt.parameter_range) == 1, 'Only one-dimensional foreach loops are supported in data tasks'
+        lines = []
+        if self_block:
+            lines.append(f'@block(dtask_{task_index}_id);')
         if next_task == -1:
-            next_task_code = f'@{itedge_code}(exit_task_id);'
+            lines.append(f'@{itedge_code}(exit_task_id);')
         else:
-            prefix = "d" if next_task_type == 'data' else ""
-            lines = []
+            prefix = 'd' if next_task_type == 'data' else ''
             if next_task_type == 'local':
                 lines.extend(task_bindings.emit_local_transition_preamble(
                     next_task, tasks[next_task].blocked, indent='').splitlines())
+            else:
+                lines.extend(task_bindings.emit_data_transition_preamble(next_task, indent='').splitlines())
             lines.append(f'@{itedge_code}({prefix}task_{next_task}_id);')
-            next_task_code = '\n        '.join(lines)
 
-        var_dtype_csl = dtype_as_csl(stmt.variables[0].dtype)
         param_range = stmt.parameter_range[0]
-        current_code.write(f"var __num_dtask_{task_index}: {var_dtype_csl} = {param_range.start.as_ir()};\n")
-
-        next_task_code = f"""
-    __num_dtask_{task_index} += {1 if param_range.step is None else param_range.step.as_ir()};
-    if (__num_dtask_{task_index} == {param_range.stop.as_ir()}) {{
-        {next_task_code}
-    }}"""
+        step = 1 if param_range.step is None else param_range.step.as_ir()
+        body = f'\n{indent}    '.join(lines)
+        next_task_code = (f'{indent}__num_dtask_{task_index} += {step};\n'
+                          f'{indent}if (__num_dtask_{task_index} == {param_range.stop.as_ir()}) {{\n'
+                          f'{indent}    {body}\n'
+                          f'{indent}}}\n')
     else:
-        next_task_code = ""
+        next_task_code = ''
 
-    # Write frame for data task
-    argtype_csl = dtype_as_csl(stmt.stream_variable.dtype)
-    argname = name_to_csl(stmt.stream_variable.identifier)
-    current_code.write(f"task dtask_{task_index}({argname}: {argtype_csl}) void {{\n")
     if stmt.variables:
-        current_code.write(
-            f'    var {name_to_csl(stmt.variables[0].identifier)}: {var_dtype_csl} = __num_dtask_{task_index};\n')
+        var_dtype_csl = dtype_as_csl(stmt.variables[0].dtype)
+        current_code.write(f'{indent}var {name_to_csl(stmt.variables[0].identifier)}: {var_dtype_csl} = '
+                           f'__num_dtask_{task_index};\n')
+    own_argname = name_to_csl(stmt.stream_variable.identifier)
+    if own_argname != argname:
+        current_code.write(f'{indent}const {own_argname} = {argname};\n')
 
     # Write op contents
     for substmt in stmt.body:
         code = cslstmt.generate_csl_statement(substmt, dsds, dtypes, None, header, in_foreach_or_map=True)
-
         for line in code.splitlines():
-            current_code.write(f'    {line}\n')
+            current_code.write(f'{indent}{line}\n')
 
-    # Write footer
     current_code.write(next_task_code)
-    current_code.write(f"\n}}\n")
 
 
 def _generate_task_code(rect: PEBlock,
@@ -1495,14 +1578,13 @@ def _generate_task_code(rect: PEBlock,
                             next_task, tasks[next_task].blocked, indent=indent)
                         task_id = f'task_{next_task}_id'
                     else:
+                        transition_preamble = task_bindings.emit_data_transition_preamble(
+                            next_task, indent=indent)
                         task_id = f'dtask_{next_task}_id'
 
                 async_target = dsd_ops.AsyncTarget(task_id, itedge.name.lower())
             else:
                 async_target = None
-
-            if transition_preamble:
-                current_code.write(transition_preamble)
 
             code = cslstmt.generate_csl_statement(stmt, dsds, dtypes, async_target, header)
             lines = code.splitlines()
@@ -1513,6 +1595,13 @@ def _generate_task_code(rect: PEBlock,
             # instruction -- a ``close``, whose control wavelets go out through a plain ``@mov32``.
             if async_target is not None and async_target.target_task in code:
                 skip_activation = True
+
+            # The preamble installs the successor's state, so it belongs immediately before whatever
+            # hands control over. When the operation does that itself the preamble has to precede it;
+            # otherwise it waits for the explicit activate/unblock written further down.
+            if transition_preamble and skip_activation:
+                current_code.write(transition_preamble)
+                transition_preamble = ''
 
             for line in lines:
                 current_code.write(f'{indent}{line}\n')
@@ -1533,12 +1622,14 @@ def _generate_task_code(rect: PEBlock,
                 task_id = 'exit_task_id'
             else:
                 if tasks[next_task].task_type == 'local':
-                    if not transition_preamble:
-                        current_code.write(
-                            task_bindings.emit_local_transition_preamble(
-                                next_task, tasks[next_task].blocked, indent=indent))
+                    current_code.write(
+                        transition_preamble or task_bindings.emit_local_transition_preamble(
+                            next_task, tasks[next_task].blocked, indent=indent))
                     task_id = f'task_{next_task}_id'
                 else:
+                    current_code.write(
+                        transition_preamble or task_bindings.emit_data_transition_preamble(
+                            next_task, indent=indent))
                     task_id = f'dtask_{next_task}_id'
             if itedge == tdag.InterTaskEdge.ACTIVATE:
                 current_code.write(f'{indent}@activate({task_id});\n')

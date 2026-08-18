@@ -1,7 +1,18 @@
 """
-This module plans how logical CSL local tasks can share a smaller set of
-hardware local-task IDs when the program contains more local tasks than the
-target architecture exposes in :mod:`spada.syntax.csl.constants`.
+This module plans how logical CSL tasks share hardware task IDs.
+
+For local tasks that is an optimization: it is needed only when the program
+contains more of them than the target architecture exposes in
+:mod:`spada.syntax.csl.constants`.
+
+For data tasks it is mandatory. A data task's hardware ID *is* the color it
+listens on, so two receives that a PE performs on one channel have no choice but
+to share, and ``cslc`` rejects the alternative outright ("task ID '0' bound to
+more than one task"). Channel reuse across epochs is what makes a channel a
+reusable resource in the first place (see ``irspec/docs/spatial/routing.md``), so
+the two receives are a shape the backend has to be able to express. Data-task
+slots are therefore planned here alongside the local ones; see
+:func:`plan_data_task_slots` for what they additionally require of codegen.
 
 Terminology
 -----------
@@ -33,14 +44,16 @@ The planner works in three phases.
 
 1. Collect local tasks
 
-     Only ``task.task_type == 'local'`` participates in recycling.  Data tasks
-     have their own binding scheme and are not handled here.
+     Only ``task.task_type == 'local'`` participates in slot *assignment*: a
+     local task may go to any free hardware ID, whereas a data task's ID is
+     dictated by its color.
 
 2. Decide whether recycling is needed
 
      If the requested task-creation behavior forbids recycling, or if the number
      of local tasks already fits in the available hardware IDs, the planner emits
-     a trivial one-task-per-slot mapping.
+     a trivial one-task-per-slot mapping.  Data tasks are grouped by color
+     regardless, since that grouping is not a choice.
 
 3. Assign overflow tasks to slots
 
@@ -126,6 +139,10 @@ stage with the following conventions.
 * Before activating or unblocking a recycled local task, lowering emits the
     transition preamble returned by this module.
 
+Recycled *data* slots follow the same shape, with one addition: a branch blocks
+its own color once it has received the last wavelet it expects.  See
+:func:`plan_data_task_slots`.
+
 Determinism
 -----------
 
@@ -140,7 +157,7 @@ stable across runs.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 import heapq
 from typing import Iterable
 
@@ -179,6 +196,30 @@ class LocalTaskSlot:
 
 
 @dataclass(frozen=True)
+class DataTaskSlot:
+    """
+    The data tasks a PE binds to one color.
+
+    Unlike :class:`LocalTaskSlot` this is not an allocation decision: the color a
+    receive listens on determines the hardware ID, so every logical data task on
+    that color lands here. ``task_indices`` is in the order the tasks run.
+    """
+
+    color: int
+    task_indices: tuple[int, ...]
+
+    @property
+    def representative_task_index(self) -> int:
+        """Return the first logical data task bound to this color."""
+        return self.task_indices[0]
+
+    @property
+    def recycled(self) -> bool:
+        """Whether the color carries more than one logical data task."""
+        return len(self.task_indices) > 1
+
+
+@dataclass(frozen=True)
 class TaskBindingPlan:
     """
         Binding information consumed by CSL code generation.
@@ -194,6 +235,9 @@ class TaskBindingPlan:
     local_slots: tuple[LocalTaskSlot, ...]
     task_to_local_slot: dict[int, int]
     task_to_local_state: dict[int, int]
+    data_slots: tuple[DataTaskSlot, ...] = ()
+    task_to_data_slot: dict[int, int] = field(default_factory=dict)
+    task_to_data_state: dict[int, int] = field(default_factory=dict)
 
     @property
     def uses_recycling(self) -> bool:
@@ -263,17 +307,55 @@ class TaskBindingPlan:
         lines.append(f'{indent}{state_var} = {state_value};')
         return '\n'.join(lines) + '\n'
 
+    def data_slot(self, task_index: int) -> DataTaskSlot:
+        """Return the slot holding the color that ``task_index`` receives on."""
+        return self.data_slots[self.task_to_data_slot[task_index]]
+
+    def data_state(self, task_index: int) -> int:
+        """Return the per-color state number assigned to ``task_index``."""
+        return self.task_to_data_state[task_index]
+
+    def is_recycled_data_task(self, task_index: int) -> bool:
+        """Return whether ``task_index`` shares its color with another data task."""
+        return self.data_slot(task_index).recycled
+
+    def data_state_var(self, task_index: int) -> str:
+        """Return the generated CSL state variable name for ``task_index``'s color."""
+        return f'__dtask_color_{self.data_slot(task_index).color}_state'
+
+    def data_function_name(self, slot: DataTaskSlot) -> str:
+        """Return the generated task name for ``slot``.
+
+        A color with one receive keeps the plain ``dtask_<i>`` name, so the
+        overwhelmingly common case reads as it did before recycling existed.
+        """
+        if not slot.recycled:
+            return f'dtask_{slot.representative_task_index}'
+        return f'dtask_color_{slot.color}'
+
+    def emit_data_transition_preamble(self, task_index: int, indent: str = '    ') -> str:
+        """Emit the state assignment required before unblocking a recycled data task.
+
+        Unlike a local slot this never re-blocks: the caller unblocks the color
+        immediately afterwards, and what keeps the color inert in the meantime is
+        the branch that blocked it when its own last wavelet arrived.
+        """
+        if not self.is_recycled_data_task(task_index):
+            return ''
+        return f'{indent}{self.data_state_var(task_index)} = {self.data_state(task_index)};\n'
+
 
 def plan_task_bindings(
     tasks: list[tdag.CSLTask],
     task_creation_behavior: tdag.TaskCreationBehavior,
     disallowed_task_ids: Optional[set[int]] = None,
+    data_task_colors: dict[int, int] | None = None,
 ) -> TaskBindingPlan:
-    """Compute a local-task binding plan for the generated CSL.
+    """Compute the task binding plan for the generated CSL.
 
-    Returns either a trivial one-task-per-slot mapping when recycling is not
-    required or not allowed, or a state-machine-compatible sharing plan when
-    local-task overrun occurs.
+    For local tasks, returns either a trivial one-task-per-slot mapping when
+    recycling is not required or not allowed, or a state-machine-compatible
+    sharing plan when local-task overrun occurs.
 
     ``STATE_MACHINE_ON_OVERRUN`` is the only mode that attempts recycling.
     Other modes either keep a unique mapping or raise when the local task count
@@ -282,11 +364,81 @@ def plan_task_bindings(
     When recycling is needed, all tasks are colored together using
     load-balanced greedy coloring in degeneracy order, distributing tasks
     evenly across hardware slots to minimise dispatcher state machine size.
+
+    :param data_task_colors: The color each data task listens on, keyed by task
+                             index. Data tasks are grouped by it unconditionally;
+                             omitting the mapping leaves ``data_slots`` empty.
     """
+    data_slots, task_to_data_slot, task_to_data_state = plan_data_task_slots(tasks, data_task_colors or {})
+    plan = _plan_local_bindings(tasks, task_creation_behavior, disallowed_task_ids or set())
+    return replace(plan,
+                   data_slots=data_slots,
+                   task_to_data_slot=task_to_data_slot,
+                   task_to_data_state=task_to_data_state)
+
+
+def plan_data_task_slots(
+    tasks: list[tdag.CSLTask],
+    data_task_colors: dict[int, int],
+) -> tuple[tuple[DataTaskSlot, ...], dict[int, int], dict[int, int]]:
+    """Group the data tasks by the color they listen on.
+
+    Sharing a color is sound only if the receives take it in turns, which is the
+    same criterion local slots use: every trigger source of the later task must
+    be reachable from the earlier one. That much orders the *installation* of the
+    later branch, but not the arrival of its wavelets, which the fabric may
+    deliver while the earlier branch is still installed. Codegen closes that gap
+    by having each branch of a recycled slot ``@block`` its own color once its
+    last wavelet has arrived, so wavelets of the next epoch wait in the queue
+    until their branch is installed and unblocked.
+
+    :param data_task_colors: The color each data task listens on, keyed by task index.
+    :return: ``(slots, task_to_slot, task_to_state)``, the last two mapping a task
+             index to its slot number and to its state within that slot.
+    :raises SyntaxError: If two data tasks share a color without being ordered.
+    """
+    by_color: dict[int, list[int]] = {}
+    for task_index, task in enumerate(tasks):
+        if task.task_type != 'data':
+            continue
+        if task_index not in data_task_colors:
+            raise ValueError(f'No color given for data task {task_index}')
+        by_color.setdefault(data_task_colors[task_index], []).append(task_index)
+
+    reachable = _compute_reachability(tasks)
+    trigger_sources = _trigger_sources(tasks)
+
+    slots: list[DataTaskSlot] = []
+    task_to_slot: dict[int, int] = {}
+    task_to_state: dict[int, int] = {}
+    for slot_index, color in enumerate(sorted(by_color)):
+        # Task indices follow the topological order of the completion DAG, so this is the order the
+        # receives run in; the check below is what makes sure of it.
+        task_indices = tuple(sorted(by_color[color]))
+        for earlier, later in zip(task_indices, task_indices[1:]):
+            if not _precedes_all_trigger_sources(earlier, later, trigger_sources, reachable):
+                raise SyntaxError(
+                    f'Two receives on channel {color} at one PE are not ordered, so they cannot '
+                    f'share the data task the channel binds (tasks {earlier} and {later}).\n'
+                    '  note: close the earlier stream before the later one is used, or assign the '
+                    'later one a different channel')
+        slots.append(DataTaskSlot(color, task_indices))
+        for state, task_index in enumerate(task_indices):
+            task_to_slot[task_index] = slot_index
+            task_to_state[task_index] = state
+
+    return tuple(slots), task_to_slot, task_to_state
+
+
+def _plan_local_bindings(
+    tasks: list[tdag.CSLTask],
+    task_creation_behavior: tdag.TaskCreationBehavior,
+    disallowed_task_ids: set[int],
+) -> TaskBindingPlan:
+    """Assign local tasks to hardware slots, recycling them when they overrun."""
     local_task_indices = [i for i, task in enumerate(tasks) if task.task_type == 'local']
     if not local_task_indices:
         return TaskBindingPlan((), {}, {})
-    disallowed_task_ids = disallowed_task_ids or set()
 
     allowed_local_task_ids = [t for t in constants.LOCAL_TASK_IDS if t not in disallowed_task_ids]
 
