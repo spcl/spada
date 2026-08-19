@@ -36,7 +36,14 @@ jobs:
         PYTHONPATH=`pwd` pytest
 
   test-csl:
+    name: test-csl (${{ matrix.wse_arch }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        wse_arch: [wse2, wse3]
+    env:
+      WSE_ARCH: ${{ matrix.wse_arch }}
 
     steps:
     - uses: actions/checkout@v4
@@ -89,8 +96,9 @@ jobs:
       run: |
         ./cerebras-sdk/cslc -h
 
-    - name: Test CSL with simulator
+    - name: Test CSL with simulator (${{ matrix.wse_arch }})
       run: |
         pip install --no-deps -e .
         export PATH=$PATH:`pwd`/cerebras-sdk
+        echo "WSE_ARCH=$WSE_ARCH"
         ./tests/csl_runtime/run_tests.sh
