@@ -139,9 +139,11 @@ def test_a_shift_of_one_is_not_bundled():
     assert _bundles(_SHIFT, M=1, D=1, K=1) == []
 
 
-def test_sources_longer_than_the_shift_are_not_bundled():
-    # Sources would be destinations of the same bundle, which this arrangement cannot express.
-    assert _bundles(_SHIFT, M=4, D=2, K=1) == []
+def test_sources_longer_than_the_shift_are_rejected_as_overlapping_compute_subgrids():
+    # PEs 2 and 3 would be both sources and destinations in one phase, which violates the
+    # one-compute-block-per-PE rule before bundle detection is reached.
+    with pytest.raises(SyntaxError, match='Overlapping compute subgrids'):
+        _bundles(_SHIFT, M=4, D=2, K=1)
 
 
 def test_sources_inject_then_relay():
