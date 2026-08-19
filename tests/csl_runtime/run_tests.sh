@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Every test builds in this directory and exchanges data through the fixed names inp.npy and
+# OUT_out.npy, removing them once a case is done. Only one run may be active per checkout: two
+# concurrent runs overwrite each other's inputs and fail with a shape mismatch. Run architectures
+# sequentially, or give each one its own checkout.
+
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
