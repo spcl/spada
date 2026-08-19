@@ -20,8 +20,20 @@ Versions
   hybrid   batcher_oddeven_bundled_1D.sptl as it stands. Only the three widest
            phases bundle, which is exactly the three filters a PE has: the
            rule is 4*d >= n. The rest are routed per matching, on colors
-           pooled across phases by the source residue mod 2d, so that a PE's
-           role on a pooled color is the same in every phase that uses it.
+           pooled across phases by the source residue mod 2d *and* the
+           direction, so that a PE's role on a pooled color is the same in
+           every phase that uses it and no router ever switches:
+             fwd 2*((2*d - 2) + c),  bwd fwd + 1,  c = r or d + r
+  wse3     batcher_oddeven_wse3_1D.sptl. Bundles the same three phases, and
+           pools the rest by the origin's residue alone, dropping the
+           agreement on direction:
+             fwd (2*d - 2) + c_lo,   bwd (2*d - 2) + c_hi
+           A comparator's two messages then share a pooled color whenever
+           two phases at one distance meet on it, which halves how many
+           colors a PE touches -- what WSE-3 counts, since a queue there
+           stays bound to its color for the whole kernel. The price is that
+           pooled routers switch: a source alternates R->E and R->W, a
+           destination W->R and E->R, both one side at a time.
 
 Views
 -----
@@ -30,8 +42,9 @@ Views
            Each comparator is two arrows: down = fwd (east, +d), up = bwd
            (west, -d), each colored by its channel.
   table    Per-PE @set_color_config, with switch positions resolved the way
-           WSE-2 stores them (a both-sides change is split through a relay
-           intermediate). Stacked bands are pos0, pos1, … in that order.
+           the version's target stores them: on WSE-2 a both-sides change is
+           split through a relay intermediate, on WSE-3 it is one position.
+           Stacked bands are pos0, pos1, … in that order.
            A destination filter is the small ``fN`` in the cell, N being
            the filter's init_counter; ``--k`` widens the windows the way K
            keys per PE do, which scales every init_counter by K.
@@ -42,6 +55,7 @@ Examples
   python samples/spatial/sort/plot_batcher_routing.py --n 8 --version bundled --view table
   python samples/spatial/sort/plot_batcher_routing.py --n 8 --version static bundled --view table
   python samples/spatial/sort/plot_batcher_routing.py --n 8 --version hybrid --view table --k 4
+  python samples/spatial/sort/plot_batcher_routing.py --n 16 --version wse3 --view table
 """
 
 from __future__ import annotations
@@ -59,9 +73,12 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 
 
-VERSIONS = ("static", "bundled", "hybrid")
+VERSIONS = ("static", "bundled", "hybrid", "wse3")
 MIN_BUNDLE_DISTANCE = 2
 MIN_BUNDLE_LENGTH = 2
+
+# The architecture each version is written for, which decides how a both-sides change is resolved.
+TARGET_ARCH = {"static": "WSE-2", "bundled": "WSE-2", "hybrid": "WSE-2", "wse3": "WSE-3"}
 
 TX_ORDER = ("RAMP", "EAST", "WEST")
 DIR_LETTER = {"RAMP": "R", "EAST": "E", "WEST": "W"}
@@ -170,7 +187,7 @@ def is_bundled(phase: Phase, n: int, version: str) -> bool:
         return False
     if version == "bundled":
         return True
-    return 4 * phase.dist >= n  # hybrid: the three widest phases, one per filter
+    return 4 * phase.dist >= n  # hybrid and wse3: the three widest phases, one per filter
 
 
 def assign_channels(phases: list[Phase], version: str, n: int) -> list[Phase]:
@@ -182,16 +199,23 @@ def assign_channels(phases: list[Phase], version: str, n: int) -> list[Phase]:
     for ph in phases:
         matchings = []
         for m in ph.matchings:
+            low_residue = m.offset if ph.p == 1 else ph.dist + m.offset
+            high_residue = (low_residue + ph.dist) % (2 * ph.dist)
             if version == "bundled":
-                fwd = 2 * ph.index
+                fwd, bwd = 2 * ph.index, 2 * ph.index + 1
             elif is_bundled(ph, n, version):
                 fwd = n + 2 * (ph.l * (log_n + 1) + ph.p)
+                bwd = fwd + 1
+            elif version == "wse3":
+                # Pooled by the origin's residue mod 2d alone: each direction takes the colour of
+                # the partner that sends it, so the two phases at one distance meet on both.
+                fwd = (2 * ph.dist - 2) + low_residue
+                bwd = (2 * ph.dist - 2) + high_residue
             else:
-                # Pooled: the source residue mod 2d decides the colour, so phases that agree on
-                # it agree on every router configuration and can share.
-                residue = m.offset if ph.p == 1 else ph.dist + m.offset
-                fwd = 2 * ((2 * ph.dist - 2) + residue)
-            matchings.append(replace(m, fwd=fwd, bwd=fwd + 1))
+                # Pooled by direction as well, which keeps every router configuration static.
+                fwd = 2 * ((2 * ph.dist - 2) + low_residue)
+                bwd = fwd + 1
+            matchings.append(replace(m, fwd=fwd, bwd=bwd))
         assigned.append(replace(ph, matchings=tuple(matchings)))
     return _compact_channels(assigned)
 
@@ -209,6 +233,40 @@ def _compact_channels(phases: list[Phase]) -> list[Phase]:
     return [replace(ph, matchings=tuple(replace(m, fwd=color_of[m.fwd], bwd=color_of[m.bwd])
                                         for m in ph.matchings))
             for ph in phases]
+
+
+def _channel_labels(phases: list[Phase], n_channels: int) -> list[str]:
+    """
+    Legend text for each channel: what it carries and which phases put it there.
+
+    Read off the assignment rather than assumed, since which direction a channel carries is what
+    the versions disagree about -- pooling by direction gives every channel one of them, pooling by
+    origin gives the shared ones both.
+    """
+    distances: list[set[int]] = [set() for _ in range(n_channels)]
+    directions: list[set[str]] = [set() for _ in range(n_channels)]
+    users: list[list[str]] = [[] for _ in range(n_channels)]
+    for ph in phases:
+        for m in ph.matchings:
+            if not m.pairs:
+                continue
+            for channel, direction in ((m.fwd, "fwd"), (m.bwd, "bwd")):
+                distances[channel].add(ph.dist)
+                directions[channel].add(direction)
+                if f"l{ph.l}p{ph.p}" not in users[channel]:
+                    users[channel].append(f"l{ph.l}p{ph.p}")
+
+    labels = []
+    for ch in range(n_channels):
+        if not directions[ch]:
+            labels.append(f"  ch {ch} (unused)")
+            continue
+        arrow = {("fwd", ): "↓", ("bwd", ): "↑"}.get(tuple(sorted(directions[ch])), "↕")
+        kind = "+".join(sorted(directions[ch]))
+        dist = ",".join(str(d) for d in sorted(distances[ch]))
+        phase_text = " ".join(users[ch]) if len(users[ch]) <= 3 else f"{len(users[ch])} phases"
+        labels.append(f"{arrow} ch {ch}: d={dist} {kind} ({phase_text})")
+    return labels
 
 
 def channel_count(phases: list[Phase]) -> int:
@@ -285,17 +343,10 @@ def _draw_network(ax, phases: list[Phase], n: int, version: str) -> None:
                 ax.plot([x_bwd - cap, x_bwd + cap], [lo, lo], color=bwd_c, lw=1.6, zorder=3)
                 ax.plot([x_bwd - cap, x_bwd + cap], [hi, hi], color=bwd_c, lw=1.6, zorder=3)
 
-    handles = []
-    for ch in range(n_channels):
-        arrow = "↓" if ch % 2 == 0 else "↑"
-        kind = "fwd" if ch % 2 == 0 else "bwd"
-        if version == "bundled":
-            label = f"{arrow} ch {ch} (p{ch // 2} {kind})"
-        else:
-            label = f"{arrow} ch {ch} ({kind})"
-        handles.append(
-            Line2D([0], [0], color=channel_color(ch, n_channels), lw=2.0, label=label)
-        )
+    handles = [
+        Line2D([0], [0], color=channel_color(ch, n_channels), lw=2.0, label=label)
+        for ch, label in enumerate(_channel_labels(phases, n_channels))
+    ]
     ax.legend(
         handles=handles,
         title="channel",
@@ -329,14 +380,19 @@ def _add(seq: list[Route], config: Route) -> None:
         seq.append(config)
 
 
-def _resolve_hardware(configs: list[Route]) -> tuple[Route, ...]:
-    """WSE-2: a position names one side; a both-sides change is split in two."""
+def _resolve_hardware(configs: list[Route], split_both_sides: bool = True) -> tuple[Route, ...]:
+    """
+    The positions the hardware stores for a sequence of configurations.
+
+    On WSE-2 a position names one side, so a change of both is split through an intermediate that
+    keeps the old input; WSE-3 takes both in one position and needs no splitting.
+    """
     if not configs:
         return ()
     positions = [configs[0]]
     for config in configs[1:]:
         previous = positions[-1]
-        if previous.rx != config.rx and previous.tx != config.tx:
+        if split_both_sides and previous.rx != config.rx and previous.tx != config.tx:
             positions.append(Route(previous.rx, config.tx))
         positions.append(config)
     return tuple(positions)
@@ -439,8 +495,9 @@ def pe_table(phases: list[Phase], n: int, version: str, words: int = 1) -> list[
                 for lo, hi in m.pairs:
                     _install_ordinary_pair(configs, lo, hi, m.fwd, m.bwd)
 
+    split = TARGET_ARCH[version] == "WSE-2"
     return [
-        [Cell(_resolve_hardware(configs[pe][ch]), filters[pe][ch]) for ch in range(n_channels)]
+        [Cell(_resolve_hardware(configs[pe][ch], split), filters[pe][ch]) for ch in range(n_channels)]
         for pe in range(n)
     ]
 
@@ -456,8 +513,8 @@ def _draw_table(ax, phases: list[Phase], n: int, version: str, words: int) -> No
     ax.set_xlabel("Channel")
     ax.set_ylabel("PE")
     ax.set_title(
-        f"Resolved switch positions ({version}, WSE-2), n={n}, K={words} ({n_channels} colors); "
-        "stacked bands are pos0, pos1, ...; fN is the filter init_counter"
+        f"Resolved switch positions ({version}, {TARGET_ARCH[version]}), n={n}, K={words} "
+        f"({n_channels} colors); stacked bands are pos0, pos1, ...; fN is the filter init_counter"
     )
     ax.set_aspect("equal")
 
@@ -572,9 +629,10 @@ def main() -> None:
         nargs="+",
         choices=VERSIONS + ("all",),
         default=["static"],
-        help="static (one color per matching), bundled (two per phase) and/or hybrid (the "
-        "sample: the three widest phases bundled, the rest pooled). 'all' is every one. "
-        "Repeatable.",
+        help="static (one color per matching), bundled (two per phase), hybrid (the WSE-2 sample: "
+        "the three widest phases bundled, the rest pooled by direction and origin) and/or wse3 "
+        "(the WSE-3 sample: the same bundles, the rest pooled by origin alone, so the pooled "
+        "routers switch). 'all' is every one. Repeatable.",
     )
     parser.add_argument(
         "--view",

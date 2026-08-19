@@ -688,22 +688,27 @@ def _collect_colors_globally(kernel: spir.Kernel, rectangles: list[Rectangle[PEB
             if stream_decl.stream_name in auto_stream_is_read:
                 channel_is_read.add(channel)
 
-    # Allocate colors for each channel
+    # Allocate colors for each channel, the ones whose routers can switch first. WSE-3 implements
+    # switches on a subset of the colors, and whether a channel needs them is only known once its
+    # routes are planned, so handing those out first is what lets any channel of a program that stays
+    # within their number switch. On WSE-2 every color switches and this is the plain order.
+    allocation_order = csl.SWITCHABLE_COLORS + [color for color in csl.COLORS
+                                                if color not in csl.SWITCHABLE_COLORS]
     color_offset = 0
     for channel in range(max_channel + 1):
         if channel in channel_to_color:
             continue
         if channel not in channel_is_read and channel not in channel_is_written:
             continue  # Unused channel
-        if color_offset >= len(csl.COLORS):
+        if color_offset >= len(allocation_order):
             raise SyntaxError(
                 f'Too many communication channels allocated for CSL: channel {channel} cannot be assigned a color')
         if channel in channel_is_written:
-            channel_to_color[channel] = csl.COLORS[color_offset]
+            channel_to_color[channel] = allocation_order[color_offset]
             color_offset += 1
         if channel in channel_is_read:
             if channel not in channel_to_color:
-                channel_to_color[channel] = csl.COLORS[color_offset]
+                channel_to_color[channel] = allocation_order[color_offset]
                 color_offset += 1
 
     return channel_to_color
@@ -999,6 +1004,58 @@ def _queue_spans(compute: spir.ComputeBlock, names: set[spir.Identifier], queue_
     return spans
 
 
+def _microthread_intervals(compute: spir.ComputeBlock, input_names: set[spir.Identifier],
+                           output_names: set[spir.Identifier],
+                           queue_key) -> dict[str, list[tuple[int, int]]]:
+    """
+    The intervals over which each stream group holds a microthread on one PE.
+
+    Both directions are numbered in one space, since a microthread is one resource across them. A
+    transfer that keeps a completion handle is in flight until that handle is awaited, which is where
+    real concurrency comes from: a receive started before a send is still running while the send is.
+    A self-awaited transfer is given its own slot and the next one, because the activation that
+    awaits it also starts what follows.
+
+    :param compute: The compute block being lowered.
+    :param input_names: Streams that bind an input queue on this PE.
+    :param output_names: Streams that bind an output queue on this PE.
+    :param queue_key: Maps a stream identifier to its grouping key (channel, or the name itself).
+    :return: Mapping of direction-prefixed grouping key to the intervals it is in flight over.
+    """
+    live: dict[str, list[tuple[int, int]]] = {}
+    pending: dict[str, list[tuple[str, int]]] = {}
+    index = 0
+
+    def close(keys: list[tuple[str, int]], end: int) -> None:
+        for key, start in keys:
+            live.setdefault(key, []).append((start, end))
+
+    for statement in compute.statements:
+        for node in statement.walk():
+            if isinstance(node, spir.AwaitAllStatement):
+                for keys in pending.values():
+                    close(keys, index)
+                pending.clear()
+                continue
+            if isinstance(node, spir.AwaitCompletionStatement):
+                close(pending.pop(node.completion_name.as_ir(), []), index)
+                continue
+            for inbound, names in ((True, input_names), (False, output_names)):
+                stream = _fabric_transfer_stream(node, inbound)
+                if stream is None or stream not in names:
+                    continue
+                key = f'{"in" if inbound else "out"} {queue_key(stream)}'
+                completion = getattr(node, 'completion_name', None)
+                if completion is None:
+                    live.setdefault(key, []).append((index, index + 1))
+                else:
+                    pending.setdefault(completion.name.as_ir(), []).append((key, index))
+                index += 1
+    for keys in pending.values():
+        close(keys, index)
+    return live
+
+
 def _fabric_transfer_stream(node: spir.SpatialNode, inbound: bool) -> Optional[spir.Identifier]:
     """
     The stream a node transfers in the requested direction, or ``None``.
@@ -1129,8 +1186,7 @@ def _collect_unique_dsds(
     # microthread and abort with "trying to term ut_instr[N], but it's not ours". Microthreads are
     # one resource across both directions, so they are handed out together.
     microthread_of = stream_lifetime.assign_microthreads(
-        {f'in {key}': span for key, span in input_spans.items()}
-        | {f'out {key}': span for key, span in output_spans.items()},
+        _microthread_intervals(rect.compute, input_names, output_names, queue_key),
         csl.MICROTHREAD_IDS, location=location)
 
     def allocate_microthread(stream: spir.Identifier, inbound: bool) -> int | None:

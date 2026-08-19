@@ -812,43 +812,43 @@ def assign_fabric_queues(spans: dict[str, tuple[int, int]], queue_ids: list[int]
     return assigned
 
 
-def assign_microthreads(spans: dict[str, tuple[int, int]], microthread_ids: list[int], *,
+def assign_microthreads(live: dict[str, list[tuple[int, int]]], microthread_ids: list[int], *,
                         location: str) -> dict[str, int]:
     """
-    Assigns microthreads to stream groups from their occupancy spans on one PE.
+    Assigns microthreads to stream groups from the intervals they are in flight over on one PE.
 
     A microthread is held only for the lifetime of one asynchronous operation, so unlike a fabric
-    queue it needs no proof that the hardware has drained: groups whose spans do not overlap take
-    turns on one microthread. Callers pass the inbound and outbound groups of a PE together, keyed
-    apart by direction, because a microthread is one resource shared by both directions.
+    queue it needs no proof that the hardware has drained, and it is not held across the gaps
+    between a group's transfers: two groups may take turns on one microthread as long as no transfer
+    of the one is in flight while a transfer of the other is. Callers pass the inbound and outbound
+    groups of a PE together, keyed apart by direction, because a microthread is one resource shared
+    by both directions.
 
-    :param spans: Mapping of grouping key to an inclusive ``(first_use, last_use)`` statement index
-                  pair on this PE, over both directions.
+    :param live: Mapping of grouping key to the inclusive intervals of statement indices over which
+                 its transfers are in flight, in one index space over both directions.
     :param microthread_ids: The microthread identifiers a program may name, in the order they should
                             be handed out.
     :param location: The PE rectangle, for the diagnostic.
     :return: Mapping of grouping key to a microthread identifier, empty when the target cannot name
              microthreads and the hardware default has to stand.
     """
-    if not spans or not microthread_ids:
+    if not live or not microthread_ids:
         return {}
 
+    def concurrent(one: str, other: str) -> bool:
+        return any(start <= other_end and other_start <= end
+                   for start, end in live[one]
+                   for other_start, other_end in live[other])
+
     assigned: dict[str, int] = {}
-    for key in sorted(spans, key=lambda name: (spans[name][0], spans[name][1], name)):
-        start, end = spans[key]
-        used = {
-            assigned[other]
-            for other in assigned
-            if start <= spans[other][1] and spans[other][0] <= end
-        }
+    for key in sorted(live, key=lambda name: (min(live[name]), name)):
+        used = {assigned[other] for other in assigned if concurrent(key, other)}
         for microthread in microthread_ids:
             if microthread not in used:
                 assigned[key] = microthread
                 break
         else:
-            overlapping = sorted(
-                other for other, (other_start, other_end) in spans.items()
-                if other != key and start <= other_end and other_start <= end)
+            overlapping = sorted(other for other in live if other != key and concurrent(key, other))
             raise SyntaxError(
                 f'{location} would need {len(used) + 1} concurrent microthreads '
                 f'(live groups {[key] + overlapping}), but a PE may name at most '

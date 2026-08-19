@@ -198,11 +198,23 @@ its own is how a kernel declines the trade. What it then costs is colors, and th
 by reusing a channel across phases. Two unbundled shifts may share one safely when they agree on
 axis and signed distance and their sources agree modulo twice that distance, because a PE's role —
 source, relay or destination — is then a function of its position modulo twice the distance alone,
-so one static configuration serves every phase in the pool. Sharing on any other basis risks a PE
-that sends on the color in one phase and receives on it in another, which needs a two-sided switch
-change that a sender cannot drive (see [Lowering to Switches](#lowering-to-switches)), and nothing
-in the compiler currently rejects it. `batcher_oddeven_bundled_1D.sptl` pools on exactly this rule,
-and `batcher_oddeven_1D.sptl` is the same rule written out as arithmetic.
+so one static configuration serves every phase in the pool. `batcher_oddeven_bundled_1D.sptl` pools
+on exactly this rule, and `batcher_oddeven_1D.sptl` is the same rule written out as arithmetic.
+
+The agreement on the *sign* of the distance can be dropped without giving that up. Keep the axis, the
+magnitude and the source residue modulo twice it, and let the direction of travel vary: the sources
+are then the PEs congruent to the residue, the destinations those congruent to residue plus distance,
+and the relays the classes strictly between on the one side or the other — three disjoint classes, so
+a PE still holds one role on the color for the whole kernel and still never both sends and receives
+on it. What varies is the side it faces, which is one switch position either way, since a source only
+ever changes where it transmits and a destination only where it receives. This halves the colors a
+pooled distance needs, and with them the queues, which is what
+`batcher_oddeven_wse3_1D.sptl` is for: on WSE-3 a queue stays bound to its color for the whole
+kernel, so what a PE can afford is not how many colors are live at once but how many it ever touches.
+
+Sharing on a basis looser than either does risk a PE that sends on the color in one phase and receives
+on it in another, which needs a two-sided switch change that a sender cannot drive on WSE-2 (see
+[Lowering to Switches](#lowering-to-switches)), and nothing in the compiler currently rejects it.
 
 This arrangement is the one used in Schnyder's *Distributed Sorting on the Cerebras Wafer-Scale
 Engine* (fig. 7.6) for the 2D reduce-scatter, and is known to run on WSE-2.

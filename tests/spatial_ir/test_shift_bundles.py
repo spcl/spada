@@ -273,18 +273,70 @@ def test_sixteen_keys_need_three_overlapping_input_queues():
     """
     At L = 4 a reused inbound color stays live across a gap that already holds two other colors.
     WSE-2 has two input queues, so occupancy pooling refuses. WSE-3 has six, but remapping a
-    non-empty queue is illegal, and L = 4 wants seven inbound colors over the kernel.
+    non-empty queue is illegal, and L = 4 wants seven colors in each direction over the kernel --
+    seven outbound once memcpy's copy-back of `out` is counted, which is what it reports first.
+    batcher_oddeven_wse3_1D is the variant that fits there.
     """
     from spada.syntax.csl import constants
 
-    if constants.ARCH == 'wse3':
-        with pytest.raises(SyntaxError, match='concurrent input queues'):
-            _bundled_batcher(4)
-        return
-    if len(constants.INPUT_QUEUE_IDS) >= 3:
+    if len(constants.INPUT_QUEUE_IDS) >= 3 and constants.ARCH != 'wse3':
         pytest.skip(f'{constants.ARCH} has {len(constants.INPUT_QUEUE_IDS)} input queues, enough for L=4')
-    with pytest.raises(SyntaxError, match='concurrent input queues'):
+    with pytest.raises(SyntaxError, match='concurrent (in|out)put queues'):
         _bundled_batcher(4)
+
+
+def _wse3_batcher(l: int, k: int = 1):
+    path = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort',
+                        'batcher_oddeven_wse3_1D.sptl')
+    kernel = parser.parse_file(path)
+    kernel = passes.concretize_parameters(kernel, L=l, K=k)
+    kernel = passes.constexpr_propagation(kernel)
+    return lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
+
+
+def _queues_per_pe(files, kind: str) -> int:
+    return max(len(set(re.findall(rf'@get_{kind}_queue\((\d+)\)', f.code)))
+               for f in files if f.filename.startswith('code_'))
+
+
+@pytest.mark.parametrize('l, colors', [(3, 8), (4, 12)])
+def test_pooling_by_origin_halves_what_a_pooled_distance_costs(l: int, colors: int):
+    """
+    batcher_oddeven_wse3_1D lets a comparator's two messages share one color instead of taking one
+    per direction, which is 8 colors at L = 3 and 12 at L = 4 where the bundled variant takes 10
+    and 18. The pooled colors now switch, since a PE's role on one is fixed but the side it faces
+    is not, and a source only changes where it transmits and a destination where it receives.
+    """
+    if l == 4 and len(constants.INPUT_QUEUE_IDS) < 3:
+        pytest.skip(f'{constants.ARCH} has {len(constants.INPUT_QUEUE_IDS)} input queues')
+
+    layout = next(f.code for f in _wse3_batcher(l) if 'layout' in f.filename)
+    used, switched = _colors_of(layout), _colors_of(layout, r'\.switches')
+    assert len(used) == colors
+    assert used == switched
+
+    # Two positions per router, and never a both-sides change, so nothing here needs WSE-3.
+    for line in layout.splitlines():
+        if '.switches' in line:
+            assert len(re.findall(r'\.pos\d', line)) <= 2, line
+
+
+def test_sixteen_keys_fit_the_queues_of_a_target_that_reuses_none():
+    """
+    WSE-3 keeps a queue on its color for the whole kernel, so what a PE can afford is how many
+    colors it ever touches. One per pooled distance instead of two brings L = 4 inside the six
+    inbound queues, and inside the five outbound ones left once memcpy has taken its own.
+    """
+    if len(constants.INPUT_QUEUE_IDS) < 3:
+        # Two queues bind this variant at L = 3 as well, and there the bundled one, whose routers
+        # never switch, is the better fit anyway.
+        with pytest.raises(SyntaxError, match='concurrent input queues'):
+            _wse3_batcher(4)
+        return
+
+    files = _wse3_batcher(4)
+    assert _queues_per_pe(files, 'input') <= len(constants.INPUT_QUEUE_IDS)
+    assert _queues_per_pe(files, 'output') < len(constants.OUTPUT_QUEUE_IDS)
 
 
 def test_only_the_widest_batcher_phases_are_bundled():

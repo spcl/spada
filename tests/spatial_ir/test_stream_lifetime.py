@@ -513,28 +513,39 @@ def test_exclusive_keys_exhaust_queues_when_too_many_data_tasks():
             exclusive_keys=frozenset({'channel 0', 'channel 1', 'channel 2'}))
 
 
-def test_microthreads_are_shared_across_directions_when_spans_are_disjoint():
+def test_microthreads_are_shared_across_directions_when_transfers_do_not_overlap():
     """A microthread is held only while a transfer is in flight, so turns may be taken."""
     assigned = stream_lifetime.assign_microthreads(
-        {'in channel 0': (0, 2), 'out channel 1': (3, 5)}, [2, 3], location='PE (0, 0)')
+        {'in channel 0': [(0, 2)], 'out channel 1': [(3, 5)]}, [2, 3], location='PE (0, 0)')
     assert assigned == {'in channel 0': 2, 'out channel 1': 2}
 
 
 def test_a_receive_and_a_send_in_flight_together_get_distinct_microthreads():
     assigned = stream_lifetime.assign_microthreads(
-        {'in channel 0': (0, 4), 'out channel 0': (0, 4)}, [2, 3], location='PE (0, 0)')
+        {'in channel 0': [(0, 4)], 'out channel 0': [(0, 4)]}, [2, 3], location='PE (0, 0)')
     assert assigned['in channel 0'] != assigned['out channel 0']
+
+
+def test_a_group_that_comes_back_after_a_gap_does_not_hold_its_microthread_across_it():
+    """
+    A channel used again much later is not in flight in between, unlike a fabric queue, which stays
+    bound to it. The group that runs in the gap may take the same microthread.
+    """
+    assigned = stream_lifetime.assign_microthreads(
+        {'in channel 0': [(0, 1), (8, 9)], 'out channel 1': [(4, 5)]}, [2, 3], location='PE (0, 0)')
+    assert assigned == {'in channel 0': 2, 'out channel 1': 2}
 
 
 def test_microthreads_run_out_when_too_many_transfers_overlap():
     with pytest.raises(SyntaxError, match='concurrent microthreads'):
         stream_lifetime.assign_microthreads(
-            {'in channel 0': (0, 10), 'out channel 0': (2, 8), 'out channel 1': (4, 6)}, [2, 3],
-            location='PE (0, 0)')
+            {'in channel 0': [(0, 10)], 'out channel 0': [(2, 8)], 'out channel 1': [(4, 6)]},
+            [2, 3], location='PE (0, 0)')
 
 
 def test_microthreads_are_left_to_the_hardware_when_the_target_cannot_name_them():
-    assert stream_lifetime.assign_microthreads({'in channel 0': (0, 2)}, [], location='PE (0, 0)') == {}
+    assert stream_lifetime.assign_microthreads({'in channel 0': [(0, 2)]}, [],
+                                               location='PE (0, 0)') == {}
 
 
 if __name__ == '__main__':
