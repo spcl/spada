@@ -31,6 +31,13 @@ param K: i16;
 // 1: counter filters; every receiver takes only the K words addressed to it.
 param FILTER: i16;
 
+// Program input queue for the receivers. WSE-2 may use 0; WSE-3 memcpy already owns 0 and 1,
+// so the probe is compiled with IN_QUEUE=2 there.
+param IN_QUEUE: i16;
+
+// 1: emit @initialize_queue (required on WSE-3). 0: omit it (WSE-2).
+param INIT_QUEUES: i16;
+
 const memcpy = @import_module("<memcpy/get_params>", .{
     .width = 2 * M,
     .height = 1,
@@ -57,6 +64,7 @@ layout {
             .words = K,
             // The westmost sender is the last to send and has nothing to relay for.
             .hands_over = x > 0,
+            .init_queues = INIT_QUEUES,
         });
     }
     for (@range(i16, 0, M, 1)) |q| {
@@ -65,6 +73,8 @@ layout {
             .stream = STREAM,
             .words = K,
             .takes = if (FILTER == 0) STREAM else K,
+            .in_queue = IN_QUEUE,
+            .init_queues = INIT_QUEUES,
         });
     }
 

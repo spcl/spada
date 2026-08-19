@@ -8,6 +8,8 @@ param memcpy_params: comptime_struct;
 param stream: i16;
 param words: i16;
 param takes: i16;
+param in_queue: i16;
+param init_queues: i16;
 
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
@@ -22,7 +24,7 @@ const got_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{takes} -> got[i] });
 const in_dsd = @get_dsd(fabin_dsd, .{
     .extent = takes,
     .fabric_color = channel,
-    .input_queue = @get_input_queue(0),
+    .input_queue = @get_input_queue(in_queue),
 });
 
 const recv_id = @get_local_task_id(8);
@@ -48,5 +50,8 @@ comptime {
     @export_symbol(__got_ptr, "got");
     @bind_local_task(recv_task, recv_id);
     @bind_local_task(done_task, done_id);
+    if (init_queues != 0) {
+        @initialize_queue(@get_input_queue(in_queue), .{ .color = channel });
+    }
     @export_symbol(main, "main");
 }
