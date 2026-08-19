@@ -42,9 +42,9 @@ NON_TEST_SCRIPTS=("run_tests.sh" "run-in-lima.sh" "sptlc" "_lib.sh")
 
 is_non_test() {
     local name="$1"
-    # Local debug helpers (zz_*) are not part of the suite.
+    # Local debug helpers (zz_*) and not-yet-enabled cases (pending_*) are not part of the suite.
     case "$name" in
-        zz_*) return 0 ;;
+        zz_*|pending_*) return 0 ;;
     esac
     for skip in "${NON_TEST_SCRIPTS[@]}"; do
         [ "$name" = "$skip" ] && return 0
