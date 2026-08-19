@@ -950,8 +950,15 @@ def _declare_queue_initialization(dsds: UniqueDSDDict, rect: PEBlock, footer: St
 
     for statement in rect.metadata.compute.statements:
         if isinstance(statement, spir.CloseStatement) and statement.switch_advance:
-            name = cslstmt.name_to_csl(stream_lifetime.underlying_stream(statement.stream_name))
-            queue = csl.OUTPUT_QUEUE_IDS[0]
+            stream = stream_lifetime.underlying_stream(statement.stream_name)
+            name = cslstmt.name_to_csl(stream)
+            queue = None
+            for _, dsd in dsds.get(stream.as_ir(), ()):
+                if isinstance(dsd, cslstruct.FabricDSD) and dsd.dsd_type == cslstruct.DSDType.fabout:
+                    queue = dsd.queue
+                    break
+            if queue is None:
+                queue = csl.OUTPUT_QUEUE_IDS[0]
             bindings.setdefault(('output_queue', queue), f'@get_color({color_map[name + "_OUT"]})')
 
     for (kind, queue), color in sorted(bindings.items()):
@@ -1101,18 +1108,21 @@ def _collect_unique_dsds(
     input_names = _streams_with_fabric_dsds(rect.compute, memcpy_mode, stream_args, inbound=True)
     output_names = _streams_with_fabric_dsds(rect.compute, memcpy_mode, stream_args, inbound=False)
     input_spans = _queue_spans(rect.compute, input_names, queue_key, inbound=True)
+    output_spans = _queue_spans(rect.compute, output_names, queue_key, inbound=False)
     # WSE-3 remaps a fabric queue onto the next color at the first transfer that uses it, and
-    # faults if the queue still holds wavelets. Occupancy in the compute block is not enough
-    # to prove it is empty, so every inbound color keeps its own queue. That also keeps
-    # data-task IDs unique, since those IDs *are* the input queues.
-    exclusive_input_keys = frozenset(input_spans) if csl.ARCH == 'wse3' else frozenset()
+    # faults or stalls if the queue still holds wavelets. Occupancy in the compute block is not
+    # enough to prove it is empty, so every color keeps its own queue. That also keeps data-task
+    # IDs unique, since those IDs *are* the input queues.
+    exclusive = frozenset(input_spans) if csl.ARCH == 'wse3' else frozenset()
+    exclusive_out = frozenset(output_spans) if csl.ARCH == 'wse3' else frozenset()
     input_queue_of = stream_lifetime.assign_fabric_queues(
         input_spans, csl.INPUT_QUEUE_IDS,
         kind='input', architecture=csl.ARCH, location=location,
-        exclusive_keys=exclusive_input_keys)
+        exclusive_keys=exclusive)
     output_queue_of = stream_lifetime.assign_fabric_queues(
-        _queue_spans(rect.compute, output_names, queue_key, inbound=False), csl.OUTPUT_QUEUE_IDS,
-        kind='output', architecture=csl.ARCH, location=location)
+        output_spans, csl.OUTPUT_QUEUE_IDS,
+        kind='output', architecture=csl.ARCH, location=location,
+        exclusive_keys=exclusive_out)
 
     def allocate_input_queue(stream: spir.Identifier) -> int:
         key = queue_key(stream)
