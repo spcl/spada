@@ -5,8 +5,10 @@
 # three widest phases run on two colors each instead of one per comparator.
 # L <= 4: three phases is what the filter budget allows, and at L = 5 the phases left unbundled
 # need more than the 21 colors. On wse2 the ceiling is L = 3: a reused inbound color can stay live
-# across a gap that already holds two others, and a PE has only two input queues. wse3 has six, so
-# L = 4 still runs there. K does not change either count; it widens each destination's
+# across a gap that already holds two others, and a PE has only two input queues. WSE-3 has six
+# input queues, but it cannot remap one onto another color while wavelets remain, so a PE needs as
+# many queues as inbound colors over the kernel. L = 4 wants seven, which is one more than the
+# pool. K does not change either count; it widens each destination's
 # counter-filter window to K wavelets out of a cycle of M*K, so K > 1 is what exercises that
 # window on hardware.
 
@@ -55,8 +57,9 @@ run_batcher 1 1
 run_batcher 2 2
 run_batcher 3 1
 run_batcher 3 2
+run_batcher 3 4
 if [ "${WSE_ARCH:-wse2}" = "wse3" ]; then
-    run_batcher 4 2
+    echo "Skipping L=4: seven inbound colors, and wse3 cannot remap a non-empty input queue."
 else
     echo "Skipping L=4: three inbound channel spans overlap, and wse2 has two input queues."
 fi
