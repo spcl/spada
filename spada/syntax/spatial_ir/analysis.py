@@ -161,12 +161,30 @@ def sends_and_receives(compute: spir.ComputeBlock) -> dict[spir.Identifier, tupl
     return {k: (k in collector.sends, k in collector.receives) for k in all_identifiers}
 
 
+def _fabric_shape(shape: list[int]) -> list[int]:
+    """
+    Host tensors and memcpy are always ``(width, height, elem_per_pe)``.
+
+    A 0-D stream occupies one PE; a 1-D array of streams is a row. 2-D shapes
+    are already a fabric rectangle and are left unchanged.
+    """
+    if len(shape) == 0:
+        return [1, 1]
+    if len(shape) == 1:
+        return [shape[0], 1]
+    return shape
+
+
 def get_kernel_stream_arguments(
         kernel: spir.Kernel) -> tuple[dict[str, dict[str, list[int] | str]], dict[str, dict[str, list[int] | str]]]:
     """
     Returns two dictionaries:
     1. A dictionary mapping input stream names to their data types and shapes.
     2. A dictionary mapping output stream names to their data types and shapes.
+
+    Stream argument ``shape`` is the 2D PE rectangle the runtime copies, not the
+    syntactic rank of the IR type: ``stream<T, K>`` is ``[1, 1]`` and
+    ``stream<T, K>[N]`` is ``[N, 1]``. Compile-time scalars keep ``shape = []``.
     """
     input_streams = {}
     output_streams = {}
@@ -188,7 +206,7 @@ def get_kernel_stream_arguments(
 
         arg_as_dict = {
             "dtype": arg.dtype.element_type.element_type.element_type.element_type.as_ir(),
-            "shape": shape,
+            "shape": _fabric_shape(shape),
         }
         if isinstance(arg.dtype, spir.StreamType):
             arg_as_dict["buffer_size"] = arg.dtype.buffer_size.eval() if arg.dtype.buffer_size else None
