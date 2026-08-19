@@ -155,16 +155,15 @@ kernel @looped<K, M> (stream<f32, K>[2, 1] readonly src,
             channel = 0
         }
     }
-    compute i16 i, i16 j in [0:2, 0] {
-        await receive(val, src[i, j])
-    }
     compute i16 i, i16 j in [0:1, 0] {
+        await receive(val, src[i, j])
         for i32 t in [0:M] {
             await send(val, east)
         }
         await send(val, dst[i, j])
     }
     compute i16 i, i16 j in [1:2, 0] {
+        await receive(val, src[i, j])
         for i32 t in [0:M] {
             await receive(other, east)
         }

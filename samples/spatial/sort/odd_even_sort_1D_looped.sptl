@@ -85,8 +85,8 @@ kernel @odd_even_sort_1d_looped<L, K>(stream<f32, K>[1<<L, 1] readonly a_in,
         }
     }
 
-    // Load this PE's block and sort it, which is the invariant the comparators below rely on.
-    compute i16 i, i16 j in [0:1<<L, 0] {
+    // PE 0: low partner in every even round, idle in every odd round.
+    compute i16 i, i16 j in [0:1, 0] {
         await receive(val, a_in[i, j])
         for i16 m in [1:K] {
             for i16 s in [0:K-1] {
@@ -98,10 +98,6 @@ kernel @odd_even_sort_1d_looped<L, K>(stream<f32, K>[1<<L, 1] readonly a_in,
                 val[pt] = y if x < y else x
             }
         }
-    }
-
-    // PE 0: low partner in every even round, idle in every odd round.
-    compute i16 i, i16 j in [0:1, 0] {
         for i32 t in [0 : 1<<(L-1)] {
             await send(val, east_even)
             await receive(other, west_even)
@@ -125,6 +121,17 @@ kernel @odd_even_sort_1d_looped<L, K>(stream<f32, K>[1<<L, 1] readonly a_in,
 
     // Even-indexed interior PEs: low in even rounds, high in odd rounds.
     compute i16 i, i16 j in [2 : (1<<L)-1 : 2, 0] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 s in [0:K-1] {
+                pv = ((m - s) - 1) if ((m - s) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
         for i32 t in [0 : 1<<(L-1)] {
             await send(val, east_even)
             await receive(other, west_even)
@@ -165,6 +172,17 @@ kernel @odd_even_sort_1d_looped<L, K>(stream<f32, K>[1<<L, 1] readonly a_in,
 
     // Odd-indexed interior PEs: high in even rounds, low in odd rounds.
     compute i16 i, i16 j in [1 : (1<<L)-1 : 2, 0] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 s in [0:K-1] {
+                pv = ((m - s) - 1) if ((m - s) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
         for i32 t in [0 : 1<<(L-1)] {
             await receive(other, east_even)
             await send(val, west_even)
@@ -205,6 +223,17 @@ kernel @odd_even_sort_1d_looped<L, K>(stream<f32, K>[1<<L, 1] readonly a_in,
 
     // PE N-1: high partner in every even round, idle in every odd round.
     compute i16 i, i16 j in [(1<<L)-1 : 1<<L, 0] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 s in [0:K-1] {
+                pv = ((m - s) - 1) if ((m - s) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
         for i32 t in [0 : 1<<(L-1)] {
             await receive(other, east_even)
             await send(val, west_even)
