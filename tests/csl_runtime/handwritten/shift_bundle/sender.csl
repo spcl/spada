@@ -2,14 +2,25 @@
 //
 // All senders are launched at once and the order sorts itself out in the fabric: a sender
 // west of us cannot push its words through our router while we still receive from the ramp,
-// so it waits on the link until our SWITCH_ADV has moved us to relay mode. That is the whole
+// so it waits on the link until our switch has moved us to relay mode. That is the whole
 // serialisation mechanism -- no barrier, no counting.
+//
+// Two ways to make that switch, selected by ``advance_switch``:
+//
+//   0  a SWITCH_ADV control wavelet on the same output queue, after the data microthread
+//      reports completion. The wavelet has to sit behind the data, which is why it shares
+//      the queue; WSE-2 output queue 2 holds six 16-bit words, so K f32 values already fill
+//      it at K = 3, and a sender that cannot drain yet then blocks the compute element on
+//      the synchronous @mov32. Async completion is not an empty queue (see @queue_flush).
+//   1  ``.advance_switch`` on the data fabout itself, which advances this router when the
+//      last data wavelet is sent. No second operation, no extra wavelet in the stream.
 
 param memcpy_params: comptime_struct;
 param stream: i16;
 param words: i16;
 param hands_over: bool;
 param init_queues: i16;
+param advance_switch: i16;
 
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 const ctrl = @import_module("<control>");
@@ -26,6 +37,7 @@ const out_dsd = @get_dsd(fabout_dsd, .{
     .extent = words,
     .fabric_color = channel,
     .output_queue = @get_output_queue(2),
+    .advance_switch = if (advance_switch != 0) hands_over else false,
 });
 // The control wavelet has to leave through the same queue as the data, so that it stays
 // behind our own words and only advances our router once they are out.
@@ -44,7 +56,10 @@ task send_task() void {
 }
 
 task done_task() void {
-    if (hands_over) {
+    // A separate SWITCH_ADV is only issued when the data DSD does not advance the switch
+    // itself. Posting it asynchronously is illegal: the source is a scalar, and even as a
+    // DSD it would share output queue 2 with the data microthread.
+    if (hands_over and (advance_switch == 0)) {
         @mov32(switch_dsd, ctrl.encode_single_payload(ctrl.opcode.SWITCH_ADV, true, {}, 0));
     }
     sys_mod.unblock_cmd_stream();

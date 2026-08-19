@@ -151,7 +151,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     # Plan the router switch advances, then drop every close no router has to act on
     cslrouting.plan_switch_advances(rectangles)
     if close_elision:
-        stream_lifetime.elide_redundant_closes(rectangles, needs_advance=lambda stmt: bool(stmt.switch_advance))
+        stream_lifetime.elide_redundant_closes(
+            rectangles, needs_advance=lambda stmt: bool(stmt.switch_advance) or stmt.advance_data_switch)
 
     for rect in rectangles:
         # Create a unique CSL code file based on rectangle offset
@@ -1206,6 +1207,23 @@ def _collect_unique_dsds(
                 f'{location}: no output queue was reserved for {key} (stream "{stream.as_ir()}").')
         return output_queue_of[key]
 
+    # A close that only flips this PE's own router does so on the last data wavelet, so the
+    # outgoing fabric descriptor has to carry ``.advance_switch``. The close itself emits no
+    # control wavelet and is kept only so this scan can see the flag.
+    streams_advance_on_send = {
+        stream_lifetime.underlying_stream(stmt.stream_name).as_ir()
+        for stmt in rect.compute.statements
+        if isinstance(stmt, spir.CloseStatement) and stmt.advance_data_switch
+    }
+
+    def _fabout(stream, extents) -> cslstruct.FabricDSD:
+        stream = stream_lifetime.underlying_stream(stream)
+        return cslstruct.FabricDSD(
+            cslstruct.DSDType.fabout, f'{name_to_csl(stream)}_color', extents,
+            allocate_output_queue(stream),
+            ut=allocate_microthread(stream, inbound=False),
+            advance_switch=stream.as_ir() in streams_advance_on_send)
+
     def _visit_foreach(stmt: spir.ForeachStatement) -> None:
         """
         Registers the fabric input DSD for a ``foreach`` that draws from a stream.
@@ -1280,7 +1298,6 @@ def _collect_unique_dsds(
                                           ut=allocate_microthread(stream_name, inbound=True))
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
             elif isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
-                dsd_type = cslstruct.DSDType.fabout
                 dsd_name = f'{name_to_csl(stream_name)}_out_dsd'
                 extents = stream_candidates[stream_name.as_ir()][1]
                 if extents is not None:  # Use buffer size
@@ -1294,10 +1311,7 @@ def _collect_unique_dsds(
                         extents = functools.reduce(
                             lambda a, b: a * b,
                             [s.eval() if not isinstance(s, int) else s for s in dtypes[stmt.local_array].shape], 1)
-                fabric_color = f'{name_to_csl(stream_name)}_color'
-                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
-                                          allocate_output_queue(stream_name),
-                                          ut=allocate_microthread(stream_name, inbound=False))
+                dsd = _fabout(stream_name, extents)
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
             if isinstance(stmt, spir.SendStatement):
@@ -1333,7 +1347,6 @@ def _collect_unique_dsds(
                 return
             # Stream DSD (i.e., await send in a foreach)
             stream_name = substmt.stream_name
-            dsd_type = cslstruct.DSDType.fabout
             dsd_name = f'{name_to_csl(stream_name)}_out_dsd'
             extents = stream_candidates[stream_name.as_ir()][1]
             if extents is not None:  # Use buffer size
@@ -1347,10 +1360,7 @@ def _collect_unique_dsds(
                     extents = functools.reduce(
                         lambda a, b: a * b,
                         [s.eval() if not isinstance(s, int) else s for s in dtypes[substmt.local_array].shape], 1)
-            fabric_color = f'{name_to_csl(stream_name)}_color'
-            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
-                                      allocate_output_queue(stream_name),
-                                      ut=allocate_microthread(stream_name, inbound=False))
+            dsd = _fabout(stream_name, extents)
             dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
         def _visit_nested_receive(substmt: spir.ReceiveStatement):

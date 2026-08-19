@@ -203,10 +203,18 @@ def test_windows_are_as_wide_as_the_stream_bound():
 def test_each_source_advances_its_own_switch_once():
     codes = _codes(_SHIFT, M=3, D=3, K=1)
     sending = codes['code_0_0.csl']
-    assert sending.count('ctrl.opcode.SWITCH_ADV') == 1
-    assert '.control = true' in sending
-    # The destinations do not switch, so nothing is emitted there.
+    # A source only has to flip its own router, which the last data wavelet does. A SWITCH_ADV
+    # on the same output queue is what drops a wavelet on WSE-2 once a back-pressured send fills it.
+    assert '.advance_switch = true' in sending
+    assert 'SWITCH_ADV' not in sending
+    assert '.control = true' not in sending
     assert 'SWITCH_ADV' not in codes['code_3_0.csl']
+
+
+def test_a_wide_payload_still_advances_on_the_last_data_wavelet():
+    sending = _codes(_SHIFT, M=3, D=3, K=4)['code_0_0.csl']
+    assert '.advance_switch = true' in sending
+    assert 'SWITCH_ADV' not in sending
 
 
 def test_one_color_carries_the_whole_bundle():

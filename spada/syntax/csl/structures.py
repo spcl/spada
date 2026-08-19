@@ -61,6 +61,10 @@ class FabricDSD(DataStructureDescriptor):
     extent: int
     queue: int
     control: bool = False
+    #: When True, the router of this color advances after the last wavelet this descriptor sends.
+    #: Only meaningful on ``fabout``; it is how a source hands its own router over to relay mode
+    #: without a second operation on the same output queue.
+    advance_switch: bool = False
     #: Microthread to drive an asynchronous transfer over this descriptor, where the target lets a
     #: program name one. ``None`` leaves the hardware default, which is the queue ID. The setting
     #: belongs to the operation rather than the descriptor, so ``as_csl`` does not emit it; the
@@ -69,14 +73,17 @@ class FabricDSD(DataStructureDescriptor):
 
     def __post_init__(self):
         assert self.dsd_type in (DSDType.fabin, DSDType.fabout)
+        if self.advance_switch:
+            assert self.dsd_type == DSDType.fabout
 
     def as_csl(self) -> str:
         direction = "in" if self.dsd_type == DSDType.fabin else "out"
         queue_type = "input_queue" if self.dsd_type == DSDType.fabin else "output_queue"
         fabric_color = f' .fabric_color = {self.color}_{direction},' if self.color else ''
         control = ' .control = true,' if self.control else ''
+        advance = ' .advance_switch = true,' if self.advance_switch else ''
         return (f'@get_dsd({self.dsd_type.name}_dsd, .{{ .extent = {self.extent},{fabric_color}'
-                f'{control} .{queue_type} = @get_{queue_type}({self.queue}) }})')
+                f'{control}{advance} .{queue_type} = @get_{queue_type}({self.queue}) }})')
 
     def __hash__(self):
         return hash(("FabricDSD", self.as_csl()))

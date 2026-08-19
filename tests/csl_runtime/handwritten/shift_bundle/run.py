@@ -22,6 +22,8 @@ def main() -> int:
     parser.add_argument('--M', type=int, required=True)
     parser.add_argument('--K', type=int, default=1)
     parser.add_argument('--filter', type=int, default=0)
+    parser.add_argument('--dump-core', action='store_true',
+                        help='write corefile.cs1 before stopping, including on a stall')
     args = parser.parse_args()
 
     m, k = args.M, args.K
@@ -37,15 +39,19 @@ def main() -> int:
 
     runner.load()
     runner.run()
-    runner.memcpy_h2d(val_id, vals.ravel(), 0, 0, width, 1, k, streaming=False,
-                      data_type=crt.MemcpyDataType.MEMCPY_32BIT,
-                      order=crt.MemcpyOrder.ROW_MAJOR, nonblock=False)
-    runner.launch('main', nonblock=False)
-    got = np.zeros(width * stream, dtype=np.float32)
-    runner.memcpy_d2h(got, got_id, 0, 0, width, 1, stream, streaming=False,
-                      data_type=crt.MemcpyDataType.MEMCPY_32BIT,
-                      order=crt.MemcpyOrder.ROW_MAJOR, nonblock=False)
-    runner.stop()
+    try:
+        runner.memcpy_h2d(val_id, vals.ravel(), 0, 0, width, 1, k, streaming=False,
+                          data_type=crt.MemcpyDataType.MEMCPY_32BIT,
+                          order=crt.MemcpyOrder.ROW_MAJOR, nonblock=False)
+        runner.launch('main', nonblock=False)
+        got = np.zeros(width * stream, dtype=np.float32)
+        runner.memcpy_d2h(got, got_id, 0, 0, width, 1, stream, streaming=False,
+                          data_type=crt.MemcpyDataType.MEMCPY_32BIT,
+                          order=crt.MemcpyOrder.ROW_MAJOR, nonblock=False)
+    finally:
+        if args.dump_core:
+            runner.dump_core('corefile.cs1')
+        runner.stop()
 
     got = got.reshape(width, stream)
     for x in range(width):

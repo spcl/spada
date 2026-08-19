@@ -216,20 +216,20 @@ def test_two_phase_split_switch_plans():
 def test_two_phase_split_emits_two_control_wavelets():
     """
     Of the six closes in the sample, only the two on PEs that *send* a stream whose path contains a
-    router that must advance survive elision.
+    router that must advance survive elision. PE 1 only flips its own router, which the last data
+    wavelet does; PE 3 has to turn PE 2 around, which is a traveling SWITCH_ADV.
     """
     files = _lower('two_phase_split.sptl', K=32)
-    emitting = {name: code for name, code in files.items() if 'switch_dsd' in code}
-    assert sorted(emitting) == ['code_1_0.csl', 'code_3_0.csl']
+
+    assert '.advance_switch = true' in files['code_1_0.csl']
+    assert 'SWITCH_ADV' not in files['code_1_0.csl']
+    assert 'switch_dsd' not in files['code_1_0.csl']
 
     payload = 'ctrl.encode_single_payload(ctrl.opcode.SWITCH_ADV, true, {}, 0)'
-    # PE 1 moves its own router one position; PE 3 retires PE 2's incoming configuration, and PE 2
-    # has to turn around, which takes two positions where a switch carries only one direction.
-    assert emitting['code_1_0.csl'].count(payload) == 1
-    assert emitting['code_3_0.csl'].count(payload) == (1 if csl.SWITCH_POSITION_ALLOWS_BOTH else 2)
-    for code in emitting.values():
-        assert 'const ctrl = @import_module("<control>");' in code
-        assert '.control = true' in code
+    # PE 2 has to turn around, which takes two positions where a switch carries only one direction.
+    assert files['code_3_0.csl'].count(payload) == (1 if csl.SWITCH_POSITION_ALLOWS_BOTH else 2)
+    assert 'const ctrl = @import_module("<control>");' in files['code_3_0.csl']
+    assert '.control = true' in files['code_3_0.csl']
 
 
 def test_two_phase_split_without_switching_falls_back():

@@ -6,8 +6,8 @@
 // The senders go east to west -- the one closest to the receivers first. That order is what
 // makes this cheap: a sender injects its own words and only then has to become a relay for
 // the senders west of it, so the hand-over is triggered by an event it knows locally and can
-// signal itself with one SWITCH_ADV. No router has to be switched from a distance, which is
-// the thing a control wavelet cannot do selectively.
+// signal itself with a switch advance. No router has to be switched from a distance, which
+// is the thing a control wavelet cannot do selectively.
 //
 // The receivers never switch. Each one transmits to its ramp *and* onward east, so every
 // receiver's router sees the whole stream and the outermost one terminates it. Which words a
@@ -38,6 +38,10 @@ param IN_QUEUE: i16;
 // 1: emit @initialize_queue (required on WSE-3). 0: omit it (WSE-2).
 param INIT_QUEUES: i16;
 
+// 1: hand over with ``.advance_switch`` on the data fabout. 0: a SWITCH_ADV control wavelet
+// after the data microthread reports completion (see sender.csl).
+param ADVANCE_SWITCH: i16;
+
 const memcpy = @import_module("<memcpy/get_params>", .{
     .width = 2 * M,
     .height = 1,
@@ -65,6 +69,7 @@ layout {
             // The westmost sender is the last to send and has nothing to relay for.
             .hands_over = x > 0,
             .init_queues = INIT_QUEUES,
+            .advance_switch = ADVANCE_SWITCH,
         });
     }
     for (@range(i16, 0, M, 1)) |q| {

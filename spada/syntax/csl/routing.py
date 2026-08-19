@@ -691,16 +691,20 @@ def plan_switch_advances(rectangles: list[Rectangle[PEBlock]]) -> int:
     """
     Determines, for every ``close`` statement, how many switch advances it has to emit.
 
-    A close only produces code on a PE that *sends* the stream: the control wavelets it emits travel
-    the path being retired. Every switch-configured router such a wavelet reaches advances -- the
-    hardware applies the wavelet's single command at each of them rather than indexing a per-router
-    command array -- so a close cannot move one router while leaving another on its path behind.
-    All routers on the path that hold switch positions must therefore advance by the same amount,
-    and that amount is how many wavelets are sent. A close on a receiving PE emits nothing; its
-    router is advanced by the sending PE's wavelets.
+    A close only produces a control wavelet on a PE that *sends* the stream, and only when some
+    *other* router on the path has to move: the wavelet travels the path being retired and every
+    switch-configured router it reaches advances. A close that only has to flip the sending PE's
+    own router does that on the last data wavelet (``.advance_switch`` on the fabric output DSD)
+    instead -- a second operation on the same output queue is what drops a data wavelet on WSE-2
+    once a back-pressured send fills it.
 
-    The result is recorded on each ``CloseStatement`` as its ``switch_advance`` field; a close that
-    needs no advance keeps ``None`` there and generates no code.
+    All routers on the path that hold switch positions and are advanced by a control wavelet must
+    therefore advance by the same amount, and that amount is how many wavelets are sent. A close on
+    a receiving PE emits nothing; its router is advanced by the sending PE's wavelets.
+
+    The result is recorded on each ``CloseStatement`` as ``switch_advance`` (control wavelets) or
+    ``advance_data_switch`` (last-data-wavelet flip). A close that needs neither keeps both unset
+    and generates no code.
 
     :param rectangles: The consolidated PE rectangles of the kernel, annotated in place.
     :return: The number of closes that retire a route configuration.
@@ -738,6 +742,7 @@ def plan_switch_advances(rectangles: list[Rectangle[PEBlock]]) -> int:
             if not isinstance(statement, spir.CloseStatement):
                 continue
             statement.switch_advance = None
+            statement.advance_data_switch = False
             name = stream_lifetime.underlying_stream(statement.stream_name)
             declaration = declarations.get(name)
             if declaration is None or name not in uses or not uses[name].sent:
@@ -749,8 +754,11 @@ def plan_switch_advances(rectangles: list[Rectangle[PEBlock]]) -> int:
             group = stream_lifetime.stream_group_key(declaration)
 
             # How far each switch-configured router on the path has to move, keyed by the router so
-            # that a disagreement can name it.
+            # that a disagreement can name it. The sending PE's own router is tracked separately:
+            # flipping only that one is done on the last data wavelet, not by a SWITCH_ADV.
             advances: dict[str, int] = {}
+            local_advance: int | None = None
+            remote_advances: dict[str, int] = {}
             for dx, dy in offsets:
                 site = _find_site(position_of, channel,
                                   (rect.x_range[0] + dx, rect.x_range[1] + dx, rect.x_range[2]),
@@ -766,13 +774,20 @@ def plan_switch_advances(rectangles: list[Rectangle[PEBlock]]) -> int:
                 ring, total = wraps[site]
                 position %= len(indices)
                 if position + 1 < len(indices):
-                    advances[site.describe()] = indices[position + 1] - indices[position]
+                    amount = indices[position + 1] - indices[position]
                 elif ring:
-                    advances[site.describe()] = total - indices[position]
-                # Otherwise this router is on its last position for this color, and outside ring mode
-                # an advance past it is a no-op, so wavelets passing through over-advance it
-                # harmlessly. It is not necessarily finished with the color: a shift bundle's source
-                # keeps relaying its last configuration long after reaching it.
+                    amount = total - indices[position]
+                else:
+                    # This router is on its last position for this color, and outside ring mode
+                    # an advance past it is a no-op, so wavelets passing through over-advance it
+                    # harmlessly. It is not necessarily finished with the color: a shift bundle's
+                    # source keeps relaying its last configuration long after reaching it.
+                    continue
+                advances[site.describe()] = amount
+                if dx == 0 and dy == 0:
+                    local_advance = amount
+                else:
+                    remote_advances[site.describe()] = amount
 
             distinct = set(advances.values())
             if not distinct:
@@ -788,7 +803,16 @@ def plan_switch_advances(rectangles: list[Rectangle[PEBlock]]) -> int:
                     '  note: give the streams that disagree separate channels, at the cost of an '
                     'additional color')
 
-            statement.switch_advance = distinct.pop()
+            amount = distinct.pop()
+            # A source that only flips its own router does so on the last data wavelet. Posting a
+            # SWITCH_ADV into the same output queue afterwards is what drops a data wavelet on
+            # WSE-2 when a back-pressured send of three or more f32 values fills that queue
+            # (see tests/csl_runtime/test_shift_bundle_filters.sh). Remote routers still need a
+            # traveling control wavelet, and a two-position turnaround still needs two of them.
+            if not remote_advances and local_advance == 1:
+                statement.advance_data_switch = True
+            else:
+                statement.switch_advance = amount
             planned += 1
 
     return planned
