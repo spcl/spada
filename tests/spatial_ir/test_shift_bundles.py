@@ -272,10 +272,15 @@ def test_the_batcher_fits_the_colors_it_has(l: int, colors: int):
 def test_sixteen_keys_need_three_overlapping_input_queues():
     """
     At L = 4 a reused inbound color stays live across a gap that already holds two other colors.
-    WSE-2 has two input queues, so lowering must refuse rather than remap a busy queue.
+    WSE-2 has two input queues, so occupancy pooling refuses. WSE-3 has six, but remapping a
+    non-empty queue is illegal, and L = 4 wants seven inbound colors over the kernel.
     """
     from spada.syntax.csl import constants
 
+    if constants.ARCH == 'wse3':
+        with pytest.raises(SyntaxError, match='concurrent input queues'):
+            _bundled_batcher(4)
+        return
     if len(constants.INPUT_QUEUE_IDS) >= 3:
         pytest.skip(f'{constants.ARCH} has {len(constants.INPUT_QUEUE_IDS)} input queues, enough for L=4')
     with pytest.raises(SyntaxError, match='concurrent input queues'):

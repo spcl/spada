@@ -29,11 +29,19 @@ compile_and_run() {
     k=$2
     filter=$3
     width=$((2 * m))
+    arch="${WSE_ARCH:-wse2}"
+    if [ "$arch" = "wse3" ]; then
+        in_queue=2
+        init_queues=1
+    else
+        in_queue=0
+        init_queues=0
+    fi
 
     rm -rf "$OUT"
-    cslc --arch="${WSE_ARCH:-wse2}" "$SRC/layout.csl" -o "$OUT" \
+    cslc --arch="$arch" "$SRC/layout.csl" -o "$OUT" \
         --fabric-dims=$((7 + width)),3 --fabric-offsets=4,1 --memcpy --channels=1 \
-        --params=M:$m,K:$k,FILTER:$filter
+        --params=M:$m,K:$k,FILTER:$filter,IN_QUEUE:$in_queue,INIT_QUEUES:$init_queues
     timeout -s 9 240 cs_python "$SRC/run.py" "$OUT" --M "$m" --K "$k" --filter "$filter"
 }
 

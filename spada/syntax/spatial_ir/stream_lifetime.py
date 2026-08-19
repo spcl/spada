@@ -752,8 +752,9 @@ def assign_fabric_queues(spans: dict[str, tuple[int, int]], queue_ids: list[int]
     hardware rejects. Two groups may share a queue only when those spans do not overlap.
 
     Keys in ``exclusive_keys`` never share a queue, even when their spans are disjoint. That is
-    required on WSE-3 for inbound colors that bind a data task: the hardware ID *is* the input
-    queue, and ``@initialize_queue`` is a comptime one-to-one bind.
+    required on WSE-3 for every inbound color: the simulator remaps a queue onto the next color at
+    the first transfer, and faults if the queue is not empty. It is also required for colors that
+    bind a data task, because the hardware ID *is* the input queue.
 
     The spans form an interval graph, so colouring them in start-time order is optimal.
 
