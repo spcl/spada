@@ -61,6 +61,11 @@ class FabricDSD(DataStructureDescriptor):
     extent: int
     queue: int
     control: bool = False
+    #: Microthread to drive an asynchronous transfer over this descriptor, where the target lets a
+    #: program name one. ``None`` leaves the hardware default, which is the queue ID. The setting
+    #: belongs to the operation rather than the descriptor, so ``as_csl`` does not emit it; the
+    #: operand carries it to whichever operation uses it.
+    ut: int | None = None
 
     def __post_init__(self):
         assert self.dsd_type in (DSDType.fabin, DSDType.fabout)

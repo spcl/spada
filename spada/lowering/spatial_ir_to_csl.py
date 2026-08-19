@@ -1123,6 +1123,18 @@ def _collect_unique_dsds(
         output_spans, csl.OUTPUT_QUEUE_IDS,
         kind='output', architecture=csl.ARCH, location=location,
         exclusive_keys=exclusive_out)
+    # An asynchronous transfer runs on a microthread, and by default that is the queue ID of the
+    # operation's highest-priority fabric operand. Since the two directions draw from overlapping
+    # pools on WSE-3, a receive on input queue N and a send on output queue N would take the same
+    # microthread and abort with "trying to term ut_instr[N], but it's not ours". Microthreads are
+    # one resource across both directions, so they are handed out together.
+    microthread_of = stream_lifetime.assign_microthreads(
+        {f'in {key}': span for key, span in input_spans.items()}
+        | {f'out {key}': span for key, span in output_spans.items()},
+        csl.MICROTHREAD_IDS, location=location)
+
+    def allocate_microthread(stream: spir.Identifier, inbound: bool) -> int | None:
+        return microthread_of.get(f'{"in" if inbound else "out"} {queue_key(stream)}')
 
     def allocate_input_queue(stream: spir.Identifier) -> int:
         key = queue_key(stream)
@@ -1178,7 +1190,9 @@ def _collect_unique_dsds(
                                 stmt.parameter_range[0].step)
             extents = (end.eval() - start.eval()) // (step.eval() if step is not None else 1)
         fabric_color = f'{name_to_csl(stream_name)}_color'
-        dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents, allocate_input_queue(stream_name))
+        dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents,
+                                  allocate_input_queue(stream_name),
+                                  ut=allocate_microthread(stream_name, inbound=True))
         dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
     for stmt in rect.compute.statements:
@@ -1205,7 +1219,9 @@ def _collect_unique_dsds(
                             lambda a, b: a * b,
                             [s.eval() if not isinstance(s, int) else s for s in dtypes[stmt.local_array].shape], 1)
                 fabric_color = f'{name_to_csl(stream_name)}_color'
-                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_input_queue(stream_name))
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
+                                          allocate_input_queue(stream_name),
+                                          ut=allocate_microthread(stream_name, inbound=True))
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
             elif isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
                 dsd_type = cslstruct.DSDType.fabout
@@ -1223,7 +1239,9 @@ def _collect_unique_dsds(
                             lambda a, b: a * b,
                             [s.eval() if not isinstance(s, int) else s for s in dtypes[stmt.local_array].shape], 1)
                 fabric_color = f'{name_to_csl(stream_name)}_color'
-                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_output_queue(stream_name))
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
+                                          allocate_output_queue(stream_name),
+                                          ut=allocate_microthread(stream_name, inbound=False))
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
             if isinstance(stmt, spir.SendStatement):
@@ -1274,7 +1292,9 @@ def _collect_unique_dsds(
                         lambda a, b: a * b,
                         [s.eval() if not isinstance(s, int) else s for s in dtypes[substmt.local_array].shape], 1)
             fabric_color = f'{name_to_csl(stream_name)}_color'
-            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_output_queue(stream_name))
+            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
+                                      allocate_output_queue(stream_name),
+                                      ut=allocate_microthread(stream_name, inbound=False))
             dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
         def _visit_nested_receive(substmt: spir.ReceiveStatement):
@@ -1300,7 +1320,9 @@ def _collect_unique_dsds(
                         lambda a, b: a * b,
                         [s.eval() if not isinstance(s, int) else s for s in dtypes[local_array].shape], 1)
             fabric_color = f'{name_to_csl(stream_name)}_color'
-            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_input_queue(stream_name))
+            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
+                                      allocate_input_queue(stream_name),
+                                      ut=allocate_microthread(stream_name, inbound=True))
             dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
         def _visit_local_array(operand):

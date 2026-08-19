@@ -63,6 +63,20 @@ _OUTPUT_QUEUE_IDS = {
 }
 OUTPUT_QUEUE_IDS = _OUTPUT_QUEUE_IDS[ARCH]
 
+# Microthreads that drive in-flight asynchronous DSD operations. Two operations may never run on
+# one microthread at the same time. WSE-2 has no say in the matter: the ID is the queue ID of the
+# operation's highest-priority fabric operand, which is why its input and output pools above are
+# disjoint. WSE-3 keeps that default but lets ``.ut_id`` override it, which it must, since a PE
+# there needs an input and an output queue of the same number at once (see
+# https://sdk.cerebras.net/csl/language/microthreads_wse3). An empty list means the target cannot
+# name microthreads, so the default stands. Queues 0 and 1 belong to memcpy on WSE-3, and so do the
+# microthreads it drives them with.
+_MICROTHREAD_IDS = {
+    'wse2': [],
+    'wse3': list(range(2, 8)),
+}
+MICROTHREAD_IDS = _MICROTHREAD_IDS[ARCH]
+
 _HARDWARE_FABRIC_DIMS = {
     'wse2': (757, 996),
     'wse3': (762, 1172),

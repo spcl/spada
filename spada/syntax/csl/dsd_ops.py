@@ -26,9 +26,14 @@ class DSDOp:
         # CSL allows .async only when every operand is a DSD/DSR. A scalar
         # source (CopyDSDOp.scalar_input) must complete synchronously, then
         # activate/unblock the next task.
-        fabric_async = any(isinstance(dsd, cslstruct.FabricDSD) for dsd in dsd_objects)
-        if fabric_async and not getattr(self, 'scalar_input', False):
-            return f'{base[:-2]}, .{{ .async = true, .{async_target.inter_task_edge} = {async_target.target_task} }});'
+        fabric_operands = [dsd for dsd in dsd_objects if isinstance(dsd, cslstruct.FabricDSD)]
+        if fabric_operands and not getattr(self, 'scalar_input', False):
+            # ``dsd_objects`` arrives in the order the hardware ranks operands when it picks the
+            # microthread for the transfer: destination, then the sources left to right.
+            microthread = fabric_operands[0].ut
+            ut_id = '' if microthread is None else f' .ut_id = @get_ut_id({microthread}),'
+            return (f'{base[:-2]}, .{{ .async = true,{ut_id} '
+                    f'.{async_target.inter_task_edge} = {async_target.target_task} }});')
         return f'{base}\n@{async_target.inter_task_edge}({async_target.target_task});'
 
     def as_csl(self,

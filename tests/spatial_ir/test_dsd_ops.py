@@ -294,6 +294,31 @@ def test_wse3_inbound_colors_do_not_share_an_input_queue():
     assert len(used_queues) == len(set(used_queues)), (by_color, code)
 
 
+def test_wse3_concurrent_transfers_use_distinct_microthreads():
+    """Two transfers in flight at once may not share a microthread.
+
+    A laplacian PE receives from one neighbour and forwards to another in the same task. On WSE-3
+    the input and output queue pools both start at 2, so leaving the microthread at its default --
+    the queue ID of the highest-priority fabric operand -- put both on microthread 2 and aborted the
+    simulation with ``trying to term ut_instr[2], but it's not ours``.
+    """
+    if constants.ARCH != 'wse3':
+        pytest.skip('WSE-2 derives the microthread from the queue, and its two pools are disjoint')
+    path = os.path.join(
+        os.path.dirname(__file__), '..', '..', 'samples', 'benchmarks', 'laplacian_4_4_4.sptl')
+    kernel = parser.parse_file(path)
+    files = {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)}
+    code = files['code_2_1.csl']
+
+    tasks = re.findall(r'task \w+\(\) void \{(.*?)\n\}', code, re.DOTALL)
+    concurrent = [
+        re.findall(r'\.ut_id = @get_ut_id\((\d+)\)', body) for body in tasks
+    ]
+    assert any(len(used) > 1 for used in concurrent), code
+    for used in concurrent:
+        assert len(used) == len(set(used)), (used, code)
+
+
 if __name__ == '__main__':
     test_dsd_op_detection()
     test_dsd_op_detection_constant_folding()
