@@ -60,7 +60,10 @@ all.
     collapsed into a single epoch with a sequential `for` in the compute blocks, which lowers to a
     real loop and so costs code and compile time independent of the number of rounds.
     `samples/spatial/sort/odd_even_sort_1D_looped.sptl` is the example: N odd-even rounds on four
-    static channels, one CSL loop, no per-round barrier.
+    static channels, one CSL loop, no per-round barrier. The 2D analogue is
+    `samples/spatial/sort/shearsort_2D_looped.sptl`: eight static neighbour channels, nested
+    loops, no switches. A fully interior PE there receives on four colours in one epoch, which
+    fits WSE-3's six exclusive queues and not WSE-2's two.
 
     This does *not* generalize to channels that switch: a router's positions are a static sequence,
     so the epoch a configuration belongs to has to be visible to the compiler.
@@ -216,10 +219,7 @@ are then the PEs congruent to the residue, the destinations those congruent to r
 and the relays the classes strictly between on the one side or the other — three disjoint classes, so
 a PE still holds one role on the color for the whole kernel and still never both sends and receives
 on it. What varies is the side it faces, which is one switch position either way, since a source only
-ever changes where it transmits and a destination only where it receives. This halves the colors a
-pooled distance needs, and with them the queues, which is what
-`batcher_oddeven_wse3_1D.sptl` is for: on WSE-3 a queue stays bound to its color for the whole
-kernel, so what a PE can afford is not how many colors are live at once but how many it ever touches.
+ever changes where it transmits and a destination only where it receives. 
 
 Sharing on a basis looser than either does risk a PE that sends on the color in one phase and receives
 on it in another, which needs a two-sided switch change that a sender cannot drive on WSE-2 (see
@@ -235,4 +235,5 @@ Engine* (fig. 7.6) for the 2D reduce-scatter, and is known to run on WSE-2.
     reconfiguration reprograms the routers between rounds outright, which is the only known way to
     put an arbitrary *sequence* of sends and receives on one color: for a long enough sequence there
     is a PE for which no fixed cycle of switch positions exists. Until then, splitting the rounds
-    across channels — as `bitonic_sort_1D.sptl` does — remains the per-kernel fallback.
+    across channels — as `odd_even_sort_1D_looped.sptl` and `shearsort_2D_looped.sptl` do —
+    remains the per-kernel fallback.
