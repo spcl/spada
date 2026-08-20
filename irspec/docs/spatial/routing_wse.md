@@ -68,11 +68,13 @@ all.
 An advance is driven by the `close` that ends the epoch. When some *other* router on the path has
 to move, the sending PE emits a *switch-advance control message* on the channel, one per position
 to be traversed. It follows the stream's path using the configuration that is being retired, and
-advances the router of each PE it traverses, after all data of the epoch. When only the sending
-PE's own router has to move, and only by one position, the last data wavelet does that itself
-(`.advance_switch` on the fabric output DSD). A second operation on the same output queue is what
-drops a data wavelet on WSE-2 once a back-pressured send fills it (output queues 2 and 3 hold six
-16-bit words; three `f32` values already fill them).
+advances the router of each PE it traverses, after all data of the epoch. On WSE-2, when only the
+sending PE's own router has to move, and only by one position, the last data wavelet does that
+itself (`.advance_switch` on the fabric output DSD). A second operation on the same output queue
+is what drops a data wavelet there once a back-pressured send fills it (output queues 2 and 3
+hold six 16-bit words; three `f32` values already fill them). WSE-3 keeps a traveling `SWITCH_ADV`
+for that local flip as well: its output queues hold eight words, and origin-pooled destinations
+that also switch are only moved by a control wavelet on the path.
 
 !!! warning "WSE: Advances Are Not Selective"
     A CSL control wavelet nominally carries up to eight per-router switching commands
@@ -152,12 +154,12 @@ filter:    --     --     --     win 2     win 1     win 0
 ```
 
 **Sources inject, then relay.** A source starts at `rx = RAMP, tx = {EAST}` with `pos1` taking
-`rx = WEST`, sends its own words, and the last data wavelet advances its own router into relay
-mode (`.advance_switch` on the fabric output DSD). The trigger is local — *"my own send is
-done"* — which is what makes it expressible at all, given that the payload of a control message
-[selects nothing](#lowering-to-switches). A `SWITCH_ADV` on the same output queue would also
-flip that router, but on WSE-2 a back-pressured send of three or more `f32` values fills the
-queue and the control wavelet then steals a data word.
+`rx = WEST`, sends its own words, and then advances its own router into relay mode. The trigger
+is local — *"my own send is done"* — which is what makes it expressible at all, given that the
+payload of a control message [selects nothing](#lowering-to-switches). On WSE-2 that advance is
+`.advance_switch` on the fabric output DSD: a `SWITCH_ADV` on the same output queue would also
+flip that router, but a back-pressured send of three or more `f32` values fills the six-word
+queue and the control wavelet then steals a data word. On WSE-3 the same close emits `SWITCH_ADV`.
 
 **The order is descending, and enforces itself.** The source nearest the destinations goes first. No
 schedule or barrier is needed: a source further away cannot push a word through its neighbour's

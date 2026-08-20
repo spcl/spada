@@ -1207,8 +1207,8 @@ def _collect_unique_dsds(
                 f'{location}: no output queue was reserved for {key} (stream "{stream.as_ir()}").')
         return output_queue_of[key]
 
-    # A close that only flips this PE's own router does so on the last data wavelet, so the
-    # outgoing fabric descriptor has to carry ``.advance_switch``. The close itself emits no
+    # On WSE-2, a close that only flips this PE's own router does so on the last data wavelet, so
+    # the outgoing fabric descriptor has to carry ``.advance_switch``. The close itself emits no
     # control wavelet and is kept only so this scan can see the flag.
     streams_advance_on_send = {
         stream_lifetime.underlying_stream(stmt.stream_name).as_ir()

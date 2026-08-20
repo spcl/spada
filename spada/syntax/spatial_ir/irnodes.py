@@ -937,9 +937,9 @@ class CloseStatement(Statement):
     switch_advance: Optional[int] = None
     #: When True, the sending PE flips only its own router, and does so on the last data wavelet
     #: (``.advance_switch`` on the fabric output DSD) rather than by a ``SWITCH_ADV`` control
-    #: wavelet. A control wavelet on the same output queue as the data is what drops a wavelet on
-    #: WSE-2 once a back-pressured send of three or more f32 values fills the queue. Mutually
-    #: exclusive with ``switch_advance``. Not part of the surface syntax.
+    #: wavelet. Used only on WSE-2: a control wavelet on the same output queue as the data is
+    #: what drops a wavelet there once a back-pressured send of three or more f32 values fills
+    #: the queue. Mutually exclusive with ``switch_advance``. Not part of the surface syntax.
     advance_data_switch: bool = False
 
     def validate(self) -> None:

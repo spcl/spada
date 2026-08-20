@@ -695,8 +695,9 @@ def plan_switch_advances(rectangles: list[Rectangle[PEBlock]]) -> int:
     *other* router on the path has to move: the wavelet travels the path being retired and every
     switch-configured router it reaches advances. A close that only has to flip the sending PE's
     own router does that on the last data wavelet (``.advance_switch`` on the fabric output DSD)
-    instead -- a second operation on the same output queue is what drops a data wavelet on WSE-2
-    once a back-pressured send fills it.
+    instead, but only on WSE-2 -- a second operation on the same output queue is what drops a
+    data wavelet there once a back-pressured send fills it. WSE-3 output queues hold eight words,
+    so a traveling ``SWITCH_ADV`` is safe, and origin-pooled destinations still need one.
 
     All routers on the path that hold switch positions and are advanced by a control wavelet must
     therefore advance by the same amount, and that amount is how many wavelets are sent. A close on
@@ -804,12 +805,14 @@ def plan_switch_advances(rectangles: list[Rectangle[PEBlock]]) -> int:
                     'additional color')
 
             amount = distinct.pop()
-            # A source that only flips its own router does so on the last data wavelet. Posting a
-            # SWITCH_ADV into the same output queue afterwards is what drops a data wavelet on
-            # WSE-2 when a back-pressured send of three or more f32 values fills that queue
-            # (see tests/csl_runtime/test_shift_bundle_filters.sh). Remote routers still need a
-            # traveling control wavelet, and a two-position turnaround still needs two of them.
-            if not remote_advances and local_advance == 1:
+            # A source that only flips its own router does so on the last data wavelet, but only
+            # on WSE-2. Posting a SWITCH_ADV into the same output queue afterwards is what drops
+            # a data wavelet there when a back-pressured send of three or more f32 values fills
+            # that queue (see tests/csl_runtime/test_shift_bundle_filters.sh). WSE-3 queues hold
+            # eight words, so SWITCH_ADV is safe; origin-pooled Batcher destinations also switch
+            # and only a traveling control wavelet moves them. Remote routers still need that
+            # wavelet, and a two-position turnaround still needs two of them.
+            if not remote_advances and local_advance == 1 and constants.ARCH == 'wse2':
                 statement.advance_data_switch = True
             else:
                 statement.switch_advance = amount

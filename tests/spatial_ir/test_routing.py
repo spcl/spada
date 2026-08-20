@@ -216,14 +216,18 @@ def test_two_phase_split_switch_plans():
 def test_two_phase_split_emits_two_control_wavelets():
     """
     Of the six closes in the sample, only the two on PEs that *send* a stream whose path contains a
-    router that must advance survive elision. PE 1 only flips its own router, which the last data
-    wavelet does; PE 3 has to turn PE 2 around, which is a traveling SWITCH_ADV.
+    router that must advance survive elision. PE 1 only flips its own router (WSE-2: last data
+    wavelet; WSE-3: SWITCH_ADV). PE 3 has to turn PE 2 around, which is a traveling SWITCH_ADV.
     """
     files = _lower('two_phase_split.sptl', K=32)
 
-    assert '.advance_switch = true' in files['code_1_0.csl']
-    assert 'SWITCH_ADV' not in files['code_1_0.csl']
-    assert 'switch_dsd' not in files['code_1_0.csl']
+    if csl.ARCH == 'wse2':
+        assert '.advance_switch = true' in files['code_1_0.csl']
+        assert 'SWITCH_ADV' not in files['code_1_0.csl']
+        assert 'switch_dsd' not in files['code_1_0.csl']
+    else:
+        assert 'SWITCH_ADV' in files['code_1_0.csl']
+        assert '.advance_switch = true' not in files['code_1_0.csl']
 
     payload = 'ctrl.encode_single_payload(ctrl.opcode.SWITCH_ADV, true, {}, 0)'
     # PE 2 has to turn around, which takes two positions where a switch carries only one direction.
