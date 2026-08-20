@@ -47,11 +47,16 @@ kernel @gemv_twophase<G, S, PY, K>(
     }
 
     // Phase 2: Load x on the j=0 column and y on the i=0 column.
+    // The three ranges are disjoint: PE(0,0) belongs to both the row and the column.
     phase {
-        compute i16 i, i16 j in [0:G*S, 0] {
+        compute i16 i, i16 j in [0, 0] {
+            await receive(x, inp_x[i, j])
+            await receive(y_block, inp_y[i, j])
+        }
+        compute i16 i, i16 j in [1:G*S, 0] {
             await receive(x, inp_x[i, j])
         }
-        compute i16 i, i16 j in [0, 0:PY] {
+        compute i16 i, i16 j in [0, 1:PY] {
             await receive(y_block, inp_y[i, j])
         }
     }
