@@ -971,14 +971,56 @@ def _declare_queue_initialization(dsds: UniqueDSDDict, rect: PEBlock, footer: St
         footer.write(f'    @initialize_queue(@get_{kind}({queue}), .{{ .color = {color} }});\n')
 
 
+def _statement_transfer_points(statement: spir.Statement, names: set[spir.Identifier],
+                               inbound: bool) -> list[spir.Identifier]:
+    """
+    Fabric transfers in ``statement``, in source order, with sequential ``for`` bodies repeated.
+
+    Walking a loop body once makes its colours look sequential, so occupancy pooling would give
+    them one queue. The next iteration of an earlier colour can already occupy the router when a
+    later colour of the same body remaps that queue -- WSE-2 then aborts with "Attempt to remap
+    input queue N, from C_i to C_j, but the router is holding wavelets". Appending the body a
+    second time makes a colour used on both sides of another occupy a span that overlaps it, the
+    same rule that keeps a reused colour's queue across a gap between unrolled phases.
+    """
+    if isinstance(statement, spir.ForStatement):
+        body = _transfer_points(statement.body, names, inbound)
+        return body + body
+
+    nested_skip: set[int] = set()
+    points: list[spir.Identifier] = []
+    for node in statement.walk():
+        if id(node) in nested_skip:
+            continue
+        if node is not statement and isinstance(node, spir.ForStatement):
+            for descendant in node.walk():
+                nested_skip.add(id(descendant))
+            points.extend(_statement_transfer_points(node, names, inbound))
+            continue
+        stream = _fabric_transfer_stream(node, inbound)
+        if stream is None or stream not in names:
+            continue
+        points.append(stream)
+    return points
+
+
+def _transfer_points(statements: list[spir.Statement], names: set[spir.Identifier],
+                     inbound: bool) -> list[spir.Identifier]:
+    points: list[spir.Identifier] = []
+    for statement in statements:
+        points.extend(_statement_transfer_points(statement, names, inbound))
+    return points
+
+
 def _queue_spans(compute: spir.ComputeBlock, names: set[spir.Identifier], queue_key,
                  inbound: bool) -> dict[str, tuple[int, int]]:
     """
     Occupancy of each queue key along the linearized send/receive order of this PE.
 
-    Nested transfers in a loop body are ordered by the walk, so sequential halo exchanges in one
-    ``for`` do not look concurrent. Uses of the same channel still collapse to one span, so a
-    colour that comes back after a gap keeps its queue for the whole of that span.
+    Sequential ``for`` bodies are counted twice so a colour that comes back on the next iteration
+    keeps its queue across the loop-carried gap; see ``_statement_transfer_points``. Uses of the
+    same channel still collapse to one span, so a colour that comes back after a gap between
+    unrolled phases keeps its queue for the whole of that span.
 
     :param compute: The compute block being lowered.
     :param names: Streams that actually bind a fabric queue in this direction.
@@ -986,13 +1028,7 @@ def _queue_spans(compute: spir.ComputeBlock, names: set[spir.Identifier], queue_
     :param inbound: True to walk receives, False to walk sends.
     :return: Mapping of grouping key to ``(first_use, last_use)`` in linearized order.
     """
-    points: list[spir.Identifier] = []
-    for statement in compute.statements:
-        for node in statement.walk():
-            stream = _fabric_transfer_stream(node, inbound)
-            if stream is None or stream not in names:
-                continue
-            points.append(stream)
+    points = _transfer_points(compute.statements, names, inbound)
 
     spans: dict[str, tuple[int, int]] = {}
     for index, stream in enumerate(points):

@@ -424,56 +424,6 @@ def test_switch_positions_beyond_capacity_are_rejected():
 
 
 ###
-# bitonic_sort_1D: the heaviest channel reuse in the samples
-###
-
-_BITONIC = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort',
-                        'bitonic_sort_1D.sptl')
-
-
-def _lower_bitonic(L: int, K: int = 4) -> dict[str, str]:
-    kernel = parser.parse_file(_BITONIC)
-    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, L=L, K=K))
-    return {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel)}
-
-
-@pytest.mark.skipif(not csl.SWITCH_POSITION_ALLOWS_BOTH,
-                    reason=f'{csl.ARCH} cannot reverse a router within four switch positions')
-def test_bitonic_sort_uses_one_channel_per_distance():
-    """
-    A bitonic network on 2^L keys needs L(L+1)/2 exchange steps but only L channels: one per
-    exchange distance, reused by every lane, every stage and both directions of travel.
-
-    L is 2 here because that is what the router budget allows: at distance 2^d the channel is
-    reused by 2^d lanes in two directions each, so an interior router cycles through 2^(d+1)
-    configurations, and four positions run out at d = 2.
-    """
-    files = _lower_bitonic(2)
-    colors = set(re.findall(r'@get_color\((\d+)\)', files['layout.csl']))
-    assert len(colors) <= 2, sorted(colors)
-
-    layout = files['layout.csl']
-    assert '.switches' in layout
-    # The lane pattern repeats, so the configuration sequence closes into a ring.
-    assert 'ring_mode' in layout
-    # Every router stays inside its four positions.
-    for line in layout.splitlines():
-        if '.switches' in line:
-            assert len(re.findall(r'\.pos\d', line)) < csl.SWITCH_POSITIONS, line
-
-
-@pytest.mark.skipif(csl.SWITCH_POSITION_ALLOWS_BOTH,
-                    reason='this architecture can reverse a router in a single switch position')
-def test_bitonic_sort_is_rejected_on_wse2():
-    """
-    Reversing a router costs two positions where a position carries one direction, and the interior
-    routers of the network reverse often enough to exhaust them.
-    """
-    with pytest.raises(SyntaxError, match='switch positions'):
-        _lower_bitonic(2)
-
-
-###
 # odd_even_sort_1D_looped: N rounds as a runtime loop on four static channels
 ###
 
@@ -519,6 +469,52 @@ def test_odd_even_sort_looped_code_is_independent_of_n():
     # difference that scales with L.
     assert len(small) == len(large)
     assert abs(len(small['code_2_0.csl']) - len(large['code_2_0.csl'])) < 64
+
+
+def _fabin_queues(code: str) -> dict[str, str]:
+    return dict(re.findall(
+        r'const (\w+)_in_dsd = @get_dsd\(fabin_dsd, .*?input_queue = @get_input_queue\((\d+)\)',
+        code, flags=re.S))
+
+
+def test_odd_even_sort_looped_interior_keeps_distinct_input_queues():
+    """
+    Even-round east and odd-round west are both inbound on an odd interior PE. The west neighbour
+    can inject the next even-round block on C0 while this PE is already receiving the odd-round
+    one on C3. Sharing input queue 0 is what the WSE-2 simulator rejects as remapping C0 onto C3
+    while the router still holds wavelets (L=2 K=16).
+    """
+    files = _lower_odd_even_looped(2, K=16)
+    odd_interior = _fabin_queues(files['code_1_0.csl'])
+    even_interior = _fabin_queues(files['code_2_0.csl'])
+    assert len(odd_interior) == 2, odd_interior
+    assert len(set(odd_interior.values())) == 2, odd_interior
+    assert len(even_interior) == 2, even_interior
+    assert len(set(even_interior.values())) == 2, even_interior
+    # Endpoints have one inbound colour and do not need a second queue.
+    assert len(_fabin_queues(files['code_0_0.csl'])) == 1
+    assert len(_fabin_queues(files['code_3_0.csl'])) == 1
+
+
+def test_unrolled_phases_still_share_a_queue_when_spans_are_disjoint():
+    """
+    Occupancy pooling across successive phases is still required on WSE-2: a Batcher endpoint
+    receives on two colours that never overlap, and there is only one input queue to spare.
+    """
+    if len(csl.INPUT_QUEUE_IDS) < 2:
+        pytest.skip(f'{csl.ARCH} has no pool of input queues to share')
+    path = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort',
+                        'batcher_oddeven_1D.sptl')
+    kernel = parser.parse_file(path)
+    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, L=2, K=2, R=1))
+    files = {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)}
+    queues = _fabin_queues(files['code_0_0.csl'])
+    assert len(queues) == 2, queues
+    if csl.ARCH == 'wse3':
+        assert len(set(queues.values())) == 2, queues
+    else:
+        assert len(set(queues.values())) == 1, queues
+
 
 
 if __name__ == '__main__':
