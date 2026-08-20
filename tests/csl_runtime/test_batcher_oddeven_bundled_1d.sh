@@ -58,6 +58,7 @@ run_batcher 2 2
 run_batcher 3 1
 run_batcher 3 2
 run_batcher 3 4
+run_batcher 3 16
 if [ "${WSE_ARCH:-wse2}" = "wse3" ]; then
     echo "Skipping L=4: seven inbound colors, and wse3 cannot remap a non-empty input queue."
 else

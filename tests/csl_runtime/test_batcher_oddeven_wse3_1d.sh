@@ -59,6 +59,9 @@ PYEOF
 run_batcher 2 2
 run_batcher 3 1
 run_batcher 3 2
+run_batcher 3 4
+run_batcher 3 16
 run_batcher 4 1
 run_batcher 4 2
+run_batcher 4 16
 echo "Skipping L=5: sixteen colors would have to switch, and wse3 switches on fifteen."
