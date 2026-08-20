@@ -516,6 +516,78 @@ def test_unrolled_phases_still_share_a_queue_when_spans_are_disjoint():
         assert len(set(queues.values())) == 1, queues
 
 
+###
+# shearsort_2D_looped: (RC)^L R neighbour rounds as runtime loops on eight static channels
+###
+
+_SHEARSORT_LOOPED = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial',
+                                 'sort', 'shearsort_2D_looped.sptl')
+
+
+def _lower_shearsort_looped(L: int, K: int = 1) -> dict[str, str]:
+    kernel = parser.parse_file(_SHEARSORT_LOOPED)
+    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, L=L, K=K))
+    return {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)}
+
+
+def _require_wse3_shearsort():
+    if csl.ARCH != 'wse3':
+        pytest.skip('shearsort_2D_looped needs four inbound queues; WSE-2 has two')
+
+
+def test_shearsort_looped_uses_eight_static_channels():
+    """
+    One channel per (axis, round parity, direction). Roles never change, so no router switches
+    and both the L shearsort iterations and the N odd-even rounds stay CSL loops.
+    """
+    _require_wse3_shearsort()
+    files = _lower_shearsort_looped(2)
+    colors = set(int(c) for c in re.findall(r'@get_color\((\d+)\)', files['layout.csl']))
+    assert colors == {0, 1, 2, 3, 4, 5, 6, 7}, sorted(colors)
+    assert '.switches' not in files['layout.csl']
+
+    # L = 1 drops the interior rectangles (N = 2 has only the four corners).
+    ends = _lower_shearsort_looped(1, K=1)
+    assert 'code_0_0.csl' in ends and 'code_1_1.csl' in ends
+    assert 'code_2_2.csl' not in ends
+
+    interior = files['code_2_2.csl']
+    assert 'for (@range(i32, 0, 2, 1))' in interior, interior
+    # Four outbound colours (even-row east, odd-row west, even-column south, odd-column north)
+    # and four inbound, each emitted once rather than unrolled over L or N.
+    assert interior.count('fabout_dsd') == 4, interior
+    assert interior.count('fabin_dsd') == 4, interior
+
+
+def test_shearsort_looped_code_is_independent_of_n():
+    """Lowering cost and the interior PE program stay flat as N grows."""
+    _require_wse3_shearsort()
+    small = _lower_shearsort_looped(2)
+    large = _lower_shearsort_looped(3)
+    assert 'for (@range(i32, 0, 3, 1))' in large['code_2_2.csl']
+    assert 'for (@range(i32, 0, 4, 1))' in large['code_2_2.csl']
+    # Same sixteen PE roles, so the same number of code files; the loop trip counts are the
+    # only difference that scales with L.
+    assert len(small) == len(large)
+    assert abs(len(small['code_2_2.csl']) - len(large['code_2_2.csl'])) < 64
+
+
+def test_shearsort_looped_interior_keeps_distinct_input_queues():
+    """
+    A fully interior PE receives on two row colours and two column colours. WSE-3 binds each
+    inbound colour to its own queue for the whole kernel, so those four must be distinct.
+    """
+    _require_wse3_shearsort()
+    files = _lower_shearsort_looped(2, K=1)
+    even_even = _fabin_queues(files['code_2_2.csl'])
+    odd_odd = _fabin_queues(files['code_1_1.csl'])
+    assert len(even_even) == 4, even_even
+    assert len(set(even_even.values())) == 4, even_even
+    assert len(odd_odd) == 4, odd_odd
+    assert len(set(odd_odd.values())) == 4, odd_odd
+    # The north-west corner only receives even-round west and even-round north.
+    assert len(_fabin_queues(files['code_0_0.csl'])) == 2
+
 
 if __name__ == '__main__':
     pytest.main([__file__])
