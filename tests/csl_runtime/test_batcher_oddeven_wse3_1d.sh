@@ -68,4 +68,5 @@ run_batcher 2 2 3
 run_batcher 4 1
 run_batcher 4 2
 run_batcher 4 16
+run_batcher 4 32
 echo "Skipping L=5: sixteen colors would have to switch, and wse3 switches on fifteen."
