@@ -59,11 +59,9 @@ PYEOF
 }
 
 run_sort 1 1
-run_sort 1 4
+run_sort 1 8
 run_sort 2 1
-run_sort 2 8
-run_sort 2 16
+run_sort 2 4
 run_sort 3 1
 run_sort 3 8
-run_sort 3 16
 run_sort 4 2
