@@ -1,7 +1,7 @@
 #!/bin/sh
 # E2E test: the WSE-3 1D Batcher odd-even mergesort (2^L PEs, a block of K f32 keys per PE).
-# Kernel: batcher_oddeven_wse3_1D.sptl  params: L, K
-# Same result as batcher_oddeven_1D -- OUT_out.reshape(n*k) == sort(inp.reshape(n*k)) -- and the same
+# Kernel: batcher_oddeven_wse3_1D.sptl  params: L, K, R
+# Same result as batcher_oddeven_1D -- each of the R rows sorts independently -- and the same
 # network as the bundled variant. What it adds is L = 4, which the bundled variant cannot reach on
 # wse3: there a queue is bound to a color for the whole kernel, so a PE needs one per color it ever
 # uses, and the bundled variant wants seven of the six. Pooling the unbundled phases by the origin's
@@ -25,15 +25,16 @@ fi
 run_batcher() {
     l=$1
     k=$2
-    echo "--- batcher_oddeven_wse3_1d L=$l K=$k ---"
+    r=${3:-1}
+    echo "--- batcher_oddeven_wse3_1d L=$l K=$k R=$r ---"
 
-    sptlc "$SORT_DIR/batcher_oddeven_wse3_1D.sptl" "$FOLDER" -p L=$l -p K=$k
+    sptlc "$SORT_DIR/batcher_oddeven_wse3_1D.sptl" "$FOLDER" -p L=$l -p K=$k -p R=$r
 
     python3 - <<PYEOF
 import numpy as np
 np.random.seed(42)
 n = 1 << $l
-inp = np.random.rand(n, 1, $k).astype(np.float32)
+inp = np.random.rand(n, $r, $k).astype(np.float32)
 np.save('inp.npy', inp)
 PYEOF
 
@@ -41,16 +42,18 @@ PYEOF
 
     python3 - <<PYEOF
 import numpy as np, sys
-n = (1 << $l) * $k
-inp = np.load('inp.npy').reshape(n)
-out = np.load('OUT_out.npy').reshape(n)
-ref = np.sort(inp)
-if not np.allclose(out, ref, atol=1e-6):
-    print(f"FAILED L=$l K=$k: max abs diff = {float(np.max(np.abs(out - ref))):.3e}")
-    print(f"  expected: {ref}")
-    print(f"  got:      {out}")
-    sys.exit(1)
-print(f"Passed L=$l K=$k: {n} keys in sorted order across the blocks.")
+n, r, k = (1 << $l), $r, $k
+inp = np.load('inp.npy')
+out = np.load('OUT_out.npy').reshape(n, r, k)
+for row in range(r):
+    got = out[:, row, :].reshape(n * k)
+    ref = np.sort(inp[:, row, :].reshape(n * k))
+    if not np.allclose(got, ref, atol=1e-6):
+        print(f"FAILED L=$l K=$k R=$r row {row}: max abs diff = {float(np.max(np.abs(got - ref))):.3e}")
+        print(f"  expected: {ref}")
+        print(f"  got:      {got}")
+        sys.exit(1)
+print(f"Passed L=$l K=$k R=$r: {r} row(s) of {n * k} keys in sorted order across the blocks.")
 PYEOF
 
     rm -rf "$FOLDER" inp.npy OUT_out.npy
@@ -61,6 +64,7 @@ run_batcher 3 1
 run_batcher 3 2
 run_batcher 3 4
 run_batcher 3 16
+run_batcher 2 2 3
 run_batcher 4 1
 run_batcher 4 2
 run_batcher 4 16

@@ -1,6 +1,7 @@
 /**
- * 1D Batcher odd-even mergesort over N = 2^L PEs, each holding K f32 keys: N*K keys in all.
- * Ascending: after the network, PE i holds keys i*K .. i*K + (K-1) of the sorted sequence.
+ * 1D Batcher odd-even mergesort over R independent rows of N = 2^L PEs, each holding K f32 keys.
+ * Ascending: after the network, PE (i, j) holds keys i*K .. i*K + (K-1) of row j. Every hop is
+ * east-west, so the R rows never mix.
  *
  * Merge stages l = 1 .. L, each of width 2^l. Within stage l:
  *   p = 1: every PE in each 2^l box compares at dist = 2^{l-1}
@@ -56,13 +57,13 @@
  *   (l=3,p=2) dist 2: (2,4)(3,5)
  *   (l=3,p=3) dist 1: (1,2)(3,4)(5,6)
  *
- * Constraints: L >= 1, K >= 1
+ * Constraints: L >= 1, K >= 1, R >= 1
  **/
-kernel @batcher_oddeven_1d<L, K>(
-    stream<f32, K>[1<<L, 1] readonly  inp,
-    stream<f32, K>[1<<L, 1] writeonly out
+kernel @batcher_oddeven_1d<L, K, R>(
+    stream<f32, K>[1<<L, R] readonly  inp,
+    stream<f32, K>[1<<L, R] writeonly out
 ) {
-    place i16 i, i16 j in [0:1<<L, 0] {
+    place i16 i, i16 j in [0:1<<L, 0:R] {
         f32[K] val   // this PE's block, ascending
         f32[K] tmp   // the partner's block
         f32[K] res   // merge target
@@ -76,7 +77,7 @@ kernel @batcher_oddeven_1d<L, K>(
 
     // Load this PE's block and sort it, which is the invariant the comparators below rely on.
     phase {
-        compute i16 i, i16 j in [0:1<<L, 0] {
+        compute i16 i, i16 j in [0:1<<L, 0:R] {
             await receive(val, inp[i, j])
             for i16 m in [1:K] {
                 for i16 s in [0:K-1] {
@@ -96,7 +97,7 @@ kernel @batcher_oddeven_1d<L, K>(
         // Offset r is one disjoint matching; each r has its own fwd/bwd colors.
         phase {
             for i16 r in [0:1<<(l-1)] {
-                dataflow i16 i, i16 j in [r:1<<L:1<<l, 0] {
+                dataflow i16 i, i16 j in [r:1<<L:1<<l, 0:R] {
                     stream<f32> fwd = relative_stream(1<<(l-1), 0) {
                         hops = auto,
                         channel = 2 * (((1<<(l-1)) - 1) + r)
@@ -106,7 +107,7 @@ kernel @batcher_oddeven_1d<L, K>(
                         channel = (2 * (((1<<(l-1)) - 1) + r)) + 1
                     }
                 }
-                dataflow i16 i, i16 j in [(r + (1<<(l-1))):1<<L:1<<l, 0] {
+                dataflow i16 i, i16 j in [(r + (1<<(l-1))):1<<L:1<<l, 0:R] {
                     stream<f32> fwd = relative_stream(1<<(l-1), 0) {
                         hops = auto,
                         channel = 2 * (((1<<(l-1)) - 1) + r)
@@ -117,7 +118,7 @@ kernel @batcher_oddeven_1d<L, K>(
                     }
                 }
 
-                compute i16 i, i16 j in [r:1<<L:1<<l, 0] {
+                compute i16 i, i16 j in [r:1<<L:1<<l, 0:R] {
                     await send(val, fwd)
                     await receive(tmp, bwd)
                     // Keep the K smallest: merge upwards from the two block starts.
@@ -135,7 +136,7 @@ kernel @batcher_oddeven_1d<L, K>(
                         val[m] = res[m]
                     }
                 }
-                compute i16 i, i16 j in [(r + (1<<(l-1))):1<<L:1<<l, 0] {
+                compute i16 i, i16 j in [(r + (1<<(l-1))):1<<L:1<<l, 0:R] {
                     await receive(tmp, fwd)
                     await send(val, bwd)
                     // Keep the K largest: merge downwards from the two block ends.
@@ -162,7 +163,7 @@ kernel @batcher_oddeven_1d<L, K>(
             phase {
                 for i16 r in [0:1<<(l-p)] {
                     for i16 b in [0:1<<L:1<<l] {
-                        dataflow i16 i, i16 j in [(b + ((1<<(l-p)) + r)):((b + (1<<l)) - (1<<(l-p))) + r:2 * (1<<(l-p)), 0] {
+                        dataflow i16 i, i16 j in [(b + ((1<<(l-p)) + r)):((b + (1<<l)) - (1<<(l-p))) + r:2 * (1<<(l-p)), 0:R] {
                             stream<f32> fwd = relative_stream(1<<(l-p), 0) {
                                 hops = auto,
                                 channel = (2 * ((1<<L) - 1)) + (2 * (((1<<(l-p)) - 1) + r))
@@ -172,7 +173,7 @@ kernel @batcher_oddeven_1d<L, K>(
                                 channel = ((2 * ((1<<L) - 1)) + (2 * (((1<<(l-p)) - 1) + r))) + 1
                             }
                         }
-                        dataflow i16 i, i16 j in [(b + ((2 * (1<<(l-p))) + r)):(b + (1<<l)) + r:2 * (1<<(l-p)), 0] {
+                        dataflow i16 i, i16 j in [(b + ((2 * (1<<(l-p))) + r)):(b + (1<<l)) + r:2 * (1<<(l-p)), 0:R] {
                             stream<f32> fwd = relative_stream(1<<(l-p), 0) {
                                 hops = auto,
                                 channel = (2 * ((1<<L) - 1)) + (2 * (((1<<(l-p)) - 1) + r))
@@ -183,7 +184,7 @@ kernel @batcher_oddeven_1d<L, K>(
                             }
                         }
 
-                        compute i16 i, i16 j in [(b + ((1<<(l-p)) + r)):((b + (1<<l)) - (1<<(l-p))) + r:2 * (1<<(l-p)), 0] {
+                        compute i16 i, i16 j in [(b + ((1<<(l-p)) + r)):((b + (1<<l)) - (1<<(l-p))) + r:2 * (1<<(l-p)), 0:R] {
                             await send(val, fwd)
                             await receive(tmp, bwd)
                             // Keep the K smallest: merge upwards from the two block starts.
@@ -201,7 +202,7 @@ kernel @batcher_oddeven_1d<L, K>(
                                 val[m] = res[m]
                             }
                         }
-                        compute i16 i, i16 j in [(b + ((2 * (1<<(l-p))) + r)):(b + (1<<l)) + r:2 * (1<<(l-p)), 0] {
+                        compute i16 i, i16 j in [(b + ((2 * (1<<(l-p))) + r)):(b + (1<<l)) + r:2 * (1<<(l-p)), 0:R] {
                             await receive(tmp, fwd)
                             await send(val, bwd)
                             // Keep the K largest: merge downwards from the two block ends.
@@ -228,7 +229,7 @@ kernel @batcher_oddeven_1d<L, K>(
 
     // Write the sorted blocks back to the host.
     phase {
-        compute i16 i, i16 j in [0:1<<L, 0] {
+        compute i16 i, i16 j in [0:1<<L, 0:R] {
             await send(val, out[i, j])
         }
     }

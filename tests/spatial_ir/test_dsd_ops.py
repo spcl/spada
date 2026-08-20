@@ -250,7 +250,7 @@ def test_a_reused_color_keeps_its_input_queue_across_a_gap():
         os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort', 'batcher_oddeven_1D.sptl'
     )
     kernel = parser.parse_file(path)
-    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, L=3, K=1))
+    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, L=3, K=1, R=1))
     files = {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)}
     code = files['code_2_0.csl']
 
@@ -277,7 +277,7 @@ def test_wse3_inbound_colors_do_not_share_an_input_queue():
         os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort', 'batcher_oddeven_1D.sptl'
     )
     kernel = parser.parse_file(path)
-    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, L=2, K=2))
+    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, L=2, K=2, R=1))
     files = {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)}
     code = files['code_1_0.csl']
     colors = dict(re.findall(r'const (\w+)_color_in: color = @get_color\((\d+)\);', code))

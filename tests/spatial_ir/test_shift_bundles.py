@@ -267,7 +267,7 @@ def _bundled_batcher(l: int, k: int = 1):
     path = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort',
                         'batcher_oddeven_bundled_1D.sptl')
     kernel = parser.parse_file(path)
-    kernel = passes.concretize_parameters(kernel, L=l, K=k)
+    kernel = passes.concretize_parameters(kernel, L=l, K=k, R=1)
     kernel = passes.constexpr_propagation(kernel)
     return lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
 
@@ -308,7 +308,7 @@ def _wse3_batcher(l: int, k: int = 1):
     path = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort',
                         'batcher_oddeven_wse3_1D.sptl')
     kernel = parser.parse_file(path)
-    kernel = passes.concretize_parameters(kernel, L=l, K=k)
+    kernel = passes.concretize_parameters(kernel, L=l, K=k, R=1)
     kernel = passes.constexpr_propagation(kernel)
     return lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
 
