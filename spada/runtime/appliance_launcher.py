@@ -226,7 +226,7 @@ class ApplianceProgram:
             for name in wanted:
                 out_path = self.output_dir / os.path.basename(name)
                 try:
-                    launcher.download_artifact(name, str(out_path))
+                    launcher.download_artifact(name, str(out_path.absolute()))
                 except Exception as e:  # Missing artifacts should not lose the ones that do exist
                     print(f"\033[93mWarning:\033[0m could not download '{name}': {e}")
                     continue
