@@ -40,6 +40,9 @@ jobs:
   test-csl:
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    strategy:
+      matrix:
+        wse-arch: ["wse2", "wse3"]
 
     steps:
     - uses: actions/checkout@v4
@@ -102,15 +105,4 @@ jobs:
       run: |
         pip install --no-deps -e .
         export PATH=$PATH:`pwd`/cerebras-sdk
-        status=0
-        for arch in wse2 wse3; do
-          echo "::group::WSE_ARCH=$arch"
-          if WSE_ARCH=$arch ./tests/csl_runtime/run_tests.sh; then
-            echo "$arch passed"
-          else
-            echo "$arch failed"
-            status=1
-          fi
-          echo "::endgroup::"
-        done
-        exit $status
+        WSE_ARCH=${{ matrix.wse-arch }} ./tests/csl_runtime/run_tests.sh
