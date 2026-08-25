@@ -1,14 +1,14 @@
-# SPADA — A Spatial Dataflow Architecture Programming Language
+# SpaDA — A Spatial Dataflow Architecture Programming Language
 
-SPADA is a programming language and compiler for spatial dataflow architectures such as the [Cerebras Wafer-Scale Engine](https://www.cerebras.net/). It provides precise control over data placement, communication streams, and asynchronous execution while abstracting architecture-specific routing details. SPADA also serves as a compiler intermediate representation (IR) for domain-specific languages; this repository includes a complete end-to-end compilation pipeline from the [GT4Py](https://github.com/GridTools/gt4py) stencil DSL (used in production weather forecasting at CSCS/MeteoSwiss) to Cerebras CSL.
+SpaDA is a programming language and compiler for spatial dataflow architectures such as the [Cerebras Wafer-Scale Engine](https://www.cerebras.net/). It provides precise control over data placement, communication streams, and asynchronous execution while abstracting architecture-specific routing details. SpaDA also serves as a compiler intermediate representation (IR) for domain-specific languages; this repository includes a complete end-to-end compilation pipeline from the [GT4Py](https://github.com/GridTools/gt4py) stencil DSL (used in production weather forecasting at CSCS/MeteoSwiss) to Cerebras CSL.
 
-Spatial dataflow architectures achieve exceptional throughput through disaggregated memory: each processing element (PE) holds only fast local SRAM, eliminating cache hierarchies and shared-memory contention. However, programming these architectures demands explicit orchestration of data movement over a circuit-switched network-on-chip (NoC), with limited concurrent communication channels and asynchronous, data-triggered task execution. SPADA addresses this by offering high-level constructs—`place`, `dataflow`, and `compute` blocks; `async`/`await`; `foreach` and `map` loops—alongside a formal dataflow semantics that defines routing correctness, data races, and deadlocks at compile time.
+Spatial dataflow architectures achieve exceptional throughput through disaggregated memory: each processing element (PE) holds only fast local SRAM, eliminating cache hierarchies and shared-memory contention. However, programming these architectures demands explicit orchestration of data movement over a circuit-switched network-on-chip (NoC), with limited concurrent communication channels and asynchronous, data-triggered task execution. SpaDA addresses this by offering high-level constructs—`place`, `dataflow`, and `compute` blocks; `async`/`await`; `foreach` and `map` loops—alongside a formal dataflow semantics that defines routing correctness, data races, and deadlocks at compile time.
 
 Key capabilities:
 - **Explicit placement and dataflow**: Declare where data lives and how it moves between PEs.
 - **Automatic routing assignment**: A checkerboard decomposition algorithm guarantees conflict-free channel allocation by construction, eliminating manual reasoning about hardware routing.
-- **Multi-level compilation**: GT4Py stencils → Stencil IR → SPADA IR → Cerebras CSL, with automatic vectorization via Data Structure Descriptors (DSDs) and task fusion.
-- **Compact code**: Hand-written SPADA kernels require 6–8× fewer lines than equivalent CSL; GT4Py stencils compile with up to 700× code reduction.
+- **Multi-level compilation**: GT4Py stencils → Stencil IR → SpaDA IR → Cerebras CSL, with automatic vectorization via Data Structure Descriptors (DSDs) and task fusion.
+- **Compact code**: Hand-written SpaDA kernels require 6–8× fewer lines than equivalent CSL; GT4Py stencils compile with up to 700× code reduction.
 - **Near-ideal weak scaling**: Compiler-generated stencil kernels achieve >150 TFlop/s on the WSE-2 with near-ideal weak scaling across three orders of magnitude.
 
 For full details, see the paper:
@@ -21,7 +21,7 @@ For full details, see the paper:
 
 ### Prerequisites
 
-- Python ≥ 3.8
+- Python ≥ 3.10
 - [Cerebras SDK](https://sdk.cerebras.net/) (required to compile and run generated CSL code on WSE hardware; optional for compiler development)
 
 ### Installation
@@ -29,20 +29,25 @@ For full details, see the paper:
 Clone the repository and install the package:
 
 ```bash
-git clone https://github.com/glukas/spada.git
+git clone https://github.com/spcl/spada.git
 cd spada
 pip install -e .
 ```
 
-To install with development dependencies:
+To install with development dependencies (test suite, formatters, and the
+standalone placement research code):
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-### Compiling a SPADA Program
+Other optional dependency groups: `docs` (MkDocs site in `irspec/`), `placement`
+(igraph/matplotlib/hilbertcurve), `render` (pycairo, needs system cairo), and
+`all`.
 
-The `sptlc` command-line tool compiles a SPADA Spatial IR (`.sptl`) file to Cerebras CSL:
+### Compiling a SpaDA Program
+
+The `sptlc` command-line tool compiles a SpaDA Spatial IR (`.sptl`) file to Cerebras CSL:
 
 ```bash
 sptlc samples/benchmarks/laplacian_128_128_80.sptl output/ --param I=128 --param J=128
@@ -61,7 +66,7 @@ Key options:
 
 ### Compiling from GT4Py
 
-To compile a GT4Py stencil file to SPADA IR (`.spst` and `.sptl`):
+To compile a GT4Py stencil file to SpaDA IR (`.spst` and `.sptl`):
 
 ```bash
 python -m spada.cli.gt4py_to_spatial samples/stencils.py 128,128,80 output/ --function-name laplacian
@@ -94,7 +99,7 @@ The runtime reads `metadata.json` generated by `sptlc` to determine the PE grid 
 
 ### Example Kernels
 
-Sample SPADA programs are in `samples/`:
+Sample SpaDA programs are in `samples/`:
 
 | Directory | Contents |
 |---|---|
@@ -125,7 +130,7 @@ pytest tests/ --ignore=tests/csl_runtime
 
 ### CSL Runtime Tests (Singularity / Cerebras SDK)
 
-End-to-end tests in `tests/csl_runtime/` compile and simulate SPADA programs using the Cerebras SDK and simulator. The Cerebras SDK ships as a Singularity Image File (`.sif`) and requires Singularity/Apptainer and an x86_64 Linux environment. Follow the Cerebras installation guide for full details: [Installation and Setup](https://sdk.cerebras.net/installation-guide).
+End-to-end tests in `tests/csl_runtime/` compile and simulate SpaDA programs using the Cerebras SDK and simulator. The Cerebras SDK ships as a Singularity Image File (`.sif`) and requires Singularity/Apptainer and an x86_64 Linux environment. Follow the Cerebras installation guide for full details: [Installation and Setup](https://sdk.cerebras.net/installation-guide).
 
 **Linux or x86_64 VM setup**
 
@@ -141,7 +146,7 @@ This saves the tarball to `tests/csl_runtime/cerebras-sdk.tar.gz` and extracts i
 3. Install Python dependencies for the compiler:
 
 ```bash
-python3 -m pip install -r requirements-ci.txt
+python3 -m pip install -e ".[dev]"
 ```
 
 4. Verify the toolchain:
@@ -217,7 +222,7 @@ make -C tests/csl_runtime clean-sdk  # also remove the downloaded SDK
 
 Questions, discussions, and feedback are welcome via GitHub Issues:
 
-- **Bug reports and feature requests**: [GitHub Issues](https://github.com/glukas/spada/issues)
+- **Bug reports and feature requests**: [GitHub Issues](https://github.com/spcl/spada/issues)
 
 ---
 
@@ -241,6 +246,6 @@ For significant changes (new language constructs, compiler passes, or architectu
 
 ## Release
 
-SPADA is released under BSD-3-Clause License, see [LICENSE](LICENSE) for details.
+SpaDA is released under BSD-3-Clause License, see [LICENSE](LICENSE) for details.
 
 LLNL-CODE-2000963
