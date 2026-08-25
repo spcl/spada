@@ -48,7 +48,7 @@ const timestamp = @import_module("<time>");
 def generate_sync_rectangle_code() -> RectangleBenchmarkingCode:
     return RectangleBenchmarkingCode(
         header="""
-param sync_params: comptime_struct;
+param sync_params;
 
 // Benchmarking counters
 const timestamp = @import_module("<time>");
