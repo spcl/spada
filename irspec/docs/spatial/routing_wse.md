@@ -225,8 +225,8 @@ Sharing on a basis looser than either does risk a PE that sends on the color in 
 on it in another, which needs a two-sided switch change that a sender cannot drive on WSE-2 (see
 [Lowering to Switches](#lowering-to-switches)), and nothing in the compiler currently rejects it.
 
-This arrangement is the one used in Schnyder's *Distributed Sorting on the Cerebras Wafer-Scale
-Engine* (fig. 7.6) for the 2D reduce-scatter, and is known to run on WSE-2.
+This arrangement is the one used in Luis Schnyder's Bachelor Thesis *Distributed Sorting on the Cerebras Wafer-Scale
+Engine* for the 2D reduce-scatter.
 
 !!! note "Note: Multiple Rounds on One Color"
     Two mechanisms are deliberately left unused, and are what to reach for if the four switch
