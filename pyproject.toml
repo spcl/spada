@@ -1,0 +1,95 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "SpaDA"
+description = "SpaDA: a spatial dataflow architecture programming language and compiler"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "BSD-3-Clause"
+license-files = ["LICENSE", "NOTICE"]
+authors = [
+    { name = "Lukas Gianinazzi" },
+    { name = "Tal Ben-Nun" },
+    { name = "Torsten Hoefler" },
+]
+keywords = [
+    "stencil",
+    "compiler",
+    "spatial",
+    "dataflow",
+    "high-performance-computing",
+    "csl",
+    "cerebras",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Compilers",
+]
+dependencies = [
+    "click>=8.0",
+    "lark>=1.3.1",
+    "networkx>=2.8",
+    "numpy>=1.24",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/spcl/spada"
+Repository = "https://github.com/spcl/spada"
+Paper = "https://arxiv.org/abs/2511.09447"
+
+[project.scripts]
+sptlc = "spada.cli.compiler:compile_spatial_ir"
+
+[project.optional-dependencies]
+# Standalone placement research code (spada/placement, tests/placement).
+placement = [
+    "hilbertcurve>=2.0.5",
+    "igraph>=0.11.4",
+    "matplotlib>=3.7",
+]
+# Graph rendering through igraph; needs the system cairo libraries.
+render = ["pycairo>=1.26"]
+docs = [
+    "mkdocs>=1.5.3",
+    "mkdocs-material>=9.2.7",
+    "mkdocs-material-extensions>=1.2",
+    "pymdown-extensions>=10.2.1",
+]
+dev = [
+    "SpaDA[placement]",
+    "black",
+    "flake8",
+    "isort",
+    # Backs networkx's nx_pydot dot export, used only by commented-out debug
+    # dumps of the completion DAG (spada/syntax/csl/tasks.py).
+    "pydot",
+    "pytest",
+    "pytest-cov",
+    "yapf",
+]
+all = ["SpaDA[dev,docs,placement,render]"]
+
+[tool.setuptools.dynamic]
+version = { attr = "spada.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["spada*"]
+
+[tool.setuptools.package-data]
+spada = ["**/*.lark", "assets/csl/sync/*.csl"]
+
+[tool.black]
+line-length = 120
+target-version = ["py310"]
+
+[tool.isort]
+profile = "black"
+line_length = 120

@@ -53,7 +53,7 @@ message: |
     export PATH=/absolute/path/to/cs_sdk:$PATH
 
   Verify the SDK:
-    make -C /absolute/path/to/spatialStencil/tests/csl_runtime check-sdk
+    make -C /absolute/path/to/spada/tests/csl_runtime check-sdk
 
   Run the full CSL runtime suite:
-    make -C /absolute/path/to/spatialStencil/tests/csl_runtime test
+    make -C /absolute/path/to/spada/tests/csl_runtime test

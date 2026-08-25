@@ -186,8 +186,7 @@ vm "if ! python3 -m pip --version >/dev/null 2>&1; then \
     sudo DEBIAN_FRONTEND=noninteractive apt-get update -y && \
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip; \
     fi && \
-    python3 -m pip install --quiet -r '$REPO_ROOT/requirements-ci.txt' && \
-    python3 -m pip install --no-deps --quiet -e '$REPO_ROOT'"
+    python3 -m pip install --quiet -e '$REPO_ROOT[dev]'"
 
 # ── Delegate to the Makefile ──────────────────────────────────────────────────
 MAKE_ARGS="CSL_SDK_DIR=$SDK_DIR"
