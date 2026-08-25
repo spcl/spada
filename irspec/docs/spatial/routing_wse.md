@@ -58,17 +58,26 @@ all.
     routers never advance. The epoch boundaries around it are then buying only *ordering* — and the
     fabric already delivers a channel's wavelets in order. Such a sequence of phases can be
     collapsed into a single epoch with a sequential `for` in the compute blocks, which lowers to a
-    real loop and so costs code and compile time independent of the number of rounds. Compare
-    `samples/spatial/sorting/odd_even_sort_1D.sptl` with
-    `samples/spatial/sorting/odd_even_sort_1D_looped.sptl`.
+    real loop and so costs code and compile time independent of the number of rounds.
+    `samples/spatial/sort/odd_even_sort_1D_looped.sptl` is the example: N odd-even rounds on four
+    static channels, one CSL loop, no per-round barrier. The 2D analogue is
+    `samples/spatial/sort/shearsort_2D_looped.sptl`: eight static neighbour channels, nested
+    loops, no switches. A fully interior PE there receives on four colours in one epoch, which
+    fits WSE-3's six exclusive queues and not WSE-2's two.
 
     This does *not* generalize to channels that switch: a router's positions are a static sequence,
     so the epoch a configuration belongs to has to be visible to the compiler.
 
-An advance is driven by the `close` that ends the epoch. The sending PE emits a *switch-advance
-control message* on the channel, one per position to be traversed. It follows the stream's path
-using the configuration that is being retired, and advances the router of each PE it traverses,
-after all data of the epoch.
+An advance is driven by the `close` that ends the epoch. When some *other* router on the path has
+to move, the sending PE emits a *switch-advance control message* on the channel, one per position
+to be traversed. It follows the stream's path using the configuration that is being retired, and
+advances the router of each PE it traverses, after all data of the epoch. On WSE-2, when only the
+sending PE's own router has to move, and only by one position, the last data wavelet does that
+itself (`.advance_switch` on the fabric output DSD). A second operation on the same output queue
+is what drops a data wavelet there once a back-pressured send fills it (output queues 2 and 3
+hold six 16-bit words; three `f32` values already fill them). WSE-3 keeps a traveling `SWITCH_ADV`
+for that local flip as well: its output queues hold eight words, and origin-pooled destinations
+that also switch are only moved by a control wavelet on the path.
 
 !!! warning "WSE: Advances Are Not Selective"
     A CSL control wavelet nominally carries up to eight per-router switching commands
@@ -76,13 +85,22 @@ after all data of the epoch.
     others alone. **On the WSE hardware it does not work that way.** Measured on the simulator, only
     command slot 0 is ever executed, and **every** switch-configured router the wavelet reaches
     applies it; slots 1–7 had no effect in any topology tested — the sender's own router, one hop,
-    two hops through a plain relay, and two switch-configured routers in sequence. The compiler
-    therefore emits `encode_single_payload`, which writes slot 0 only.
+    two hops through a plain relay, and two switch-configured routers in sequence. A generated kernel
+    built on the opposite assumption, advancing the fourth router of a path with an `[ADV, NOP, NOP,
+    ADV]` chain, stalled in the fabric. The compiler therefore emits `encode_single_payload`, which
+    writes slot 0 only.
 
     The consequence is that a message cannot advance one router while leaving another on the same
     path where it is. *If the routers along one path would have to advance by different amounts, a
-    compile error is raised.* A router that is already on its last configuration is exempt: it never
-    routes anything again, so a message passing through may over-advance it harmlessly.
+    compile error is raised.* A router that is already on its last position is exempt: outside
+    `ring_mode` an advance past the last position is a no-op, so a message passing through may
+    over-advance it harmlessly. (Such a router is not necessarily finished — it may keep relaying the
+    same configuration for the rest of the kernel, which is exactly what the bundle below relies
+    on.)
+
+    This is a property of the *payload*, not of switching: a router can still be switched at a time
+    only it knows, and delivery to a compute element can still be made selective, by the two
+    mechanisms the next section combines.
 
 !!! danger "WSE-2: A Two-Advance Turnaround Overshoots the Receiver"
     A control message stops at the first router whose current output is `RAMP`, and it is routed by
@@ -99,12 +117,123 @@ after all data of the epoch.
     eastward channel and every interior PE alternates between sending and receiving on it, so every
     close is a turnaround and every receiver has a switch-configured neighbour behind it. That
     kernel deadlocks on WSE-2 and runs on WSE-3, where the turnaround costs one position and one
-    message and nothing overshoots. `samples/spatial/sorting/odd_even_sort_1D.sptl` avoids it by
-    giving each round parity its own pair of channels: each PE's role on a channel is then fixed,
-    no router switches at all, and no close emits a message.
+    message and nothing overshoots. `samples/spatial/sort/odd_even_sort_1D_looped.sptl` avoids it
+    by giving each round parity its own pair of channels: each PE's role on a channel is then
+    fixed, no router switches at all, and no close emits a message.
 
 Because the control message travels the path of the retired configuration in order behind the data,
 a receiving PE needs to emit nothing to advance its own router: the ordering required by the
 [lemma](../routing#undefined-behavior) in the IR semantics is provided by the fabric. A receiver's `close` 
 therefore has no runtime effect; it exists so that the lifetime of the stream — and hence the number
 of elements it carries — is stated by every participant and can be checked.
+
+## Overlapping Interval Shifts
+
+The [correctness conditions](../routing#undefined-behavior) rule out one shape that occurs constantly:
+a run of consecutive PEs all shifting the same distance $d$ along an axis, as in
+
+```
+dataflow i16 i, i16 j in [0:D + M, 0] {
+  stream<f32, 1> fwd = relative_stream(D, 0) { hops = auto, channel = 0 }
+}
+```
+
+with the PEs in `[0:M)` sending and those in `[D:D+M)` receiving. Source $p$'s word passes through
+the routers of sources $p+1, \dotsc, M-1$, so the paths share PEs within one epoch. Written as one
+stream per source, that is a channel each, $M$ colors for a shift; the alternative is a chain of
+single-hop stores and forwards, which serializes the whole run behind $d$ hops of copying.
+
+Neither is necessary. The compiler recognizes this pattern — `detect_shift_bundles` — and lowers the
+whole run onto **one channel**, giving the routers configurations that are switched only by events
+the PE owning them knows locally:
+
+```
+PE:        0      1      2      3         4         5      (M = 3, D = 3)
+role:      src0   src1   src2   dst0      dst1      dst2
+sends:     3rd    2nd    1st    --        --        --
+routes:    R->E   R->E   R->E   W->{R,E}  W->{R,E}  W->R
+pos1:      --     W->E   W->E   --        --        --
+filter:    --     --     --     win 2     win 1     win 0
+```
+
+**Sources inject, then relay.** A source starts at `rx = RAMP, tx = {EAST}` with `pos1` taking
+`rx = WEST`, sends its own words, and then advances its own router into relay mode. The trigger
+is local — *"my own send is done"* — which is what makes it expressible at all, given that the
+payload of a control message [selects nothing](#lowering-to-switches). On WSE-2 that advance is
+`.advance_switch` on the fabric output DSD: a `SWITCH_ADV` on the same output queue would also
+flip that router, but a back-pressured send of three or more `f32` values fills the six-word
+queue and the control wavelet then steals a data word. On WSE-3 the same close emits `SWITCH_ADV`.
+
+**The order is descending, and enforces itself.** The source nearest the destinations goes first. No
+schedule or barrier is needed: a source further away cannot push a word through its neighbour's
+router while that neighbour is still injecting from its ramp, so it waits on the link. Backpressure
+serializes the run in exactly the order the switches expect.
+
+**Destinations do not switch; a filter picks their words.** Each destination is statically routed to
+`tx = {RAMP, EAST}`, which *duplicates* rather than consumes: every destination's router sees the
+entire stream, in one order, and the one the stream reaches last uses `tx = {RAMP}` to take it out of
+the network. Which words a destination hands to its compute element is decided by a counter filter
+on that color, one linear function of the PE coordinate, so a single `@set_color_config` covers the
+whole run. A control message passes such a router without being counted (`count_data = true`) and
+without being filtered.
+
+!!! note "Note: Counter Filter Arithmetic"
+    As measured on the simulator, a counter filter starts at `init_counter`, increments on every data
+    wavelet, wraps to zero after `limit1`, and hands a wavelet to the compute element iff the counter
+    is at most `max_counter`. A window of `words` out of a stream of `length * words` is therefore
+    `limit1 = length * words - 1`, `max_counter = words - 1`, and an `init_counter` chosen so that
+    the counter reads zero as the wanted block arrives.
+    `tests/csl_runtime/test_shift_bundle_filters.sh` is the hand-written layout this was measured
+    with.
+
+!!! danger "Error: Too Many Wavelet Filters"
+    WSE-2 has four filters per PE, of which the `memcpy` module reserves one, so **three** are usable
+    (`FILTERS_PER_PE`). A PE needs one per color it filters. *If a PE would need more, a compile error
+    is raised*; the fix is to give some of the streams their own channels, which trades filters for
+    colors. Three filters therefore means at most three bundled phases per PE, whatever the kernel:
+    `batcher_oddeven_bundled_1D.sptl` would want ten at $2^4$ PEs and bundles only its three widest
+    phases, which is where most of the colors are saved anyway.
+
+    Reconfiguring a filter while wavelets are still in flight on its color is a data race, and the
+    destination that terminates the stream cannot be reconfigured until the stream has drained,
+    because its router is what removes the wavelets from the network. Filters are consequently set up
+    once, at layout time, and never reused between phases.
+
+Bundling applies only when every run it decomposes into has at least two sources and is no longer
+than the shift distance, so that no PE is both a source and a destination; a shift of one PE is left
+alone, since a chain at distance one is already sequenced by ordinary switch positions. Anything
+else falls back to the per-hop lowering, and to the errors above if that conflicts.
+
+Which shifts are bundled is decided by the channel assignment rather than by an attribute: a bundle
+is what several overlapping matchings on *one* channel become, so giving each matching a channel of
+its own is how a kernel declines the trade. What it then costs is colors, and those can be won back
+by reusing a channel across phases. Two unbundled shifts may share one safely when they agree on
+axis and signed distance and their sources agree modulo twice that distance, because a PE's role —
+source, relay or destination — is then a function of its position modulo twice the distance alone,
+so one static configuration serves every phase in the pool. `batcher_oddeven_bundled_1D.sptl` pools
+on exactly this rule, and `batcher_oddeven_1D.sptl` is the same rule written out as arithmetic.
+
+The agreement on the *sign* of the distance can be dropped without giving that up. Keep the axis, the
+magnitude and the source residue modulo twice it, and let the direction of travel vary: the sources
+are then the PEs congruent to the residue, the destinations those congruent to residue plus distance,
+and the relays the classes strictly between on the one side or the other — three disjoint classes, so
+a PE still holds one role on the color for the whole kernel and still never both sends and receives
+on it. What varies is the side it faces, which is one switch position either way, since a source only
+ever changes where it transmits and a destination only where it receives. 
+
+Sharing on a basis looser than either does risk a PE that sends on the color in one phase and receives
+on it in another, which needs a two-sided switch change that a sender cannot drive on WSE-2 (see
+[Lowering to Switches](#lowering-to-switches)), and nothing in the compiler currently rejects it.
+
+This arrangement is the one used in Luis Schnyder's Bachelor Thesis *Distributed Sorting on the Cerebras Wafer-Scale
+Engine* for the 2D reduce-scatter.
+
+!!! note "Note: Multiple Rounds on One Color"
+    Two mechanisms are deliberately left unused, and are what to reach for if the four switch
+    positions or three filters run out. `SWITCH_RST` restores the initial configuration of every
+    router a message passes, which retires a whole path with one wavelet. Teardown-based
+    reconfiguration reprograms the routers between rounds outright, which is the only known way to
+    put an arbitrary *sequence* of sends and receives on one color: for a long enough sequence there
+    is a PE for which no fixed cycle of switch positions exists. Until then, splitting the rounds
+    across channels — as `odd_even_sort_1D_looped.sptl` and `shearsort_2D_looped.sptl` do —
+    remains the per-kernel fallback.

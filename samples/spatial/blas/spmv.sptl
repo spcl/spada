@@ -1,43 +1,53 @@
 /**
- * Distributed GEMV: y = alpha * A * x + beta * y
+ * Distributed sparse GEMV: y = alpha * A * x + beta * y
  *
  * Grid [0:PX, 0:PY] — PX PEs along the i/x axis, PY PEs along the j/y axis.
  *
- * Data layout (row-major blocks):
- *   A: (PY*K) rows × (PX*K) cols — PE(i,j) holds K×K block A[j*K:(j+1)*K, i*K:(i+1)*K]
+ * Data layout (same 1.5D blocking as gemv.sptl, except A blocks are COO):
+ *   A: (PY*K) rows × (PX*K) cols — PE(i,j) holds a K×K block of A in padded COO
+ *      A_val[NZ], A_row[NZ], A_col[NZ], with unused slots (val=0, row=col=0)
  *   x: PX*K elements             — PE(i,0) initially holds x[i*K:(i+1)*K]
  *   y: PY*K elements             — PE(0,j) initially holds y[j*K:(j+1)*K]
  *
  * Algorithm:
- *   Phase 1: All PEs load their K×K block of A from the host.
+ *   Phase 1: All PEs load their padded COO block of A from the host.
  *   Phase 2: The j=0 column loads x; the i=0 column loads y from the host.
  *   Phase 3: Multicast x in the Y direction (j=0 → j=PY-1) using native hardware multicast.
- *   Phase 4: Each PE computes its local contribution z = A_block @ x using
- *            nested for loops.
+ *   Phase 4: Each PE computes its local contribution z = A_block @ x as a
+ *            compile-time COO loop over NZ entries.
  *   Phase 5: Pipelined chain reduction of z in the X direction (i=PX-1 → i=0).
  *            The root PE(0,j) applies alpha*z + beta*y and writes to the host.
  *
- * Constraints: PX >= 2, PY >= 2, K >= 1
+ * Constraints: PX >= 2, PY >= 2, K >= 1, NZ >= 1
+ *   A_row[p], A_col[p] must lie in [0, K).
  **/
-kernel @gemv<PX, PY, K>(
-    stream<f32, K>[PX, 1]    readonly  inp_x,   // x blocks: PE(i,0) for i=0..PX-1
-    stream<f32, K*K>[PX, PY] readonly  inp_A,   // A blocks: all PEs
-    stream<f32, K>[1, PY]    readonly  inp_y,   // y blocks: PE(0,j) for j=0..PY-1
-    f32                                alpha,    // scalar multiplier for A*x
-    f32                                beta,     // scalar multiplier for y
-    stream<f32, K>[1, PY]    writeonly out       // result: PE(0,j) for j=0..PY-1
+kernel @spmv<PX, PY, K, NZ>(
+    stream<f32, K>[PX, 1]    readonly  inp_x,      // x blocks: PE(i,0) for i=0..PX-1
+    stream<f32, NZ>[PX, PY]  readonly  inp_A_val,  // COO values, padded to NZ
+    stream<i16, NZ>[PX, PY]  readonly  inp_A_row,  // COO row indices in [0, K)
+    stream<i16, NZ>[PX, PY]  readonly  inp_A_col,  // COO column indices in [0, K)
+    stream<f32, K>[1, PY]    readonly  inp_y,      // y blocks: PE(0,j) for j=0..PY-1
+    f32                                alpha,      // scalar multiplier for A*x
+    f32                                beta,       // scalar multiplier for y
+    stream<f32, K>[1, PY]    writeonly out         // result: PE(0,j) for j=0..PY-1
 ) {
     place i16 i, i16 j in [0:PX, 0:PY] {
-        f32[K*K] A_flat   // row-major K×K matrix block
-        f32[K]   x        // x chunk for this PE column (populated by multicast)
-        f32[K]   z        // local partial result; accumulated during reduction
-        f32[K]   y_block  // y chunk; read from host, used only at i=0
+        f32[NZ] A_val     // COO nonzero values (zero-padded)
+        i16[NZ] A_row     // COO row indices
+        i16[NZ] A_col     // COO column indices
+        i16 tmp
+        i16 tmp2
+        f32[K]  x         // x chunk for this PE column (populated by multicast)
+        f32[K]  z         // local partial result; accumulated during reduction
+        f32[K]  y_block   // y chunk; read from host, used only at i=0
     }
 
-    // Phase 1: Load A blocks on every PE.
+    // Phase 1: Load COO A blocks on every PE.
     phase {
         compute i16 i, i16 j in [0:PX, 0:PY] {
-            await receive(A_flat, inp_A[i, j])
+            await receive(A_val, inp_A_val[i, j])
+            await receive(A_row, inp_A_row[i, j])
+            await receive(A_col, inp_A_col[i, j])
         }
     }
 
@@ -76,14 +86,16 @@ kernel @gemv<PX, PY, K>(
         }
     }
 
-    // Phase 4: Local K×K matrix-vector multiply: z[k] = sum_l A_flat[k*K+l] * x[l].
+    // Phase 4: Local COO SpMV: z[A_row[p]] += A_val[p] * x[A_col[p]].
     phase {
         compute i16 i, i16 j in [0:PX, 0:PY] {
-            for i16 k in [0:K] {
+            await map i16 k in [0:K] {
                 z[k] = 0.0
             }
-            for i16 k, i16 l in [0:K, 0:K] {
-                z[k] = z[k] + A_flat[k*K + l] * x[l]
+            for i16 p in [0:NZ] {
+                tmp = A_row[p]
+                tmp2 = A_col[p]
+                z[tmp] = z[tmp] + A_val[p] * x[tmp2]
             }
         }
     }
@@ -128,7 +140,7 @@ kernel @gemv<PX, PY, K>(
             await foreach i16 k, f32 v in [0:K], receive(green) {
                 z[k] = z[k] + v
             }
-            for i16 k in [0:K] {
+            await map i16 k in [0:K] {
                 z[k] = alpha * z[k] + beta * y_block[k]
             }
             await send(z, out[i, j])

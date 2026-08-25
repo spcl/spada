@@ -35,8 +35,14 @@ jobs:
       run: |
         PYTHONPATH=`pwd` pytest
 
+  # WSE-2 and WSE-3 share one runner so Singularity and the SDK are installed
+  # once.
   test-csl:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      matrix:
+        wse-arch: ["wse2", "wse3"]
 
     steps:
     - uses: actions/checkout@v4
@@ -54,29 +60,35 @@ jobs:
         if [ -f requirements-ci.txt ]; then pip install -r requirements-ci.txt; fi
 
     - name: Install CSL dependencies
+      env:
+        DEBIAN_FRONTEND: noninteractive
       run: |
+        set -euxo pipefail
         . /etc/os-release
         echo "Using Ubuntu version $UBUNTU_CODENAME"
 
-        # Make dependency setup faster
+        # Avoid man-db postinst work during package installs.
         echo 'set man-db/auto-update false' | sudo debconf-communicate >/dev/null
-        sudo dpkg-reconfigure man-db
 
-        sudo apt-get update
-        sudo apt-get install -y build-essential libssl-dev uuid-dev libgpgme11-dev squashfs-tools
-        wget -q -O singularity.deb https://github.com/sylabs/singularity/releases/download/v4.2.1/singularity-ce_4.2.1-${UBUNTU_CODENAME}_amd64.deb
-        sudo apt install ./singularity.deb
+        sudo apt-get update -y -o Acquire::Retries=3
+        sudo apt-get install -y --no-install-recommends \
+          build-essential libssl-dev uuid-dev libgpgme11-dev squashfs-tools
+
+        wget -q -O singularity.deb \
+          "https://github.com/sylabs/singularity/releases/download/v4.2.1/singularity-ce_4.2.1-${UBUNTU_CODENAME}_amd64.deb"
+        # Must pass -y: bare "apt install ./singularity.deb" waits for confirmation and hangs CI.
+        sudo apt-get install -y --no-install-recommends ./singularity.deb
         singularity --version
 
-    - name: Cache dependencies
-      id: cache-deps
+    - name: Cache Cerebras SDK
+      id: cache-sdk
       uses: actions/cache@v4
       with:
         path: cerebras-sdk
-        key: ${{ runner.os }}-deps
+        key: ${{ runner.os }}-cerebras-sdk-1.4.0
 
     - name: Install Cerebras SDK v1.4.0
-      if: steps.cache-deps.outputs.cache-hit != 'true'
+      if: steps.cache-sdk.outputs.cache-hit != 'true'
       run: |
         mkdir cerebras-sdk
         cd cerebras-sdk
@@ -93,4 +105,4 @@ jobs:
       run: |
         pip install --no-deps -e .
         export PATH=$PATH:`pwd`/cerebras-sdk
-        ./tests/csl_runtime/run_tests.sh
+        WSE_ARCH=${{ matrix.wse-arch }} ./tests/csl_runtime/run_tests.sh

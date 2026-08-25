@@ -52,18 +52,48 @@ class RectangleCollector(spa.NodeVisitor):
     def visit_DataflowBlock(self, block: spa.DataflowBlock):
         self.process_block(block)
 
+
+def _validate_disjoint_phase_subgrids(subgrids: list[spa.Subgrid]) -> None:
+    """Reject statically overlapping compute or dataflow blocks in one phase.
+
+    The Spatial IR specification permits at most one compute block per PE in a
+    phase and requires dataflow subgrids in a phase to be disjoint.  Parameter
+    and metaprogram expressions have already been concretized before this pass,
+    so these overlaps can be diagnosed exactly.
+    """
+    for index, first in enumerate(subgrids):
+        first_phase, first_block = first.metadata
+        if not isinstance(first_block, (ComputeBlock, DataflowBlock)):
+            continue
+
+        for second in subgrids[index + 1:]:
+            second_phase, second_block = second.metadata
+            if first_phase != second_phase or type(first_block) is not type(second_block):
+                continue
+            if not first.intersects(second):
+                continue
+
+            overlap = first.intersection(second)
+            block_kind = 'compute' if isinstance(first_block, ComputeBlock) else 'dataflow'
+            raise SyntaxError(
+                f'Overlapping {block_kind} subgrids in phase {first_phase}: '
+                f'PEs x={overlap.x_range}, y={overlap.y_range} belong to multiple '
+                f'{block_kind} blocks.'
+            )
+
+
 def canonicalize_subgrids(kernel: Kernel) -> Kernel:
     """
     This pass ensures that all subgrids either do not intersect or are equal.
 
-    Assumes that the subgrids are already correctly defined within each phase.
-    Specifically, within each phase no two gridpoints may belong to more than one subgrid
-    of the same block type.
+    Compute and dataflow overlaps within one phase are rejected before splitting.
+    Place blocks may overlap because they can declare distinct fields on the same PEs.
 
     :param kernel: The kernel to canonicalize.
     :return: A new kernel with the subgrids canonicalized.
     """
     subgrids = kernel.subgrids()
+    _validate_disjoint_phase_subgrids(subgrids)
 
     # split subgrids so that no two un-equal subgrids overlap
     print(f"Splitting {len(subgrids)} grids")

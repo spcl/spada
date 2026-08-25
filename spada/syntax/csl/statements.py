@@ -49,8 +49,9 @@ def generate_csl_statement(statement: spir.Statement,
         # Skip (taken care of when tasks are defined)
         return ""
     elif isinstance(statement, spir.CloseStatement):
-        # Retiring a route configuration means advancing the switches along the stream's path, one
-        # control wavelet per position, or nothing at all when no router has to move.
+        # A close that only flips this PE's own router does that on the last data wavelet
+        # (``.advance_switch`` on the fabric output DSD) and generates no statement here. A close
+        # that has to move a remote router emits one SWITCH_ADV control wavelet per position.
         if not statement.switch_advance:
             return ""
         stream = statement.stream_name

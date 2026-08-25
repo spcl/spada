@@ -1,0 +1,52 @@
+/**
+ * An overlapping 1D interval shift, and nothing else.
+ *
+ * D + M PEs on a line. Sources [0:M) each send one f32 to the PE D steps east, which
+ * overwrites its own value with it. Sources keep theirs. M <= D, so no PE is both a
+ * source and a destination.
+ *
+ * The paths overlap: source i's word passes through the routers of sources i+1 .. M-1.
+ * A color holds one (rx, tx) pair at a time, so the sources take turns -- nearest the
+ * destinations first, each handing its router over to relay mode once its own word is
+ * out. The destinations are statically routed and pick their word out of the stream
+ * with a counter filter. All of it on one color.
+ *
+ * Constraints: 2 <= M <= D.
+ **/
+kernel @shift_bundle_1d<M, D>(
+    stream<f32, 1>[D + M, 1] readonly  inp,
+    stream<f32, 1>[D + M, 1] writeonly out
+) {
+    place i16 i, i16 j in [0:D + M, 0] {
+        f32 val
+    }
+
+    phase {
+        compute i16 i, i16 j in [0:D + M, 0] {
+            await receive(val, inp[i, j])
+        }
+    }
+
+    phase {
+        // One declaration for the whole line: both halves have to agree on the channel, and the
+        // bundle is what lets them share it despite the overlap.
+        dataflow i16 i, i16 j in [0:D + M, 0] {
+            stream<f32, 1> fwd = relative_stream(D, 0) {
+                hops = auto,
+                channel = 0
+            }
+        }
+        compute i16 i, i16 j in [0:M, 0] {
+            await send(val, fwd)
+        }
+        compute i16 i, i16 j in [D:D + M, 0] {
+            await receive(val, fwd)
+        }
+    }
+
+    phase {
+        compute i16 i, i16 j in [0:D + M, 0] {
+            await send(val, out[i, j])
+        }
+    }
+}

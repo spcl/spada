@@ -1,8 +1,10 @@
+import os
+import re
 import pytest
 from spada.lowering import spatial_ir_to_csl as s2c
 from spada.syntax.spatial_ir import parser, passes
 from spada.syntax.spatial_ir.canonicalization import PEBlock
-from spada.syntax.csl import dsd_ops
+from spada.syntax.csl import constants, dsd_ops
 
 
 def test_dsd_op_detection():
@@ -153,16 +155,15 @@ kernel @looped<K, M> (stream<f32, K>[2, 1] readonly src,
             channel = 0
         }
     }
-    compute i16 i, i16 j in [0:2, 0] {
-        await receive(val, src[i, j])
-    }
     compute i16 i, i16 j in [0:1, 0] {
+        await receive(val, src[i, j])
         for i32 t in [0:M] {
             await send(val, east)
         }
         await send(val, dst[i, j])
     }
     compute i16 i, i16 j in [1:2, 0] {
+        await receive(val, src[i, j])
         for i32 t in [0:M] {
             await receive(other, east)
         }
@@ -205,6 +206,116 @@ kernel @scan<K> (stream<f32, K>[1, 1] readonly src,
     assert 'for (@range' in code, code
     # A scalar recurrence, not a vector add over a DSD.
     assert '@fadds(a_dsd' not in code, code
+
+
+@pytest.mark.parametrize('k', [1, 4])
+def test_an_array_of_one_element_still_gets_a_dsd(k: int):
+    """
+    A single-element array is a scalar in all but name, but CSL keeps treating it as an array: the
+    bare name is rejected as the operand of a transfer or of a move between memory locations. It
+    therefore needs a DSD like any other array, whatever its extent.
+    """
+    kernel = parser.parse_string(code="""
+kernel @blockcopy<K> (stream<f32, K>[1, 1] readonly src,
+                      stream<f32, K>[1, 1] writeonly dst) {
+    place i16 i, i16 j in [0, 0] {
+        f32[K] val
+        f32[K] res
+    }
+    compute i16 i, i16 j in [0, 0] {
+        await receive(res, src[i, j])
+        await map i16 m in [0:K] {
+            val[m] = res[m]
+        }
+        await send(val, dst[i, j])
+    }
+}""")
+    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, K=k))
+    code = {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel)}['code_0_0.csl']
+
+    # Every operand of every move is a DSD, whatever the arrays happen to be called.
+    moves = re.findall(r'@fmovs\((\w+), (\w+)[,)]', code)
+    assert moves, code
+    for destination, source in moves:
+        assert destination.endswith('_dsd') and source.endswith('_dsd'), code
+
+
+def test_a_reused_color_keeps_its_input_queue_across_a_gap():
+    """
+    On the interior Batcher PE, one inbound color is used on both sides of another. Sharing the
+    queue across that gap is what the simulator rejects: remapping it onto the middle color while
+    wavelets of the outer color remain. The outer color must keep the queue for its whole span.
+    """
+    path = os.path.join(
+        os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort', 'batcher_oddeven_1D.sptl'
+    )
+    kernel = parser.parse_file(path)
+    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, L=3, K=1, R=1))
+    files = {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)}
+    code = files['code_2_0.csl']
+
+    colors = dict(re.findall(r'const (\w+)_color_in: color = @get_color\((\d+)\);', code))
+    queues = dict(re.findall(
+        r'const (\w+)_in_dsd = @get_dsd\(fabin_dsd, .*?input_queue = @get_input_queue\((\d+)\)',
+        code))
+    # fwd__17 and fwd__37 share a color and straddle bwd__30.
+    assert colors['fwd__17'] == colors['fwd__37']
+    assert colors['fwd__17'] != colors['bwd__30']
+    assert queues['fwd__17'] == queues['fwd__37']
+    assert queues['fwd__17'] != queues['bwd__30']
+
+
+def test_wse3_inbound_colors_do_not_share_an_input_queue():
+    """WSE-3 remaps a queue onto the next color and faults if it is not empty.
+
+    Batcher L=2 is the case that hit ``Attempt to remap input queue 2 from C1 to C3``
+    when occupancy pooling reused the queue across sequential colors.
+    """
+    if constants.ARCH != 'wse3':
+        pytest.skip('WSE-2 may remap a drained queue onto the next color')
+    path = os.path.join(
+        os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort', 'batcher_oddeven_1D.sptl'
+    )
+    kernel = parser.parse_file(path)
+    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, L=2, K=2, R=1))
+    files = {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)}
+    code = files['code_1_0.csl']
+    colors = dict(re.findall(r'const (\w+)_color_in: color = @get_color\((\d+)\);', code))
+    queues = dict(re.findall(
+        r'const (\w+)_in_dsd = @get_dsd\(fabin_dsd, .*?input_queue = @get_input_queue\((\d+)\)',
+        code))
+    by_color: dict[str, set[str]] = {}
+    for name, color in colors.items():
+        if name in queues:
+            by_color.setdefault(color, set()).add(queues[name])
+    assert len(by_color) >= 2, code
+    used_queues = [next(iter(qs)) for qs in by_color.values()]
+    assert len(used_queues) == len(set(used_queues)), (by_color, code)
+
+
+def test_wse3_concurrent_transfers_use_distinct_microthreads():
+    """Two transfers in flight at once may not share a microthread.
+
+    A laplacian PE receives from one neighbour and forwards to another in the same task. On WSE-3
+    the input and output queue pools both start at 2, so leaving the microthread at its default --
+    the queue ID of the highest-priority fabric operand -- put both on microthread 2 and aborted the
+    simulation with ``trying to term ut_instr[2], but it's not ours``.
+    """
+    if constants.ARCH != 'wse3':
+        pytest.skip('WSE-2 derives the microthread from the queue, and its two pools are disjoint')
+    path = os.path.join(
+        os.path.dirname(__file__), '..', '..', 'samples', 'benchmarks', 'laplacian_4_4_4.sptl')
+    kernel = parser.parse_file(path)
+    files = {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)}
+    code = files['code_2_1.csl']
+
+    tasks = re.findall(r'task \w+\(\) void \{(.*?)\n\}', code, re.DOTALL)
+    concurrent = [
+        re.findall(r'\.ut_id = @get_ut_id\((\d+)\)', body) for body in tasks
+    ]
+    assert any(len(used) > 1 for used in concurrent), code
+    for used in concurrent:
+        assert len(used) == len(set(used)), (used, code)
 
 
 if __name__ == '__main__':

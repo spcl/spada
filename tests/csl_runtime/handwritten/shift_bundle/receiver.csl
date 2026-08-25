@@ -1,0 +1,57 @@
+// One receiver of the bundle. Its router never switches; a counter filter in the layout
+// decides which of the words passing through are handed to this compute element.
+//
+// ``takes`` is how many that is: the whole stream when no filter is configured (used to
+// establish the arrival order), otherwise the ``words`` addressed to this receiver.
+
+param memcpy_params: comptime_struct;
+param stream: i16;
+param words: i16;
+param takes: i16;
+param in_queue: i16;
+param init_queues: i16;
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+const channel: color = @get_color(1);
+
+var val: [words]f32;
+var got: [stream]f32;
+var __val_ptr: [*]f32 = &val;
+var __got_ptr: [*]f32 = &got;
+
+const got_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{takes} -> got[i] });
+const in_dsd = @get_dsd(fabin_dsd, .{
+    .extent = takes,
+    .fabric_color = channel,
+    .input_queue = @get_input_queue(in_queue),
+});
+
+const recv_id = @get_local_task_id(8);
+const done_id = @get_local_task_id(9);
+
+task recv_task() void {
+    @fmovs(got_dsd, in_dsd, .{ .async = true, .activate = done_id });
+}
+
+task done_task() void {
+    sys_mod.unblock_cmd_stream();
+}
+
+fn main() void {
+    for (@range(i16, 0, stream, 1)) |i| {
+        got[i] = -1.0;
+    }
+    @activate(recv_id);
+}
+
+comptime {
+    @export_symbol(__val_ptr, "val");
+    @export_symbol(__got_ptr, "got");
+    @bind_local_task(recv_task, recv_id);
+    @bind_local_task(done_task, done_id);
+    if (init_queues != 0) {
+        @initialize_queue(@get_input_queue(in_queue), .{ .color = channel });
+    }
+    @export_symbol(main, "main");
+}

@@ -1,0 +1,65 @@
+#!/bin/sh
+# Hand-written prototype of the counted switch used by 1D shift bundles.
+#
+# Stage 1 runs without filters and checks the order words arrive in, which is what proves the
+# send-order hand-over: every receiver must see the senders in descending order, including the
+# case where senders relay for each other.
+#
+# Stage 2 turns the counter filters on and checks that each receiver keeps only its own block.
+# Together they pin down the hardware contract the compiler relies on:
+#
+#   * a sender hands its own router over on the last data wavelet (``.advance_switch`` on the
+#     fabout). A SWITCH_ADV on the same output queue is what drops a wavelet on WSE-2 once a
+#     back-pressured send of three or more f32 values fills that queue; over-advancing a
+#     router that is already on its last position is still harmless,
+#   * a receiver transmitting to RAMP and EAST duplicates rather than consumes,
+#   * a filter withholds a wavelet from the compute element without removing it from the
+#     network, and a wavelet nobody keeps is dropped by the terminating router,
+#   * the counter delivers iff counter <= max_counter, counting modulo limit1 + 1 from
+#     init_counter.
+#
+# The probe runs against whichever generation WSE_ARCH selects, so the same contract can be
+# confirmed on both.
+
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SRC="$SCRIPT_DIR/handwritten/shift_bundle"
+OUT="shift_bundle_hw"
+
+compile_and_run() {
+    m=$1
+    k=$2
+    filter=$3
+    width=$((2 * m))
+    arch="${WSE_ARCH:-wse2}"
+    if [ "$arch" = "wse3" ]; then
+        in_queue=2
+        init_queues=1
+    else
+        in_queue=0
+        init_queues=0
+    fi
+
+    rm -rf "$OUT"
+    cslc --arch="$arch" "$SRC/layout.csl" -o "$OUT" \
+        --fabric-dims=$((7 + width)),3 --fabric-offsets=4,1 --memcpy --channels=1 \
+        --params=M:$m,K:$k,FILTER:$filter,IN_QUEUE:$in_queue,INIT_QUEUES:$init_queues,ADVANCE_SWITCH:1
+    timeout -s 9 240 cs_python "$SRC/run.py" "$OUT" --M "$m" --K "$k" --filter "$filter"
+}
+
+# The cases grow in the two directions the contract has to hold in: the number of senders sharing
+# the color, and the words each of them ships. K > 1 is what makes the window narrower than the
+# cycle, and M*K is the cycle the counter has to wrap at, so "4 4" is the corner where a window of
+# four sits inside a cycle of sixteen and the last receiver's counter starts at twelve. That is the
+# shape batcher_oddeven_bundled_1D takes at L = 3, K = 4 for its distance-4 phase. Ordered so the
+# first failure marks the boundary.
+for case in "3 1" "4 1" "3 2" "4 2" "3 4" "4 4"; do
+    set -- $case
+    echo "--- stage 1: arrival order, M=$1 K=$2 (no filters) ---"
+    compile_and_run "$1" "$2" 0
+    echo "--- stage 2: filtered delivery, M=$1 K=$2 ---"
+    compile_and_run "$1" "$2" 1
+done
+
+rm -rf "$OUT"
+echo "Passed: counted switch by send order with filtered delivery."

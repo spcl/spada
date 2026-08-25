@@ -6,12 +6,25 @@ import os
 # Cerebras architecture to use. Options: 'wse2', 'wse3'
 ARCH = os.environ.get('WSE_ARCH', 'wse2')
 
-# From the SDK: IDs 29 and 30 should generally be avoided in programs as they are used for system tasks.
-# https://sdk.cerebras.net/csl/language/task-ids?highlight=color#activatable-identifiers
-# NOTE: We also avoid task ID 28 as we reserve it for ``exit_task``
+# Activatable local-task IDs: 0–30 on WSE-2, 8–30 on WSE-3. 29 is the teardown
+# handler and 30 is the timer; memcpy also binds several of these as local tasks
+# (``sys_params.csl``: SYS_EN_MAIN=24, SYS_UBLK_C22=27, SYS_EXIT=28,
+# SYS_SEND_CTRL=30). On WSE-3, ``memcpyd2h.csl`` additionally aliases color 21 as
+# ``LOCAL_MEMCPYD2H_DATA`` to save an entrypoint, which is the collision cslc
+# reports as "task ID '21' bound to more than one task".
+# https://sdk.cerebras.ai/csl/language/task-ids
+# https://sdk.cerebras.ai/tensor-streaming
+_RESERVED_LOCAL_TASK_IDS = {
+    'wse2': [24, 27, 28, 29, 30],
+    'wse3': [21, 24, 27, 28, 29, 30],
+}
+RESERVED_LOCAL_TASK_IDS = _RESERVED_LOCAL_TASK_IDS[ARCH]
+
+# Program-assignable local-task IDs. WSE-3 skips the memcpy holes; ``exit_task``
+# is not in this list and takes the next free ID after the assigned slots.
 _CSL_LOCAL_TASK_IDS = {
     'wse2': list(range(8, 21)),
-    'wse3': list(range(8, 28)),
+    'wse3': [t for t in range(8, 26) if t not in _RESERVED_LOCAL_TASK_IDS['wse3']],
 }
 
 LOCAL_TASK_IDS = _CSL_LOCAL_TASK_IDS[ARCH]
@@ -50,6 +63,20 @@ _OUTPUT_QUEUE_IDS = {
 }
 OUTPUT_QUEUE_IDS = _OUTPUT_QUEUE_IDS[ARCH]
 
+# Microthreads that drive in-flight asynchronous DSD operations. Two operations may never run on
+# one microthread at the same time. WSE-2 has no say in the matter: the ID is the queue ID of the
+# operation's highest-priority fabric operand, which is why its input and output pools above are
+# disjoint. WSE-3 keeps that default but lets ``.ut_id`` override it, which it must, since a PE
+# there needs an input and an output queue of the same number at once (see
+# https://sdk.cerebras.net/csl/language/microthreads_wse3). An empty list means the target cannot
+# name microthreads, so the default stands. Queues 0 and 1 belong to memcpy on WSE-3, and so do the
+# microthreads it drives them with.
+_MICROTHREAD_IDS = {
+    'wse2': [],
+    'wse3': list(range(2, 8)),
+}
+MICROTHREAD_IDS = _MICROTHREAD_IDS[ARCH]
+
 _HARDWARE_FABRIC_DIMS = {
     'wse2': (757, 996),
     'wse3': (762, 1172),
@@ -85,3 +112,11 @@ SWITCHABLE_COLORS = [color for color in _SWITCHABLE_COLORS[ARCH] if color in COL
 # that receives and then sends on one color cannot be expressed there with a single advance.
 _SWITCH_POSITION_ALLOWS_BOTH = {'wse2': False, 'wse3': True}
 SWITCH_POSITION_ALLOWS_BOTH = _SWITCH_POSITION_ALLOWS_BOTH[ARCH]
+
+# Router filters usable per PE, over all colors. The hardware has four, but the memcpy module
+# reserves one, so a program may configure three (Schnyder, "Distributed Sorting on the Cerebras
+# Wafer-Scale Engine", ch. 7).
+#
+# NOTE: a filter must not be reconfigured while wavelets it counts are still in flight. Filters are
+# therefore set once in the layout and never rewritten between phases.
+FILTERS_PER_PE = 3

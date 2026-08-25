@@ -255,3 +255,21 @@ def test_plan_is_deterministic():
     plan2 = task_recycling.plan_task_bindings(tasks, tdag.TaskCreationBehavior.STATE_MACHINE_ON_OVERRUN)
     assert plan1.task_to_local_slot == plan2.task_to_local_slot
     assert plan1.task_to_local_state == plan2.task_to_local_state
+
+
+def test_local_task_ids_do_not_include_memcpy_reservations():
+    """The assignable pool must not contain IDs memcpy already binds."""
+    assert set(constants.LOCAL_TASK_IDS).isdisjoint(constants.RESERVED_LOCAL_TASK_IDS)
+    assert 21 not in constants._CSL_LOCAL_TASK_IDS['wse3']
+    assert set(constants._CSL_LOCAL_TASK_IDS['wse3']).isdisjoint(constants._RESERVED_LOCAL_TASK_IDS['wse3'])
+    assert set(constants._CSL_LOCAL_TASK_IDS['wse2']).isdisjoint(constants._RESERVED_LOCAL_TASK_IDS['wse2'])
+
+
+def test_exit_task_skips_the_first_memcpy_reservation():
+    """If every ID below memcpy's first local task is taken, exit_task must hop the hole."""
+    first_reserved = min(constants.RESERVED_LOCAL_TASK_IDS)
+    used = set(range(8, first_reserved))
+    exit_id = s2c._exit_task_hardware_id(used, set())
+    assert exit_id not in used
+    assert exit_id not in constants.RESERVED_LOCAL_TASK_IDS
+    assert exit_id == first_reserved + 1

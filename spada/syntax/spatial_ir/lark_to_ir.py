@@ -188,7 +188,6 @@ class TreeToSpatialIR(lark.Transformer):
     def hop(self, args):
         return irnodes.RoutingHop(tuple(args))
 
-    routing = irnodes.RoutingDeclaration.from_lark
     subgrid_expression_2d = irnodes.SubgridExpression.from_lark
 
     def hop(self, args):
@@ -325,6 +324,27 @@ class TreeToSpatialIR(lark.Transformer):
     place_body = list
     dataflow_body = list
     phase_body = list
+
+    def routing_hops(self, args):
+        return ('hops', args[0])
+
+    def routing_channel(self, args):
+        return ('channel', args[0])
+
+    def routing_field(self, args):
+        return args[0]
+
+    def routing(self, args):
+        kwargs = {'hops': 'auto', 'channel': 'auto'}
+        seen: set[str] = set()
+        for key, value in args:
+            if key in seen:
+                raise ValueError(f'Duplicate routing field "{key}"')
+            seen.add(key)
+            kwargs[key] = value
+        if 'hops' not in seen or 'channel' not in seen:
+            raise ValueError('Routing declaration requires both hops and channel')
+        return irnodes.RoutingDeclaration(hops=kwargs['hops'], channel=kwargs['channel'])
 
     def compute_body(self, args):
         if len(args) == 1 and isinstance(args[0], list):

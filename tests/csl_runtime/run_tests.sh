@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Every test builds in this directory and exchanges data through the fixed names inp.npy and
+# OUT_out.npy, removing them once a case is done. Only one run may be active per checkout: two
+# concurrent runs overwrite each other's inputs and fail with a shape mismatch. Run architectures
+# sequentially, or give each one its own checkout.
+
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -17,6 +22,7 @@ declare -a FAILED_TESTS
 
 echo -e "${BLUE}================================${NC}"
 echo -e "${BLUE}  Running Test Suite${NC}"
+echo -e "${BLUE}  WSE_ARCH=${WSE_ARCH:-wse2}${NC}"
 echo -e "${BLUE}================================${NC}"
 echo ""
 
@@ -36,6 +42,10 @@ NON_TEST_SCRIPTS=("run_tests.sh" "run-in-lima.sh" "sptlc" "_lib.sh")
 
 is_non_test() {
     local name="$1"
+    # Local debug helpers (zz_*) and not-yet-enabled cases (pending_*) are not part of the suite.
+    case "$name" in
+        zz_*|pending_*) return 0 ;;
+    esac
     for skip in "${NON_TEST_SCRIPTS[@]}"; do
         [ "$name" = "$skip" ] && return 0
     done

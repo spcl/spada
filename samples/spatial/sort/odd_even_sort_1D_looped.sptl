@@ -1,0 +1,258 @@
+/**
+ * Odd-even transposition sort over N = 2^L PEs, with the N rounds as a runtime loop.
+ *
+ * Each PE holds a block of K f32 keys: N*K keys in all. Ascending: after the network, PE i holds
+ * keys i*K .. i*K + (K-1) of the sorted sequence. K = 1 is the one-key-per-PE network again.
+ *
+ * Algorithm
+ * ---------
+ * The load phase sorts this PE's block. Every later comparator is a compare-split of two sorted
+ * blocks: the partners trade, the lower index keeps the K smallest of the 2K keys and the higher
+ * index the K largest, and both halves come out ascending. A network that sorts N keys sorts N
+ * sorted blocks this way, so concatenating the blocks left to right gives the sorted sequence.
+ *
+ * Round t compares neighbours (2i, 2i+1) when t is even and (2i+1, 2i+2) when t is odd.
+ * N rounds suffice. Every comparator is one hop: on a line a longer exchange occupies the
+ * same links as several one-hop ones and does not cut the round count, which is already
+ * Theta(N).
+ *
+ * One channel per (round parity, direction) -- four in all -- so each PE's role on each
+ * channel is fixed for the whole run. Sharing a channel across parities would make every
+ * interior PE alternate send/receive on it; on WSE-2 that turnaround overshoots the
+ * receiver (see irspec/docs/spatial/routing_wse.md).
+ *
+ * Why the rounds are a loop
+ * -------------------------
+ * The same N rounds can be written as a compile-time `for` around two `phase` blocks.
+ * The compiler unrolls that into N phases, so code and compile time grow with N, and
+ * each phase boundary is a barrier. Here the rounds are a sequential `for` inside each
+ * compute block, which lowers to a CSL loop: the body is emitted once, and there is no
+ * per-round barrier.
+ *
+ * A phase boundary is an epoch boundary -- streams close, a channel may change hands,
+ * routers may advance. This network needs none of that. With roles fixed, no router
+ * switches and no channel is reassigned. Round t's values arrive before round t+1's
+ * because a channel is a FIFO.
+ *
+ * Role alternation is a per-PE-parity split, which a `compute` subgrid already expresses.
+ * The two ends sit out every odd round and so run a shorter body:
+ *
+ *   PE 0             low in even rounds, idle in odd rounds
+ *   PE 2, 4, .. N-2  low in even rounds, high in odd rounds
+ *   PE 1, 3, .. N-3  high in even rounds, low in odd rounds
+ *   PE N-1           high in even rounds, idle in odd rounds
+ *
+ * A high PE must send its own block before it merges, which is why it sends after the
+ * receive but before the walk: the merge overwrites val, and the partner needs the
+ * pre-merge value.
+ *
+ * Constraints: L >= 1, K >= 1. WSE-2 and WSE-3.
+ *
+ **/
+kernel @odd_even_sort_1d_looped<L, K>(stream<f32, K>[1<<L, 1] readonly a_in,
+                                      stream<f32, K>[1<<L, 1] writeonly a_out) {
+
+    place i16 i, i16 j in [0:1<<L, 0] {
+        f32[K] val    // this PE's block, ascending
+        f32[K] other  // the partner's block
+        f32[K] res    // merge target
+        f32 x
+        f32 y
+        i16 pv  // walk into val
+        i16 pt  // walk into other
+        i16 pr  // where the walk writes
+        i16 take
+    }
+
+    // One epoch for the whole run: these four channels never change hands, so they are
+    // declared at kernel level rather than per phase.
+    dataflow i16 i, i16 j in [0:1<<L, 0] {
+        stream<f32> east_even = relative_stream(1, 0) {
+            hops = auto,
+            channel = 0
+        }
+        stream<f32> west_even = relative_stream(-1, 0) {
+            hops = auto,
+            channel = 1
+        }
+        stream<f32> east_odd = relative_stream(1, 0) {
+            hops = auto,
+            channel = 2
+        }
+        stream<f32> west_odd = relative_stream(-1, 0) {
+            hops = auto,
+            channel = 3
+        }
+    }
+
+    // PE 0: low partner in every even round, idle in every odd round.
+    compute i16 i, i16 j in [0:1, 0] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 s in [0:K-1] {
+                pv = ((m - s) - 1) if ((m - s) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await send(val, east_even)
+            await receive(other, west_even)
+            // Keep the K smallest: merge upwards from the two block starts.
+            pv = 0
+            pt = 0
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x <= y else 0
+                res[m] = x if take == 1 else y
+                pv = pv + take
+                pt = pt + (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // Even-indexed interior PEs: low in even rounds, high in odd rounds.
+    compute i16 i, i16 j in [2 : (1<<L)-1 : 2, 0] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 s in [0:K-1] {
+                pv = ((m - s) - 1) if ((m - s) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await send(val, east_even)
+            await receive(other, west_even)
+            // Keep the K smallest: merge upwards from the two block starts.
+            pv = 0
+            pt = 0
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x <= y else 0
+                res[m] = x if take == 1 else y
+                pv = pv + take
+                pt = pt + (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+            await receive(other, east_odd)
+            await send(val, west_odd)
+            // Keep the K largest: merge downwards from the two block ends.
+            pv = K - 1
+            pt = K - 1
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x >= y else 0
+                pr = (K - 1) - m
+                res[pr] = x if take == 1 else y
+                pv = pv - take
+                pt = pt - (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // Odd-indexed interior PEs: high in even rounds, low in odd rounds.
+    compute i16 i, i16 j in [1 : (1<<L)-1 : 2, 0] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 s in [0:K-1] {
+                pv = ((m - s) - 1) if ((m - s) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await receive(other, east_even)
+            await send(val, west_even)
+            // Keep the K largest: merge downwards from the two block ends.
+            pv = K - 1
+            pt = K - 1
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x >= y else 0
+                pr = (K - 1) - m
+                res[pr] = x if take == 1 else y
+                pv = pv - take
+                pt = pt - (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+            await send(val, east_odd)
+            await receive(other, west_odd)
+            // Keep the K smallest: merge upwards from the two block starts.
+            pv = 0
+            pt = 0
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x <= y else 0
+                res[m] = x if take == 1 else y
+                pv = pv + take
+                pt = pt + (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // PE N-1: high partner in every even round, idle in every odd round.
+    compute i16 i, i16 j in [(1<<L)-1 : 1<<L, 0] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 s in [0:K-1] {
+                pv = ((m - s) - 1) if ((m - s) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await receive(other, east_even)
+            await send(val, west_even)
+            // Keep the K largest: merge downwards from the two block ends.
+            pv = K - 1
+            pt = K - 1
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x >= y else 0
+                pr = (K - 1) - m
+                res[pr] = x if take == 1 else y
+                pv = pv - take
+                pt = pt - (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+}

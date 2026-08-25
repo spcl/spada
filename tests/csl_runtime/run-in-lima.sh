@@ -12,6 +12,7 @@
 #   tests/csl_runtime/run-in-lima.sh --sdk /path/to/cs_sdk --smoke /path/to/csl-extras-*
 #   tests/csl_runtime/run-in-lima.sh --sdk /path/to/cs_sdk --shell
 #   tests/csl_runtime/run-in-lima.sh --sdk /path/to/cs_sdk --check
+#   tests/csl_runtime/run-in-lima.sh --sdk /path/to/cs_sdk --arch wse3
 #
 # The SDK directory and the repository must both be under your Mac home
 # directory ($HOME), which Lima mounts automatically.
@@ -32,6 +33,7 @@ SDK_URL=""
 TEST_NAME=""
 SMOKE_DIR=""
 MODE="test"   # test | test-one | smoke | shell | check
+WSE_ARCH="wse2"
 
 usage() {
     cat <<'EOF'
@@ -59,6 +61,11 @@ Usage (run from the repo root):
   tests/csl_runtime/run-in-lima.sh --sdk /path/to/cs_sdk
   (same --test / --smoke / --shell / --check flags work with --sdk too)
 
+Architecture:
+  --arch <wse2|wse3>  Cerebras generation to compile and simulate for (default wse2).
+                      The compiler reads it from WSE_ARCH and passes it to cslc; tests
+                      that a generation cannot express skip themselves with a note.
+
 The repository must reside under $HOME, which Lima mounts automatically.
 
 Prerequisites (install once):
@@ -75,6 +82,7 @@ while [[ $# -gt 0 ]]; do
         --smoke)      MODE="smoke"; SMOKE_DIR="$(cd "$2" && pwd)"; shift 2 ;;
         --shell)      MODE="shell"; shift ;;
         --check)      MODE="check"; shift ;;
+        --arch)       WSE_ARCH="$2"; shift 2 ;;
         -h|--help)    usage ;;
         *)            echo "Unknown argument: $1"; usage ;;
     esac
@@ -89,6 +97,10 @@ if [[ -n "$SDK_DIR" && -n "$SDK_URL" ]]; then
     echo "ERROR: --sdk and --sdk-url are mutually exclusive."
     echo ""
     usage
+fi
+if [[ "$WSE_ARCH" != "wse2" && "$WSE_ARCH" != "wse3" ]]; then
+    echo "ERROR: --arch must be wse2 or wse3, got '$WSE_ARCH'."
+    exit 1
 fi
 
 # ── Validate paths are under $HOME ────────────────────────────────────────────
@@ -190,7 +202,8 @@ vm "if ! python3 -m pip --version >/dev/null 2>&1; then \
     python3 -m pip install --no-deps --quiet -e '$REPO_ROOT'"
 
 # ── Delegate to the Makefile ──────────────────────────────────────────────────
-MAKE_ARGS="CSL_SDK_DIR=$SDK_DIR"
+MAKE_ARGS="CSL_SDK_DIR=$SDK_DIR WSE_ARCH=$WSE_ARCH"
+echo "==> Target architecture: $WSE_ARCH"
 
 case "$MODE" in
     check)
@@ -214,6 +227,7 @@ case "$MODE" in
         limactl shell "$VM_NAME" -- bash -lc \
             "export PATH='$SDK_DIR:\$PATH'; \
              export PYTHONPATH='$REPO_ROOT\${PYTHONPATH:+:\$PYTHONPATH}'; \
+             export WSE_ARCH='$WSE_ARCH'; \
              cd '$REPO_ROOT'; exec bash"
         ;;
 esac

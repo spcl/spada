@@ -192,3 +192,8 @@ to receive.
     If multicasting is used, the correctness conditions must be adapted accordingly, 
     especially when considering multiple phases.
 
+
+## Lowering to Cerebras WSE
+
+How epochs, switch positions, control wavelets, shift bundling, and counter filters are realized on
+the Cerebras Wafer-Scale Engine is described in [Routing Semantics on Cerebras WSE](routing_wse.md).
