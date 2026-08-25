@@ -86,7 +86,11 @@ setup(
         ],
     },
     entry_points={
-        "console_scripts": ["sptlc=spada.cli.compiler:compile_spatial_ir"],
+        "console_scripts": [
+            "sptlc=spada.cli.compiler:compile_spatial_ir",
+            "sptlc-appliance=spada.cli.appliance_compiler:compile_spatial_ir_appliance",
+            "spada-wse-launcher=spada.runtime.appliance_launcher:launch",
+        ],
     },
     include_package_data=True,
     package_data={

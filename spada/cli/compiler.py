@@ -1,6 +1,8 @@
 import click
 import itertools
 import os
+from dataclasses import dataclass
+from typing import Any, Optional
 from spada.lowering import spatial_ir_to_csl as s2c
 from spada.syntax.spatial_ir import parser, passes, analysis, irnodes as spa, canonicalization
 from spada.syntax.csl import constants as csl
@@ -8,29 +10,33 @@ from spada.syntax.common import serialization
 import subprocess
 
 
-@click.command()
-@click.argument('input_file', type=click.Path(exists=True, dir_okay=False))
-@click.argument('output_folder', type=click.Path(dir_okay=True))
-@click.option('--param', '-p', multiple=True, help='Kernel parameters in key=value format')
-@click.option('--offset-x', '-x', default=0, type=int, help='Offset for rectangular region in x direction')
-@click.option('--offset-y', '-y', default=0, type=int, help='Offset for rectangular region in y direction')
-@click.option('--generate-only', '-g', is_flag=True, help='Only generate the output files without compiling them')
-@click.option('--disable-benchmarking', is_flag=True, help='Disable benchmarking code generation (and memory overhead)')
-@click.option('--disable-asynchronous', is_flag=True, help='Disable asynchronous task code generation')
-@click.option('--disable-dsd', is_flag=True, help='Disable DSD operation detection and code generation')
-@click.option('--disable-map', is_flag=True, help='Disable @map operation detection and code generation')
-@click.option('--disable-task-fusion', is_flag=True, help='Disable task fusion optimization')
-@click.option('--disable-task-recycling', is_flag=True, help='Disable task ID recycling')
-@click.option('--disable-copy-elision', is_flag=True, help='Disable copy elimination optimization pass')
-@click.option('--disable-close-elision', is_flag=True, help='Disable elision of unnecessary stream closes')
-@click.option('--disable-switching', is_flag=True, help='Disable router switch positions for shared channels')
-def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], offset_x: int, offset_y: int,
-                       generate_only: bool, disable_benchmarking: bool,
-                       disable_asynchronous: bool, disable_dsd: bool, disable_map: bool,
-                       disable_task_fusion: bool, disable_task_recycling: bool, disable_copy_elision: bool,
-                       disable_close_elision: bool, disable_switching: bool):
-    # Parse parameters into dictionary
-    kernel_parameters = {}
+@dataclass
+class GeneratedProgram:
+    """
+    The result of generating CSL sources and ``metadata.json`` for a Spatial IR kernel.
+
+    This is the hand-off point between the code generator and whichever backend actually invokes
+    the CSL compiler (``cslc`` directly in :func:`compile_spatial_ir`, or the appliance-mode
+    ``SdkCompiler`` in ``spada.cli.appliance_compiler``).
+    """
+    output_folder: str
+    metadata: dict[str, Any]
+    input_args: dict[str, Any]
+    output_args: dict[str, Any]
+    #: Tight fabric extent (xend, yend), i.e. the last used PE + 1, including the memcpy columns/rows
+    fabric_extent: tuple[int, int]
+    #: Value to pass to ``--fabric-offsets``
+    fabric_offsets: tuple[int, int]
+    #: Value to pass to ``--channels``
+    memcpy_channels: int
+
+
+def parse_parameters(param: list[str]) -> dict[str, Any]:
+    """
+    Parse ``key=value`` kernel parameters from the command line into a dictionary, converting the
+    values to integers or floats where possible.
+    """
+    kernel_parameters: dict[str, Any] = {}
     for p in param:
         if '=' not in p:
             raise ValueError(f'Invalid parameter format: {p}. Expected key=value')
@@ -43,6 +49,43 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
                 kernel_parameters[key] = float(value)
             except ValueError:
                 kernel_parameters[key] = value
+    return kernel_parameters
+
+
+def codegen_options(func):
+    """Click options shared by every Spatial IR compiler frontend."""
+    options = [
+        click.option('--param', '-p', multiple=True, help='Kernel parameters in key=value format'),
+        click.option('--offset-x', '-x', default=0, type=int, help='Offset for rectangular region in x direction'),
+        click.option('--offset-y', '-y', default=0, type=int, help='Offset for rectangular region in y direction'),
+        click.option('--disable-benchmarking', is_flag=True,
+                     help='Disable benchmarking code generation (and memory overhead)'),
+        click.option('--disable-asynchronous', is_flag=True, help='Disable asynchronous task code generation'),
+        click.option('--disable-dsd', is_flag=True, help='Disable DSD operation detection and code generation'),
+        click.option('--disable-map', is_flag=True, help='Disable @map operation detection and code generation'),
+        click.option('--disable-task-fusion', is_flag=True, help='Disable task fusion optimization'),
+        click.option('--disable-task-recycling', is_flag=True, help='Disable task ID recycling'),
+        click.option('--disable-copy-elision', is_flag=True, help='Disable copy elimination optimization pass'),
+        click.option('--disable-close-elision', is_flag=True, help='Disable elision of unnecessary stream closes'),
+        click.option('--disable-switching', is_flag=True, help='Disable router switch positions for shared channels'),
+    ]
+    for option in reversed(options):
+        func = option(func)
+    return func
+
+
+def generate_program(input_file: str, output_folder: str, param: list[str] = (), offset_x: int = 0, offset_y: int = 0,
+                     disable_benchmarking: bool = False, disable_asynchronous: bool = False, disable_dsd: bool = False,
+                     disable_map: bool = False, disable_task_fusion: bool = False,
+                     disable_task_recycling: bool = False, disable_copy_elision: bool = False,
+                     disable_close_elision: bool = False, disable_switching: bool = False) -> GeneratedProgram:
+    """
+    Lower a Spatial IR file to CSL and write the sources plus ``metadata.json`` into ``output_folder``.
+
+    No CSL compiler is invoked here; the returned :class:`GeneratedProgram` carries everything a
+    backend needs in order to do so.
+    """
+    kernel_parameters = parse_parameters(param)
 
     kernel = parser.parse_file(input_file)
     # If there are unconcretized parameters, we need to concretize them
@@ -112,9 +155,8 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         with open(output_path, 'w') as out_file:
             out_file.write(f.code)
 
-    # Compile the generated CSL files using the cslc command (and change the cwd to the output folder)
-    # Get the fabric dimensions from the kernel and offsets from the command line arguments
-    # Command: cslc layout.csl --fabric-dims=16,16 --fabric-offsets=0,0 --memcpy --channels=1
+    # Compute the arguments the generated code must be compiled with, e.g.,
+    # cslc layout.csl --fabric-dims=16,16 --fabric-offsets=0,0 --memcpy --channels=1
     memcpy_channels = 1  # TODO: Determine the number of memcpy channels (1-16) based on the kernel arguments
 
     # Generate metadata.json file
@@ -172,19 +214,74 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     }
     serialization.save_to_json(metadata, os.path.join(output_folder, 'metadata.json'))
 
+    return GeneratedProgram(
+        output_folder=output_folder,
+        metadata=metadata,
+        input_args=input_args,
+        output_args=output_args,
+        fabric_extent=(xend, yend),
+        fabric_offsets=(offset_x + xbegin, offset_y + ybegin),
+        memcpy_channels=memcpy_channels,
+    )
+
+
+def cslc_arguments(program: GeneratedProgram, hardware_fabric: Optional[bool] = None) -> list[str]:
+    """
+    Compute the ``cslc`` flags (everything but the executable and the top-level file) for a
+    generated program.
+
+    :param program: The generated program to compile.
+    :param hardware_fabric: If True, compile for the full hardware fabric dimensions instead of the
+                            tight kernel rectangle. Defaults to whether ``CM_ADDR`` is set.
+    """
+    if hardware_fabric is None:
+        hardware_fabric = 'CM_ADDR' in os.environ
+
+    if hardware_fabric:
+        fabric_width, fabric_height = csl.HARDWARE_FABRIC_DIMS
+    else:
+        fabric_width, fabric_height = program.fabric_extent
+
+    return [
+        f'--arch={csl.ARCH}', f'--fabric-dims={fabric_width},{fabric_height}',
+        f'--fabric-offsets={program.fabric_offsets[0]},{program.fabric_offsets[1]}', '--memcpy',
+        f'--channels={program.memcpy_channels}'
+    ]
+
+
+@click.command()
+@click.argument('input_file', type=click.Path(exists=True, dir_okay=False))
+@click.argument('output_folder', type=click.Path(dir_okay=True))
+@codegen_options
+@click.option('--generate-only', '-g', is_flag=True, help='Only generate the output files without compiling them')
+def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], offset_x: int, offset_y: int,
+                       generate_only: bool, disable_benchmarking: bool,
+                       disable_asynchronous: bool, disable_dsd: bool, disable_map: bool,
+                       disable_task_fusion: bool, disable_task_recycling: bool, disable_copy_elision: bool,
+                       disable_close_elision: bool, disable_switching: bool):
+    program = generate_program(
+        input_file,
+        output_folder,
+        param=param,
+        offset_x=offset_x,
+        offset_y=offset_y,
+        disable_benchmarking=disable_benchmarking,
+        disable_asynchronous=disable_asynchronous,
+        disable_dsd=disable_dsd,
+        disable_map=disable_map,
+        disable_task_fusion=disable_task_fusion,
+        disable_task_recycling=disable_task_recycling,
+        disable_copy_elision=disable_copy_elision,
+        disable_close_elision=disable_close_elision,
+        disable_switching=disable_switching,
+    )
+
     if generate_only:
         print("Generated output files without compiling.")
         return
 
-    if 'CM_ADDR' in os.environ:
-        fabric_width, fabric_height = csl.HARDWARE_FABRIC_DIMS
-    else:
-        fabric_width, fabric_height = xend, yend
-
-    cslc_command = [
-        os.getenv('CSLC', 'cslc'), f'--arch={csl.ARCH}', 'layout.csl', f'--fabric-dims={fabric_width},{fabric_height}',
-        f'--fabric-offsets={offset_x + xbegin},{offset_y + ybegin}', '--memcpy', f'--channels={memcpy_channels}'
-    ]
+    # Compile the generated CSL files using the cslc command (and change the cwd to the output folder)
+    cslc_command = [os.getenv('CSLC', 'cslc'), 'layout.csl'] + cslc_arguments(program)
     print("Compiling with command:", ' '.join(cslc_command))
     try:
         subprocess.run(cslc_command, cwd=output_folder, check=True)
@@ -195,7 +292,7 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
     print("\033[92mCompilation successful.\033[0m "
           "To run the program, use the Cerebras SDK python runtime with npy files as arguments:")
     runtime_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "runtime", "runtime.py"))
-    args_str = ' '.join(f"{arg}.npy" for arg in metadata["argument_order"] if arg in input_args)
+    args_str = ' '.join(f"{arg}.npy" for arg in program.metadata["argument_order"] if arg in program.input_args)
     cs_python = os.getenv('CS_PYTHON', 'cs_python')
     print(f"{cs_python} {runtime_path} {output_folder} {args_str}")
 
