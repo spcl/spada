@@ -389,7 +389,7 @@ class Program:
             print("Copy-back complete.", flush=True)
 
             if self.benchmark and not self.metadata.memcpy_mode:
-                cycle_counts = copy_back_benchmark_data(self.runtime, self.metadata)
+                cycle_counts = copy_back_benchmark_cycles(self.runtime, self.metadata)
                 np.save(self.output_dir / "perf_cycles.npy", cycle_counts)
                 print_cycle_counts("Cycle count", cycle_counts)
 
