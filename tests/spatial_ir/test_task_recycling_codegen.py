@@ -5,9 +5,9 @@ import pytest
 
 from spada.lowering.spatial_ir_to_csl import lower_spatial_ir_to_csl
 from spada.syntax.spatial_ir import parser, passes
+from spada.syntax.csl import constants
 
-_CSL_RUNTIME_TASK_RECYCLING_SAMPLES = os.path.join(
-    os.path.dirname(__file__), '..', 'csl_runtime', 'samples')
+_CSL_RUNTIME_TASK_RECYCLING_SAMPLES = os.path.join(os.path.dirname(__file__), '..', 'csl_runtime', 'samples')
 
 
 def test_task_recycling_codegen_uses_else_if_dispatch_for_recycled_slots():
@@ -37,9 +37,9 @@ def test_task_recycling_codegen_uses_else_if_dispatch_for_recycled_slots():
 @pytest.mark.parametrize(
     'filename',
     (
-        'task_recycling_merge.sptl',
-        'task_recycling_two_stage.sptl',
-        'task_recycling_three_stage.sptl',
+        f'task_recycling_merge_{constants.ARCH}.sptl',
+        f'task_recycling_two_stage_{constants.ARCH}.sptl',
+        f'task_recycling_three_stage_{constants.ARCH}.sptl',
     ),
 )
 def test_csl_runtime_task_recycling_sample_lowers(filename: str):
@@ -47,8 +47,7 @@ def test_csl_runtime_task_recycling_sample_lowers(filename: str):
     path = os.path.join(_CSL_RUNTIME_TASK_RECYCLING_SAMPLES, filename)
     kernel = parser.parse_file(path)
     kernel = passes.constexpr_propagation(kernel)
-    csl_files = lower_spatial_ir_to_csl(
-        kernel, task_fusion=False, copy_elision=True, prune_memory=True)
+    csl_files = lower_spatial_ir_to_csl(kernel, task_fusion=False, copy_elision=True, prune_memory=True)
     assert csl_files, 'expected at least one generated CSL file'
     combined = '\n'.join(f.code for f in csl_files)
     assert combined.strip(), 'expected non-empty CSL'
@@ -60,8 +59,7 @@ def test_codegen_avoids_local_task_id_color_overlap():
     kernel = parser.parse_file(path)
     kernel = passes.constexpr_propagation(kernel)
 
-    csl_files = lower_spatial_ir_to_csl(
-        kernel, task_fusion=False, copy_elision=True, prune_memory=True)
+    csl_files = lower_spatial_ir_to_csl(kernel, task_fusion=False, copy_elision=True, prune_memory=True)
     combined = '\n'.join(f.code for f in csl_files)
 
     local_task_ids = {int(v) for v in re.findall(r'@get_local_task_id\((\d+)\)', combined)}
@@ -70,5 +68,4 @@ def test_codegen_avoids_local_task_id_color_overlap():
     assert 8 in colors, 'sample should force color 8 to be allocated'
     assert local_task_ids
     assert local_task_ids.isdisjoint(colors), (
-        f'local task IDs overlap communication colors: ids={sorted(local_task_ids)}, colors={sorted(colors)}'
-    )
+        f'local task IDs overlap communication colors: ids={sorted(local_task_ids)}, colors={sorted(colors)}')

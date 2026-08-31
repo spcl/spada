@@ -8,7 +8,8 @@ from spada.syntax.spatial_ir.canonicalization import PEBlock
 
 
 def _load_sample_kernel():
-    sample = os.path.join(os.path.dirname(__file__), '..', 'csl_runtime', 'samples', 'task_recycling_merge.sptl')
+    sample = os.path.join(
+        os.path.dirname(__file__), '..', 'csl_runtime', 'samples', f'task_recycling_merge_{constants.ARCH}.sptl')
     kernel = parser.parse_file(sample)
     return passes.constexpr_propagation(kernel)
 
@@ -95,12 +96,12 @@ def test_task_recycling_plan_reuses_local_slots():
 # Conflict graph helpers
 # ---------------------------------------------------------------------------
 
+
 def _create_fork_tasks():
     """Task 0 activates tasks 1 and 2 independently; 1 and 2 are concurrent."""
     return [
-        tdag.CSLTask(0, 'local', [0],
-                     [(1, tdag.InterTaskEdge.ACTIVATE), (2, tdag.InterTaskEdge.ACTIVATE)],
-                     blocked=False),
+        tdag.CSLTask(
+            0, 'local', [0], [(1, tdag.InterTaskEdge.ACTIVATE), (2, tdag.InterTaskEdge.ACTIVATE)], blocked=False),
         tdag.CSLTask(1, 'local', [1], [(-1, tdag.InterTaskEdge.SEQUENCE)], blocked=False),
         tdag.CSLTask(2, 'local', [2], [(-1, tdag.InterTaskEdge.SEQUENCE)], blocked=False),
     ]
@@ -109,9 +110,8 @@ def _create_fork_tasks():
 def _create_diamond_tasks():
     """0 forks into 1 and 2, which join at the blocked task 3."""
     return [
-        tdag.CSLTask(0, 'local', [0],
-                     [(1, tdag.InterTaskEdge.ACTIVATE), (2, tdag.InterTaskEdge.ACTIVATE)],
-                     blocked=False),
+        tdag.CSLTask(
+            0, 'local', [0], [(1, tdag.InterTaskEdge.ACTIVATE), (2, tdag.InterTaskEdge.ACTIVATE)], blocked=False),
         tdag.CSLTask(1, 'local', [1], [(3, tdag.InterTaskEdge.ACTIVATE)], blocked=False),
         tdag.CSLTask(2, 'local', [2], [(3, tdag.InterTaskEdge.UNBLOCK)], blocked=False),
         tdag.CSLTask(3, 'local', [3], [(-1, tdag.InterTaskEdge.SEQUENCE)], blocked=True),
@@ -153,14 +153,13 @@ def test_no_conflicting_tasks_share_slot():
     for slot in plan.local_slots:
         for i, a in enumerate(slot.task_indices):
             for b in slot.task_indices[i + 1:]:
-                assert b not in conflict_graph[a], (
-                    f'Tasks {a} and {b} conflict but were placed in the same slot'
-                )
+                assert b not in conflict_graph[a], (f'Tasks {a} and {b} conflict but were placed in the same slot')
 
 
 # ---------------------------------------------------------------------------
 # greedy_coloring helper
 # ---------------------------------------------------------------------------
+
 
 def test_greedy_coloring_max_colors_infeasible():
     """A triangle (K3) needs 3 colors; requesting 2 must return None."""
@@ -205,6 +204,7 @@ def test_greedy_coloring_fixed_conflict_honored():
 # plan_task_bindings mode behavior
 # ---------------------------------------------------------------------------
 
+
 def test_fail_on_overrun_raises():
     tasks = _create_linear_local_tasks(len(constants.LOCAL_TASK_IDS) + 1)
     with pytest.raises(ValueError, match='Too many local tasks'):
@@ -236,6 +236,7 @@ def test_empty_task_list_returns_empty_plan():
 # Transition preamble
 # ---------------------------------------------------------------------------
 
+
 def test_transition_preamble_empty_for_non_recycled():
     tasks = _create_linear_local_tasks(len(constants.LOCAL_TASK_IDS))
     plan = task_recycling.plan_task_bindings(tasks, tdag.TaskCreationBehavior.STATE_MACHINE_ON_OVERRUN)
@@ -244,10 +245,10 @@ def test_transition_preamble_empty_for_non_recycled():
         assert plan.emit_local_transition_preamble(i, blocked=True) == ''
 
 
-
 # ---------------------------------------------------------------------------
 # Determinism
 # ---------------------------------------------------------------------------
+
 
 def test_plan_is_deterministic():
     tasks = _create_linear_local_tasks(len(constants.LOCAL_TASK_IDS) + 5)
