@@ -317,6 +317,27 @@ def _single_index(node):
     return idx
 
 
+def _mac_vectorization_op(mat_vec_dtype: spir.ScalarType, dst_dtype: spir.ScalarType) -> Optional[str]:
+    """
+    Selects the @fmac* builtin for the vectorized MAC idiom, mirroring FMADSDOp._as_csl's dtype
+    dispatch (dsd_ops.py) exactly: the two multiplicands (mat, vec) must share a dtype
+    (``mat_vec_dtype``, checked by the caller), paired against the accumulator dtype
+    (``dst_dtype`` -- here always equal to the destination dtype, since Z[k] is both the
+    accumulator and the destination in this idiom).
+
+    No integer MAC builtin is present in DSD_ASSIGNMENT_MAPPING -- only @fmach, @fmachs and
+    @fmacs map to FMADSDOp there -- so integer dtypes intentionally return None: MAC
+    vectorization stays float-only (f16/f32), matching what FMADSDOp itself supports.
+    """
+    if mat_vec_dtype == spir.ScalarType.f16 and dst_dtype == spir.ScalarType.f16:
+        return '@fmach'
+    if mat_vec_dtype == spir.ScalarType.f32 and dst_dtype == spir.ScalarType.f16:
+        return '@fmachs'
+    if mat_vec_dtype == spir.ScalarType.f32 and dst_dtype == spir.ScalarType.f32:
+        return '@fmacs'
+    return None
+
+
 def _try_emit_vectorized_mac(statement: spir.ForStatement, dtypes: dict[spir.Identifier, spir.IRType],
                              header_code: StringIO):
     if len(statement.variables) != 2 or len(statement.range_expression) != 2:
@@ -412,13 +433,20 @@ def _try_emit_vectorized_mac(statement: spir.ForStatement, dtypes: dict[spir.Ide
     if mat_node.array.name == dst.array.name or vec_node.array.name == dst.array.name:
         return None
 
-    # f32 전용 (@fmacs)
-    def base_f32(name_node):
-        t = dtypes.get(name_node.array)
-        base = getattr(t, 'base_type', None) or getattr(t, 'element_type', None)
-        return base == spir.ScalarType.f32
-    if not (base_f32(dst) and base_f32(mat_node) and base_f32(vec_node)):
+    # Type dispatch mirrors FMADSDOp._as_csl (dsd_ops.py): reuse its dtype resolution so a
+    # scalar/array/stream-typed identifier resolves to the same base ScalarType FMADSDOp itself
+    # would see. Both multiplicands must share a dtype, and only the f16/f32 combinations
+    # FMADSDOp models (@fmach, @fmachs, @fmacs) are supported -- integer types are out of scope
+    # because no integer MAC builtin exists in DSD_ASSIGNMENT_MAPPING.
+    mat_dtype = dsd_ops._get_base_dtype(dtypes, mat_node)
+    vec_dtype = dsd_ops._get_base_dtype(dtypes, vec_node)
+    dst_dtype = dsd_ops._get_base_dtype(dtypes, dst)
+    if mat_dtype != vec_dtype:
         return None
+    mac_op = _mac_vectorization_op(mat_dtype, dst_dtype)
+    if mac_op is None:
+        return None
+    elem_type = dtype_as_csl(mat_dtype)
 
     uid = _VEC_COUNTER[0]
     _VEC_COUNTER[0] += 1
@@ -436,8 +464,8 @@ def _try_emit_vectorized_mac(statement: spir.ForStatement, dtypes: dict[spir.Ide
     return (
         f'// [P4] vectorized MAC: {z_name}[k] += {a_name}[k*{ck}+{lname}*{cl}+{c0}] * {name_to_csl(vec_node.array)}[{x_l}]\n'
         f'for (@range(i16, {l0}, {ll}, 1)) |{lname}| {{\n'
-        f'    const __vecmac_a_{uid} = @increment_dsd_offset({src_dsd}, {off}, f32);\n'
-        f'    @fmacs({dst_dsd}, {dst_dsd}, __vecmac_a_{uid}, {name_to_csl(vec_node.array)}[{x_l}]);\n'
+        f'    const __vecmac_a_{uid} = @increment_dsd_offset({src_dsd}, {off}, {elem_type});\n'
+        f'    {mac_op}({dst_dsd}, {dst_dsd}, __vecmac_a_{uid}, {name_to_csl(vec_node.array)}[{x_l}]);\n'
         f'}}\n')
 
 
