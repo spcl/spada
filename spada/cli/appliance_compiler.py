@@ -92,6 +92,7 @@ def compile_spatial_ir_appliance(input_file: str, output_folder: str, param: lis
                                  generate_only: bool, simulator: bool, mgmt_namespace: Optional[str],
                                  resource_cpu: Optional[int], resource_mem: Optional[int], check_version: bool,
                                  disable_benchmarking: bool, disable_asynchronous: bool, disable_dsd: bool,
+                                 disable_mac_vectorization: bool,
                                  disable_map: bool, disable_task_fusion: bool, disable_task_recycling: bool,
                                  disable_copy_elision: bool, disable_close_elision: bool, disable_switching: bool):
     program = generate_program(
@@ -103,6 +104,7 @@ def compile_spatial_ir_appliance(input_file: str, output_folder: str, param: lis
         disable_benchmarking=disable_benchmarking,
         disable_asynchronous=disable_asynchronous,
         disable_dsd=disable_dsd,
+        disable_mac_vectorization=disable_mac_vectorization,
         disable_map=disable_map,
         disable_task_fusion=disable_task_fusion,
         disable_task_recycling=disable_task_recycling,
