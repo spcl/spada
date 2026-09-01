@@ -323,10 +323,29 @@ def _try_emit_vectorized_mac(statement: spir.ForStatement, dtypes: dict[spir.Ide
         return None
     if len(statement.body) != 1 or not isinstance(statement.body[0], spir.AssignmentStatement):
         return None
-    k_var = statement.variables[0].identifier.name
-    l_var = statement.variables[1].identifier.name
+
+    # Loop-variable roles are detected from the destination index's affine decomposition rather
+    # than from statement.variables[0]/[1] position, so both declaration orders — for (k, l) and
+    # for (l, k) in [...] — are accepted: whichever variable appears alone with coefficient 1 in
+    # the destination index is the row variable (k); the other is the reduction variable (l).
+    var_names = [v.identifier.name for v in statement.variables]
+    var_by_name = {v.identifier.name: v for v in statement.variables}
+    range_by_name = dict(zip(var_names, statement.range_expression))
+
+    assign = statement.body[0]
+    dst = assign.destination
+    dst_idx = _single_index(dst)
+    if dst_idx is None:
+        return None
+    dst_aff = _affine_of(dst_idx, set(var_names))
+    row_candidates = [name for name in var_names if dst_aff == ({name: 1}, 0)]
+    if len(row_candidates) != 1:
+        return None
+    k_var = row_candidates[0]
+    l_var = next(n for n in var_names if n != k_var)
+
     try:
-        rk, rl = statement.range_expression
+        rk, rl = range_by_name[k_var], range_by_name[l_var]
         k0 = rk.start.eval() if rk.start is not None else 0
         kk = rk.stop.eval()
         ks = rk.step.eval() if rk.step is not None else 1
@@ -336,15 +355,6 @@ def _try_emit_vectorized_mac(statement: spir.ForStatement, dtypes: dict[spir.Ide
     except Exception:
         return None
     if not all(isinstance(v, int) for v in (k0, kk, ks, l0, ll, ls)) or (k0, ks, ls) != (0, 1, 1):
-        return None
-
-    assign = statement.body[0]
-    dst = assign.destination
-    dst_idx = _single_index(dst)
-    if dst_idx is None:
-        return None
-    dst_aff = _affine_of(dst_idx, {k_var})
-    if dst_aff != ({k_var: 1}, 0):
         return None
 
     src = assign.source.value
@@ -421,8 +431,8 @@ def _try_emit_vectorized_mac(statement: spir.ForStatement, dtypes: dict[spir.Ide
     header_code.write(
         f'const {dst_dsd} = @get_dsd(mem1d_dsd, .{{ .tensor_access = |__index|{{{kk}}} -> {z_name}[__index] }});\n'
         f'const {src_dsd} = @get_dsd(mem1d_dsd, .{{ .tensor_access = |__index|{{{kk}}} -> {a_name}[{base_expr}] }});\n')
-    off = f'{name_to_csl(statement.variables[1].identifier)}' + (f' * {cl}' if cl != 1 else '')
-    lname = name_to_csl(statement.variables[1].identifier)
+    off = f'{name_to_csl(var_by_name[l_var].identifier)}' + (f' * {cl}' if cl != 1 else '')
+    lname = name_to_csl(var_by_name[l_var].identifier)
     return (
         f'// [P4] vectorized MAC: {z_name}[k] += {a_name}[k*{ck}+{lname}*{cl}+{c0}] * {name_to_csl(vec_node.array)}[{x_l}]\n'
         f'for (@range(i16, {l0}, {ll}, 1)) |{lname}| {{\n'
