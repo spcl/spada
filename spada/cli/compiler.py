@@ -256,8 +256,7 @@ def cslc_arguments(program: GeneratedProgram, hardware_fabric: Optional[bool] = 
 @click.option('--generate-only', '-g', is_flag=True, help='Only generate the output files without compiling them')
 def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], offset_x: int, offset_y: int,
                        generate_only: bool, disable_benchmarking: bool,
-                       disable_asynchronous: bool, disable_dsd: bool,
-                       disable_map: bool,
+                       disable_asynchronous: bool, disable_dsd: bool, disable_map: bool,
                        disable_task_fusion: bool, disable_task_recycling: bool, disable_copy_elision: bool,
                        disable_close_elision: bool, disable_switching: bool):
     program = generate_program(
