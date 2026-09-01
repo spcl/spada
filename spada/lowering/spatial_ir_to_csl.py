@@ -54,7 +54,6 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
                             disable_benchmarking: bool = False,
                             disable_asynchronous: bool = False,
                             disable_dsd: bool = False,
-                            disable_mac_vectorization: bool = False,
                             task_fusion: bool = True,
                             copy_elision: bool = True,
                             prune_memory: bool = True,
@@ -159,7 +158,7 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
         rect_code, color_map = generate_rectangle(kernel, rect, routing_instructions, scalar_arguments, use_memcpy_mode,
                                                   stream_rects, channel_to_color, disable_benchmarking,
                                                   disable_asynchronous, disable_dsd, task_fusion,
-                                                  task_id_recycling, disable_mac_vectorization)
+                                                  task_id_recycling)
         color_maps.append(color_map)
         csl_codes.append(CodeFile(csl_name, rect_code))
 
@@ -319,8 +318,7 @@ def generate_rectangle(kernel: spir.Kernel,
                        disable_asynchronous: bool = False,
                        disable_dsd: bool = False,
                        task_fusion: bool = True,
-                       task_id_recycling: bool = True,
-                       disable_mac_vectorization: bool = False) -> tuple[str, dict[str, int]]:
+                       task_id_recycling: bool = True) -> tuple[str, dict[str, int]]:
     # Code generation carets
     header = StringIO()
     current_code = StringIO()
@@ -328,8 +326,6 @@ def generate_rectangle(kernel: spir.Kernel,
 
     if disable_dsd:
         dsd_ops.DISABLE_DSD = True
-    if disable_mac_vectorization:
-        cslstmt.DISABLE_MAC_VECTORIZATION = True
 
     header.write("""
 param memcpy_params;

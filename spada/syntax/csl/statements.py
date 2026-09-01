@@ -252,11 +252,15 @@ def emit_assignment(statement: spir.AssignmentStatement, dsds: UniqueDSDDict, dt
 
 # [P4] Targeted vectorization of the nested multiply-accumulate loop
 #   for (k, l) in [0:Kk, 0:Kl]: Z[k] = Z[k] + A[k*Ck + l*Cl + C0] * X[f(l)]
-# into the handwritten CSL idiom (strided base DSD + per-l @increment_dsd_offset + @fmacs).
-# Conservative: fires only on the exact f32 MAC shape with Z distinct from A and X;
-# anything else falls through to scalar loops. @increment_dsd_offset is available from
-# SDK 1.x (used by Cerebras' own csl-examples v1.4.0 cholesky benchmark).
-DISABLE_MAC_VECTORIZATION = False
+# (declared in either variable order) into the handwritten CSL idiom (strided base DSD + per-l
+# @increment_dsd_offset + one of @fmach/@fmachs/@fmacs, matching FMADSDOp's own f16/f32 dtype
+# dispatch). Conservative: fires only on this exact 2-level MAC shape with Z distinct from A and
+# X; anything else falls through to scalar loops. @increment_dsd_offset is available from SDK 1.x
+# (used by Cerebras' own csl-examples v1.4.0 cholesky benchmark) and its elem_type parameter is
+# documented to accept f16 as well as f32 (sdk.cerebras.ai/csl/language/dsds). Generalized
+# ND-loop / any-DSD-op vectorization (issue #69 asks 1 and 4) is out of scope here -- only the
+# loop-variable order (ask 2), dtype restriction (ask 3), and the --disable-dsd fold-in (ask 5)
+# are addressed; this pass is gated solely by dsd_ops.DISABLE_DSD, with no separate flag.
 _VEC_COUNTER = [0]
 
 
@@ -480,7 +484,7 @@ def emit_for(statement: spir.ForStatement, dsds: UniqueDSDDict, dtypes: dict[spi
     :param header_code: The header code to include.
     :return: The generated CSL for loop statement.
     """
-    if not dsd_ops.DISABLE_DSD and not DISABLE_MAC_VECTORIZATION:
+    if not dsd_ops.DISABLE_DSD:
         vectorized = _try_emit_vectorized_mac(statement, dtypes, header_code)
         if vectorized is not None:
             return vectorized

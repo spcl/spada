@@ -62,8 +62,6 @@ def codegen_options(func):
                      help='Disable benchmarking code generation (and memory overhead)'),
         click.option('--disable-asynchronous', is_flag=True, help='Disable asynchronous task code generation'),
         click.option('--disable-dsd', is_flag=True, help='Disable DSD operation detection and code generation'),
-        click.option('--disable-mac-vectorization', is_flag=True,
-                     help='Disable vectorization of nested multiply-accumulate loops into @fmac* DSD operations'),
         click.option('--disable-map', is_flag=True, help='Disable @map operation detection and code generation'),
         click.option('--disable-task-fusion', is_flag=True, help='Disable task fusion optimization'),
         click.option('--disable-task-recycling', is_flag=True, help='Disable task ID recycling'),
@@ -78,7 +76,6 @@ def codegen_options(func):
 
 def generate_program(input_file: str, output_folder: str, param: list[str] = (), offset_x: int = 0, offset_y: int = 0,
                      disable_benchmarking: bool = False, disable_asynchronous: bool = False, disable_dsd: bool = False,
-                     disable_mac_vectorization: bool = False,
                      disable_map: bool = False, disable_task_fusion: bool = False,
                      disable_task_recycling: bool = False, disable_copy_elision: bool = False,
                      disable_close_elision: bool = False, disable_switching: bool = False) -> GeneratedProgram:
@@ -141,7 +138,6 @@ def generate_program(input_file: str, output_folder: str, param: list[str] = (),
         disable_benchmarking=disable_benchmarking,
         disable_asynchronous=disable_asynchronous,
         disable_dsd=disable_dsd,
-        disable_mac_vectorization=disable_mac_vectorization,
         task_fusion=not disable_task_fusion,
         copy_elision=not disable_copy_elision,
         task_id_recycling=not disable_task_recycling,
@@ -260,7 +256,7 @@ def cslc_arguments(program: GeneratedProgram, hardware_fabric: Optional[bool] = 
 @click.option('--generate-only', '-g', is_flag=True, help='Only generate the output files without compiling them')
 def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], offset_x: int, offset_y: int,
                        generate_only: bool, disable_benchmarking: bool,
-                       disable_asynchronous: bool, disable_dsd: bool, disable_mac_vectorization: bool,
+                       disable_asynchronous: bool, disable_dsd: bool,
                        disable_map: bool,
                        disable_task_fusion: bool, disable_task_recycling: bool, disable_copy_elision: bool,
                        disable_close_elision: bool, disable_switching: bool):
@@ -273,7 +269,6 @@ def compile_spatial_ir(input_file: str, output_folder: str, param: list[str], of
         disable_benchmarking=disable_benchmarking,
         disable_asynchronous=disable_asynchronous,
         disable_dsd=disable_dsd,
-        disable_mac_vectorization=disable_mac_vectorization,
         disable_map=disable_map,
         disable_task_fusion=disable_task_fusion,
         disable_task_recycling=disable_task_recycling,

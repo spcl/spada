@@ -5,13 +5,15 @@ The lowering should turn
     for (k, l) in [0:K, 0:K]:
         z[k] = z[k] + A[k*K + l] * x[l]
 
-into a strided base DSD plus a per-column ``@increment_dsd_offset`` and ``@fmacs``,
-and must fall back to scalar loops for every shape it cannot prove safe
-(aliasing, non-affine indices, non-f32 dtypes, or the explicit disable flag).
+into a strided base DSD plus a per-column ``@increment_dsd_offset`` and one of
+``@fmach``/``@fmachs``/``@fmacs`` (dtype-dependent, mirroring FMADSDOp), and must fall back to
+scalar loops for every shape it cannot prove safe (aliasing, non-affine indices, unsupported
+dtype combinations, or ``--disable-dsd``). There is no separate disable flag for this pass: it is
+gated solely by ``dsd_ops.DISABLE_DSD``, same as every other DSD operation.
 """
 import pytest
 from spada.lowering.spatial_ir_to_csl import lower_spatial_ir_to_csl
-from spada.syntax.csl import statements as cslstmt
+from spada.syntax.csl import dsd_ops
 from spada.syntax.spatial_ir import parser, passes
 
 
@@ -70,11 +72,13 @@ def test_mac_loop_is_vectorized():
 
 
 def test_scalar_fallback_when_disabled():
+    # MAC vectorization has no dedicated disable flag -- it is folded into --disable-dsd, the
+    # same switch that disables every other DSD operation (issue #69 ask 5).
     try:
-        code = _all_code(_lower(_kernel(MAC_BODY), disable_mac_vectorization=True))
+        code = _all_code(_lower(_kernel(MAC_BODY), disable_dsd=True))
         assert '@increment_dsd_offset(' not in code
     finally:
-        cslstmt.DISABLE_MAC_VECTORIZATION = False   # module flag is sticky, reset for other tests
+        dsd_ops.DISABLE_DSD = False   # module flag is sticky, reset for other tests
 
 
 def test_no_vectorization_when_accumulator_aliases_matrix():
