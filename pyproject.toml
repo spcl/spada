@@ -47,6 +47,8 @@ Paper = "https://arxiv.org/abs/2511.09447"
 
 [project.scripts]
 sptlc = "spada.cli.compiler:compile_spatial_ir"
+sptlc-appliance = "spada.cli.appliance_compiler:compile_spatial_ir_appliance"
+spada-wse-launcher = "spada.runtime.appliance_launcher:launch"
 
 [project.optional-dependencies]
 # Standalone placement research code (spada/placement, tests/placement).

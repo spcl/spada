@@ -328,7 +328,7 @@ def generate_rectangle(kernel: spir.Kernel,
         dsd_ops.DISABLE_DSD = True
 
     header.write("""
-param memcpy_params: comptime_struct;
+param memcpy_params;
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 """)
 
