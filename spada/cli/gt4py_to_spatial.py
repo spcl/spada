@@ -5,11 +5,17 @@ from pathlib import Path
 import traceback
 from spada.syntax.gt4py import parser
 from spada.lowering import gt4py_to_stencil_ir
+from spada.lowering.parametric import PRECONDITION_PREFIX, lower_gt4py_parametric
 from spada.lowering.stencil_to_spatial import lower_stencil_to_spatial
 from spada.syntax.stencil_ir import type_inference
 
+SYMBOLIC = "symbolic"
+
+
 def parse_domain_size(domain_str):
-    """Parse domain_size string in format 'x,y,z' and return tuple of ints."""
+    """Parse domain_size string in format 'x,y,z' and return tuple of ints, or 'symbolic'."""
+    if domain_str == SYMBOLIC:
+        return SYMBOLIC
     try:
         parts = domain_str.split(',')
         if len(parts) != 3:
@@ -32,8 +38,33 @@ def validate_path(path_str, must_exist=False):
     return path
 
 
+def lower_function_parametric(function_name: str, output_dir: Path | None, gtfuncs: dict):
+    """
+    Lowers a single function to a parametric kernel with parameters I, J, K.
+
+    Writes ``{function_name}_param.sptl`` (starting with the precondition header) and the sidecar
+    ``{function_name}_param.json`` with the minimum parameter values.
+    """
+    print(f"Processing function: {function_name} (parametric)")
+
+    if function_name not in gtfuncs:
+        raise ValueError(f"Function {function_name} not found")
+
+    result = lower_gt4py_parametric(gtfuncs[function_name])
+    print(f"  Precondition: {result.precondition()[len(PRECONDITION_PREFIX):].strip()}. "
+          "Smaller sizes require a concrete lowering.")
+    if output_dir is not None:
+        output_file = output_dir / f"{function_name}_param.sptl"
+        output_file.write_text(result.as_ir())
+        (output_dir / f"{function_name}_param.json").write_text(result.sidecar() + "\n")
+        print(f"  Saved SpaDa to: {output_file}")
+
+
 def lower_function(function_name: str, domain_size: tuple[int, int, int], output_dir: Path | None, gtfuncs: dict):
     """Process a single function."""
+    if domain_size == SYMBOLIC:
+        return lower_function_parametric(function_name, output_dir, gtfuncs)
+
     print(f"Processing function: {function_name}")
     
     if function_name not in gtfuncs:
@@ -127,7 +158,8 @@ def main():
     parser.add_argument(
         "domain_size",
         type=parse_domain_size,
-        help="Domain size in format 'x,y,z' where x,y,z are integers"
+        help="Domain size in format 'x,y,z' where x,y,z are integers, or 'symbolic' for a kernel "
+             "parameterized by I, J, K"
     )
     
     parser.add_argument(
