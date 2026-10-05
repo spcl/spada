@@ -24,10 +24,10 @@ RESERVED_LOCAL_TASK_IDS = _RESERVED_LOCAL_TASK_IDS[ARCH]
 # is not in this list and takes the next free ID after the assigned slots.
 _CSL_LOCAL_TASK_IDS = {
     'wse2': list(range(8, 21)),
-    'wse3': [t for t in range(8, 26) if t not in _RESERVED_LOCAL_TASK_IDS['wse3']],
+    'wse3': list(range(8, 26)),
 }
 
-LOCAL_TASK_IDS = _CSL_LOCAL_TASK_IDS[ARCH]
+LOCAL_TASK_IDS = [t for t in _CSL_LOCAL_TASK_IDS[ARCH] if t not in RESERVED_LOCAL_TASK_IDS]
 
 _CSL_CONTROL_TASK_IDS = {
     'wse2': list(range(0, 64)),
