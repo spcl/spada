@@ -1,8 +1,5 @@
 #!/bin/sh
-# E2E: one channel carrying two epochs between the same pair of PEs, and nothing else.
-# Kernel: samples/data_task_two_epochs.sptl  params: R (repeats of the pair of epochs).
-# PE1 receives twice on channel 0, so both receives share the data task the channel binds.
-# After the run both PEs hold PE0's two keys.
+# E2E test: samples/data_task_two_epochs.sptl (params: R)
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

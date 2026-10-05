@@ -743,31 +743,23 @@ def _never_concurrent(first: str, second: str, uses_per_rect: list[dict[spir.Ide
 def assign_fabric_queues(spans: dict[str, tuple[int, int]], queue_ids: list[int], *, kind: str,
                          architecture: str, location: str,
                          exclusive_keys: frozenset[str] | None = None) -> dict[str, int]:
-    """
-    Assigns hardware fabric queues to stream groups from their occupancy spans on one PE.
+    """Assign fabric queues to stream groups based on occupancy spans.
 
-    A group is one channel (or one ``auto`` stream). It occupies a single interval from its first
-    use on this PE to its last, including gaps between epochs: wavelets of that colour can still
-    arrive in a gap, and remapping the queue onto another color while they sit there is what the
-    hardware rejects. Two groups may share a queue only when those spans do not overlap.
+    Each group spans from its first use on the PE to its last. Because incoming wavelets
+    may arrive during gaps between epochs, queues cannot be safely remapped during a gap;
+    two groups may share a queue only if their active intervals are disjoint.
 
-    Keys in ``exclusive_keys`` never share a queue, even when their spans are disjoint. That is
-    required on WSE-3 for every inbound color: the simulator remaps a queue onto the next color at
-    the first transfer, and faults if the queue is not empty. It is also required for colors that
-    bind a data task, because the hardware ID *is* the input queue.
+    Groups in ``exclusive_keys`` are assigned dedicated queues that are never shared
+    across the entire kernel. This is required on WSE-3 for inbound colors and for
+    colors binding data tasks (where the task ID is the input queue ID).
 
-    The spans form an interval graph, so colouring them in start-time order is optimal.
-
-    :param spans: Mapping of grouping key to an inclusive ``(first_use, last_use)`` statement index
-                  pair on this PE.
-    :param queue_ids: The hardware queue identifiers this direction may use, in the order they
-                      should be handed out.
-    :param kind: ``'input'`` or ``'output'``, for the diagnostic.
-    :param architecture: The target name, for the diagnostic.
-    :param location: The PE rectangle, for the diagnostic.
-    :param exclusive_keys: Groups that must each own a queue for the whole PE, typically WSE-3
-                           data-task colors.
-    :return: Mapping of grouping key to a queue identifier from ``queue_ids``.
+    :param spans: Map from stream group key to inclusive (first_use, last_use) statement indices.
+    :param queue_ids: Available hardware queue IDs.
+    :param kind: 'input' or 'output', used in diagnostics.
+    :param architecture: Target architecture name, used in diagnostics.
+    :param location: PE coordinate description, used in diagnostics.
+    :param exclusive_keys: Stream groups requiring dedicated, unshared queues.
+    :return: Map from stream group key to assigned queue ID.
     """
     if not spans:
         return {}
@@ -814,23 +806,17 @@ def assign_fabric_queues(spans: dict[str, tuple[int, int]], queue_ids: list[int]
 
 def assign_microthreads(live: dict[str, list[tuple[int, int]]], microthread_ids: list[int], *,
                         location: str) -> dict[str, int]:
-    """
-    Assigns microthreads to stream groups from the intervals they are in flight over on one PE.
+    """Assign microthreads to asynchronous transfer intervals on a PE.
 
-    A microthread is held only for the lifetime of one asynchronous operation, so unlike a fabric
-    queue it needs no proof that the hardware has drained, and it is not held across the gaps
-    between a group's transfers: two groups may take turns on one microthread as long as no transfer
-    of the one is in flight while a transfer of the other is. Callers pass the inbound and outbound
-    groups of a PE together, keyed apart by direction, because a microthread is one resource shared
-    by both directions.
+    Microthreads are occupied only while an asynchronous DSD operation is in flight.
+    Two transfers may share a microthread as long as their active intervals do not overlap.
+    Inbound and outbound groups are considered jointly because microthreads are a shared
+    resource across both transfer directions.
 
-    :param live: Mapping of grouping key to the inclusive intervals of statement indices over which
-                 its transfers are in flight, in one index space over both directions.
-    :param microthread_ids: The microthread identifiers a program may name, in the order they should
-                            be handed out.
-    :param location: The PE rectangle, for the diagnostic.
-    :return: Mapping of grouping key to a microthread identifier, empty when the target cannot name
-             microthreads and the hardware default has to stand.
+    :param live: Map from stream group key to list of inclusive (start, end) statement intervals.
+    :param microthread_ids: Available microthread IDs.
+    :param location: PE coordinate description, used in diagnostics.
+    :return: Map from stream group key to assigned microthread ID.
     """
     if not live or not microthread_ids:
         return {}

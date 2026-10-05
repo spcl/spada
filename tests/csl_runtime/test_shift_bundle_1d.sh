@@ -1,8 +1,5 @@
 #!/bin/sh
-# E2E: an overlapping eastbound interval shift on one color, and nothing else.
-# Kernel: shift_bundle_1D.sptl  params: M (sources), D (shift distance), M <= D.
-# After the shift, OUT_out[D:D+M] == inp[0:M], and every other PE keeps its own value.
-# D > M is the case with pure relays between the two halves.
+# E2E test: shift_bundle_1D.sptl (params: M, D)
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

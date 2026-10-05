@@ -1,18 +1,12 @@
 #!/bin/sh
-# E2E: shearsort on an N x N mesh, N = 2^L, N neighbour odd-even rounds as a runtime loop
-# (shearsort_2D.sptl). Each PE holds a block of K f32 keys; every comparator is a
-# compare-split, so the network sorts all N*N*K keys into snake order: even rows left to
-# right, odd rows right to left, each block still ascending.
-# Reference: flatten(OUT_a_out in snake order) == sort(a_in.reshape(n*n*k)).
-# WSE-3 only: a fully interior PE receives on four colours in one epoch, and WSE-3 binds a
-# queue to its colour for the whole kernel (six of each). WSE-2 has two input queues.
+# E2E test: shearsort_2D.sptl on WSE-3 (params: L, K)
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/_lib.sh"
 
 if [ "${WSE_ARCH:-wse2}" != "wse3" ]; then
-    echo "Skipping shearsort_2d_looped: four inbound colours live in one epoch, and wse2 has two input queues."
+    echo "Skipping shearsort_2d_looped: four inbound colors live in one epoch, and wse2 has two input queues."
     exit 0
 fi
 

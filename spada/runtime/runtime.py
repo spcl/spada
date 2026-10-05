@@ -95,11 +95,10 @@ class ProgramMetadata:
 
 
 def memcpy_data_type(dtype: np.dtype) -> "crt.MemcpyDataType":
-    """
-    Pick the transfer width for a kernel argument of ``dtype``.
+    """Return the transfer width for a kernel argument of ``dtype``.
 
-    :param dtype: The dtype the kernel declared for the argument.
-    :return: The ``MemcpyDataType`` to pass alongside the buffer.
+    :param dtype: The declared argument dtype.
+    :return: The corresponding ``MemcpyDataType``.
     """
     if dtype.itemsize == 4:
         return crt.MemcpyDataType.MEMCPY_32BIT
@@ -110,28 +109,24 @@ def memcpy_data_type(dtype: np.dtype) -> "crt.MemcpyDataType":
 
 
 def memcpy_word_dtype(dtype: np.dtype) -> np.dtype:
-    """
-    Give the host-buffer dtype for a kernel argument of ``dtype``, one element per 32-bit word.
+    """Return the host buffer dtype for a kernel argument of ``dtype``, aligned to 32-bit words.
 
-    ``memcpy_h2d`` and ``memcpy_d2h`` reject a buffer whose elements are not 32 bits ("Internal
-    data type of any memcpy_d2h() or memcpy_h2d() operation should be 32 bit") even when the
-    device-side array is 16-bit: ``MEMCPY_16BIT`` means only the low half of each word travels.
+    Cerebras SDK memcpy operations require 32-bit word alignment on the host even for 16-bit
+    transfers (MEMCPY_16BIT transfers the lower 16 bits of each 32-bit word).
 
-    :param dtype: The dtype the kernel declared for the argument.
-    :return: ``dtype`` itself when it is already 32 bits wide, else a 32-bit word dtype.
+    :param dtype: The declared argument dtype.
+    :return: The original dtype if 32 bits wide, otherwise uint32.
     """
     return dtype if dtype.itemsize == 4 else np.dtype(np.uint32)
 
 
 def as_memcpy_words(data: np.ndarray) -> np.ndarray:
-    """
-    Widen a 16-bit array into the 32-bit words ``memcpy_h2d`` expects.
+    """Widen a 16-bit array into 32-bit words expected by host memcpy.
 
-    The widening is bit-for-bit rather than by value, so that a negative ``i16`` and an ``f16``
-    both arrive on the device unchanged.
+    16-bit values are bitcast without sign extension to preserve exact binary representations.
 
-    :param data: A contiguous array in the dtype the kernel declared.
-    :return: ``data`` itself when it is already 32 bits wide, else a widened copy.
+    :param data: Contiguous input array.
+    :return: The array itself if 32 bits wide, otherwise a widened copy.
     """
     if data.dtype.itemsize == 4:
         return data
@@ -139,12 +134,11 @@ def as_memcpy_words(data: np.ndarray) -> np.ndarray:
 
 
 def from_memcpy_words(words: np.ndarray, dtype: np.dtype) -> np.ndarray:
-    """
-    Undo :func:`as_memcpy_words` for data copied back from the device.
+    """Narrow 32-bit memcpy words back to the target output dtype.
 
-    :param words: The buffer ``memcpy_d2h`` filled.
-    :param dtype: The dtype the kernel declared for the output.
-    :return: ``words`` reinterpreted in ``dtype``, keeping the shape.
+    :param words: Buffer populated by ``memcpy_d2h``.
+    :param dtype: Target output dtype.
+    :return: Array reinterpreted in ``dtype``.
     """
     if dtype.itemsize == 4:
         return words
@@ -345,8 +339,7 @@ class Program:
         cmaddr = cm_addr or os.environ.get("CM_ADDR", None)
         self.simulator = cmaddr is None
         print("SIMULATOR?", self.simulator)
-        # Fabric traces are large, so they are only written when asked for: they are what tells a
-        # stalled or faulting simulator run apart, per tile and per color.
+        # Enable fabric tracing when SPADA_SIMFAB_TRACE is set (useful for debugging simulator stalls).
         trace = os.environ.get("SPADA_SIMFAB_TRACE") is not None
         self.runtime = crt.SdkRuntime(str(self.out_folder), suppress_simfab_trace=not trace,
                                       cmaddr=cmaddr)

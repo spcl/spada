@@ -970,14 +970,12 @@ def _collect_unique_dsds(
 
                 array_candidates[place_statement.field_name.as_ir()] = (place_statement, place_statement.dtype.shape)
 
-    # Find used DSDs in compute block
-    # Streams that share a channel share a color, and a color binds to exactly one fabric queue per
-    # PE -- the hardware rejects "two master input queues for the same color". Queues are therefore
-    # handed out per channel; streams on ``auto`` channels get a color to themselves, so they key on
-    # their own name. Sequential channels may share a queue only when their occupancy spans on this
-    # PE do not overlap; see ``stream_lifetime.assign_fabric_queues``. On WSE-3 every inbound color
-    # keeps its own queue: remapping one that still holds wavelets is a fatal error, and a data-task
-    # ID is that queue.
+    # Find used DSDs in compute block.
+    # Streams sharing a channel share a hardware color. A color binds to at most one fabric queue
+    # per PE. Queues are assigned per channel; streams with auto channels receive unique colors.
+    # Channels may share queues across disjoint occupancy intervals (see assign_fabric_queues).
+    # On WSE-3, inbound colors receive dedicated queues because data task IDs correspond directly
+    # to fabric input queue IDs.
     channel_of_stream = {
         declaration.stream_name.as_ir(): declaration.stream.routing.resolved_channel
         for declaration in rect.dataflow.statements
@@ -992,10 +990,7 @@ def _collect_unique_dsds(
     output_names = fabric_occupancy.streams_with_fabric_dsds(rect.compute, memcpy_mode, stream_args, inbound=False)
     input_spans = fabric_occupancy.queue_spans(rect.compute, input_names, queue_key, inbound=True)
     output_spans = fabric_occupancy.queue_spans(rect.compute, output_names, queue_key, inbound=False)
-    # WSE-3 remaps a fabric queue onto the next color at the first transfer that uses it, and
-    # faults or stalls if the queue still holds wavelets. Occupancy in the compute block is not
-    # enough to prove it is empty, so every color keeps its own queue. That also keeps data-task
-    # IDs unique, since those IDs *are* the input queues.
+    # On WSE-3, inbound and outbound colors are given dedicated queues to avoid runtime remapping.
     exclusive = frozenset(input_spans) if csl.ARCH == 'wse3' else frozenset()
     exclusive_out = frozenset(output_spans) if csl.ARCH == 'wse3' else frozenset()
     input_queue_of = stream_lifetime.assign_fabric_queues(
@@ -1006,11 +1001,9 @@ def _collect_unique_dsds(
         output_spans, csl.OUTPUT_QUEUE_IDS,
         kind='output', architecture=csl.ARCH, location=location,
         exclusive_keys=exclusive_out)
-    # An asynchronous transfer runs on a microthread, and by default that is the queue ID of the
-    # operation's highest-priority fabric operand. Since the two directions draw from overlapping
-    # pools on WSE-3, a receive on input queue N and a send on output queue N would take the same
-    # microthread and abort with "trying to term ut_instr[N], but it's not ours". Microthreads are
-    # one resource across both directions, so they are handed out together.
+    # By default, an asynchronous DSD operation uses the queue ID of its highest-priority fabric
+    # operand as its microthread ID. On WSE-3, input and output queue IDs overlap, so microthreads
+    # are assigned explicitly to prevent collisions between concurrent sends and receives.
     microthread_of = stream_lifetime.assign_microthreads(
         fabric_occupancy.microthread_intervals(rect.compute, input_names, output_names, queue_key),
         csl.MICROTHREAD_IDS, location=location)

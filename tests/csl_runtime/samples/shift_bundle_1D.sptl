@@ -1,15 +1,10 @@
 /**
- * An overlapping 1D interval shift, and nothing else.
+ * Shift values from PEs [0:M) to PEs [D:D+M) on a single channel.
  *
- * D + M PEs on a line. Sources [0:M) each send one f32 to the PE D steps east, which
- * overwrites its own value with it. Sources keep theirs. M <= D, so no PE is both a
- * source and a destination.
- *
- * The paths overlap: source i's word passes through the routers of sources i+1 .. M-1.
- * A color holds one (rx, tx) pair at a time, so the sources take turns -- nearest the
- * destinations first, each handing its router over to relay mode once its own word is
- * out. The destinations are statically routed and pick their word out of the stream
- * with a counter filter. All of it on one color.
+ * Sources [0:M) each send one value to destination PEs [D:D+M) at offset D.
+ * The paths overlap along intermediate routers. To share a single channel:
+ *   - Sources transmit in reverse order (nearest destination first), then switch to relay.
+ *   - Destinations stay in relay mode and use hardware counter filters to pick their value.
  *
  * Constraints: 2 <= M <= D.
  **/

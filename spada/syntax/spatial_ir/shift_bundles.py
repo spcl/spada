@@ -1,24 +1,17 @@
-"""
-Overlapping 1D interval shifts on one color.
+"""1D interval shift bundling for multiplexing overlapping communication paths onto one color.
 
-A run of consecutive PEs each shifting the same distance ``d`` along an axis has overlapping paths:
-the router of source ``p + 1`` carries source ``p``'s words. One color per direction still suffices,
-because the routers can be time-multiplexed -- but only if every switch is triggered by something
-the PE that owns it knows locally, since a control wavelet advances *every* switch-configured router
-it reaches (see ``irspec/docs/spatial/routing_wse.md``).
+When consecutive PEs execute a uniform relative shift along an axis (e.g., each PE
+in [0:M) sending to PE i + d), their transmission paths overlap across intermediate routers.
+This pattern can be multiplexed onto a single fabric channel using hardware switch advances
+and destination counter filters:
 
-Send order is what provides that. The sources go nearest-the-destinations first, so a source's
-router changes from injecting to relaying exactly when that source has finished its own send, which
-it can signal itself with one switch-advance wavelet. Nothing needs to be told from a distance, and
-the order enforces itself: a source further from the destinations cannot push a word through its
-neighbour's router while that neighbour is still injecting, so it waits on the link.
-
-The destinations do not switch at all. Each transmits to its ramp *and* onward, so all of them see
-the whole stream and a counter filter decides which words each one keeps; the last one transmits to
-its ramp alone and thereby takes the stream out of the network.
-
-This is the arrangement Schnyder's 2D reduce-scatter uses ("Distributed Sorting on the Cerebras
-Wafer-Scale Engine", fig. 7.6).
+1. Sources transmit in descending order of distance to destinations (nearest destination first).
+   Link-level backpressure naturally serializes transfers without software coordination.
+2. After transmitting its elements, each source router locally advances from injection mode
+   to relay mode.
+3. Destination routers statically forward wavelets to both the local ramp and downstream neighbors
+   (or to the ramp only for the final destination). Hardware counter filters at each destination
+   select the designated slice of data.
 """
 from __future__ import annotations
 
@@ -151,19 +144,14 @@ def _consecutive_runs(values: set[int]) -> list[tuple[int, int]]:
 
 
 def detect_shift_bundles(rectangles: list[Rectangle[PEBlock]]) -> list[ShiftBundle]:
-    """
-    Finds the interval shifts in a kernel whose paths overlap, and which therefore need bundling.
+    """Detect interval shifts with overlapping router paths suitable for bundling.
 
-    Sources are collected per channel and shift, across rectangles: one logical shift is often
-    declared by several compute blocks -- a sorting network's matchings at successive offsets, for
-    instance -- and only their union shows which PEs form a consecutive run.
+    Collects sources across PE blocks. A shift qualifies for bundling if all
+    decomposed contiguous segments contain at least two sources and do not exceed
+    the shift distance, ensuring source and destination intervals remain disjoint.
 
-    A shift is bundled only if *every* run it decomposes into can be: at least two sources, and no
-    longer than the shift distance, so that sources and destinations stay disjoint. A shift that
-    fails this is left to the ordinary per-hop lowering, which reports the conflict if there is one.
-
-    :param rectangles: The consolidated PE rectangles of the kernel, with channels already resolved.
-    :return: The bundles, in a deterministic order.
+    :param rectangles: Consolidated PE blocks of the kernel with resolved channels.
+    :return: A list of detected ShiftBundle descriptors.
     """
     # (channel, axis, signed distance, cross-axis range) -> (source coordinates, words, group)
     groups: dict[tuple[int, str, int, tuple[int, int, int]], tuple[set[int], int, str]] = {}

@@ -1,12 +1,5 @@
 #!/bin/sh
-# E2E: odd-even transposition sort on 2^L PEs, N rounds as a runtime loop
-# (odd_even_sort_1D_looped.sptl). Each PE holds a block of K f32 keys; every comparator is a
-# compare-split, so the network sorts all 2^L * K keys and PE i ends up with keys i*K .. i*K + K-1
-# of the sorted sequence. Reference: OUT_a_out.reshape(n*k) == sort(a_in.reshape(n*k)).
-# Runs on WSE-2 and WSE-3: four channels, one per (round parity, direction), so no
-# router ever switches. L = 1 is two PEs and a single even round; L = 3 is eight PEs
-# and exercises every role (ends and both interior parities). K = 1 is the one-key-per-PE
-# network; K = 4 is not a power of two, which is what the K-element merge has to be independent of.
+# E2E test: odd_even_sort_1D_looped.sptl (params: L, K)
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

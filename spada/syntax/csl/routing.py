@@ -67,23 +67,18 @@ class RouteConfig:
 
 @dataclass(frozen=True)
 class FilterConfig:
-    """
-    A counter filter: which of the wavelets passing a router are handed to its compute element.
+    """Hardware counter filter configuration for a router color.
 
-    The router keeps a counter per filter. It starts at ``init_counter``, advances on every wavelet
-    the filter counts, and wraps to zero after ``limit1``, so it cycles through ``limit1 + 1``
-    values. A wavelet is delivered iff the counter is at most ``max_counter``, and *withheld*
-    otherwise -- withheld is not the same as consumed: the wavelet carries on along the router's
-    ``tx`` directions, so PEs further along still see it. Only a router that transmits to the ramp
-    alone drops what it withholds, which is what takes a wavelet out of the network.
-    (Measured on the simulator. The manual describes
-    ``max_counter`` as exclusive, but a wavelet arriving at ``counter == max_counter`` is delivered.)
+    A counter filter monitors incoming data wavelets on a color. The counter starts at
+    ``init_counter``, increments on each counted wavelet, and wraps to zero after reaching
+    ``limit1``. A wavelet is delivered to the local compute element (RAMP) when
+    ``counter <= max_counter``; otherwise, it is forwarded along the router's transmit
+    directions without delivery.
 
-    The fields are expression strings rather than integers because a filter's window generally
-    depends on where the PE sits: a shift bundle's receivers share one ``@set_color_config`` whose
-    ``init_counter`` is a function of ``pe_x``.
-
-    A PE can hold only ``constants.FILTERS_PER_PE`` of these across all of its colors.
+    Attributes:
+        init_counter: Expression string for the initial counter value.
+        limit1: Expression string for the counter wrap limit.
+        max_counter: Expression string for the maximum inclusive delivery threshold.
     """
     init_counter: str
     limit1: str
@@ -129,7 +124,7 @@ def expand_positions(configs: list[RouteConfig], ring: bool = False) -> tuple[li
     ``constants.SWITCH_POSITION_ALLOWS_BOTH``) keep the transition as a single position.
 
     The intermediate keeps the *old* input direction, so a switch-advance wavelet arriving from the
-    same neighbour as before is still accepted once the router has taken the intermediate position;
+    same neighbor as before is still accepted once the router has taken the intermediate position;
     the second wavelet would never reach the router otherwise.
 
     :param configs: The logical configurations, in the order the router takes them.
@@ -397,16 +392,18 @@ def _bundle_ports(bundle: shift_bundles.ShiftBundle) -> tuple[str, str]:
 
 
 def _window_start(variable: str, first: int, step: int, words: int) -> str:
-    """
-    Returns the counter value a destination's filter starts at, as an expression in the loop variable.
+    """Compute the initial counter value for a destination filter as an affine expression.
 
-    Every destination sees the whole stream, in one order, so which words a destination keeps is
-    decided by where it sits: the ``p``-th destination along the direction of travel keeps the block
-    the ``p``-th-from-last source sent, which begins ``(p + 1) * words`` short of the end of the
-    cycle. Starting the counter there brings it to zero just as that block arrives.
+    Each destination observes the aggregated stream. The p-th destination along the travel
+    direction receives the block from the p-th from last source, starting (p + 1) * words
+    before the end of the count cycle. Initializing the counter at this offset aligns the zero
+    point with the arrival of the destination's block.
 
-    :param first: The coordinate of the destination the stream reaches first, where ``p`` is zero.
-    :param step: ``+1`` or ``-1``, the direction the coordinate grows in as ``p`` grows.
+    :param variable: Coordinate variable ('pe_x' or 'pe_y').
+    :param first: Coordinate of the first destination reached by the stream.
+    :param step: Direction of coordinate progression (+1 or -1).
+    :param words: Word count per source transfer.
+    :return: Expression string for init_counter.
     """
     offset = 1 - first if step > 0 else first + 1
     if step > 0:
@@ -420,21 +417,19 @@ def _window_start(variable: str, first: int, step: int, words: int) -> str:
 
 def _bundle_route_entries(bundle: shift_bundles.ShiftBundle, color: int, order: tuple[int, int, int],
                           rect_index: int, stream_name: spir.Identifier) -> list[tuple['_RouteSite', '_RouteEntry']]:
-    """
-    Returns the route configurations of one shift bundle, replacing the per-hop ones.
+    """Generate route configurations for a shift bundle.
 
-    Four kinds of router take part, and none of them is a compute rectangle shifted as a whole -- the
-    relays in between are as many as the shift distance minus the run length, which is neither half's
-    width -- so every site here is a standalone one.
+    Sources configure an initial injection route followed by a relay switch position.
+    Intermediate PEs configure plain relay routes. Destinations configure static duplicate
+    routes (RAMP and forward) with associated counter filter configurations, while the
+    final destination configures a terminal RAMP route.
 
-    The sources all get the same pair of configurations, injecting and then relaying, including the
-    one furthest from the destinations which has nothing to relay for. Giving it a switch position it
-    never uses costs nothing and keeps one ``@set_color_config`` for the whole run; its own
-    switch-advance wavelet moves it into a configuration that never carries anything, and the
-    wavelets of the sources behind it pass routers already sitting on their last position, which is a
-    no-op.
-
-    :param order: The switch-position order key of the send that this bundle carries.
+    :param bundle: The shift bundle descriptor.
+    :param color: The hardware color assigned to this bundle.
+    :param order: Total ordering key for switch position resolution.
+    :param rect_index: Source PE rectangle index.
+    :param stream_name: Spatial IR stream identifier.
+    :return: List of (site, entry) pairs for layout emission.
     """
     incoming, outgoing = _bundle_ports(bundle)
     variable = 'pe_x' if bundle.axis == 'x' else 'pe_y'

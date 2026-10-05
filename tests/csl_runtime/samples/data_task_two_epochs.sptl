@@ -1,12 +1,12 @@
 /**
- * One channel, two epochs, and nothing else.
+ * Reusing a channel and its data task across two phases.
  *
- * PE0 sends a word to PE1 in one phase and another word in the next, both on channel 0.
- * The channel is a reusable resource, so this is legal -- but PE1 receives twice on it, and
- * the data task a channel binds is the color itself. The two receives therefore have to
- * share one hardware task and take turns, which is what this sample exercises.
+ * PE 0 sends to PE 1 in phase 1, and again in phase 2, both on channel 0.
+ * PE 1 receives in both phases on channel 0. In CSL, each data task binds to
+ * a hardware color/queue, so the two receives share a single data task slot
+ * driven by an alternating state variable.
  *
- * Constraints: R >= 1 (repeats the pair of epochs R times).
+ * Constraints: R >= 1 (repeats the two-phase sequence R times).
  **/
 kernel @data_task_two_epochs<R>(
     stream<f32, 2>[2, 1] readonly  inp,

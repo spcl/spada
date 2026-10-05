@@ -363,7 +363,7 @@ def plan_task_bindings(
 
     When recycling is needed, all tasks are colored together using
     load-balanced greedy coloring in degeneracy order, distributing tasks
-    evenly across hardware slots to minimise dispatcher state machine size.
+    evenly across hardware slots to minimize dispatcher state machine size.
 
     :param data_task_colors: The color each data task listens on, keyed by task
                              index. Data tasks are grouped by it unconditionally;
@@ -381,21 +381,19 @@ def plan_data_task_slots(
     tasks: list[tdag.CSLTask],
     data_task_colors: dict[int, int],
 ) -> tuple[tuple[DataTaskSlot, ...], dict[int, int], dict[int, int]]:
-    """Group the data tasks by the color they listen on.
+    """Group logical data tasks by the hardware color they receive on.
 
-    Sharing a color is sound only if the receives take it in turns, which is the
-    same criterion local slots use: every trigger source of the later task must
-    be reachable from the earlier one. That much orders the *installation* of the
-    later branch, but not the arrival of its wavelets, which the fabric may
-    deliver while the earlier branch is still installed. Codegen closes that gap
-    by having each branch of a recycled slot ``@block`` its own color once its
-    last wavelet has arrived, so wavelets of the next epoch wait in the queue
-    until their branch is installed and unblocked.
+    Multiple data tasks may share a hardware color slot sequentially if every
+    trigger source of a subsequent task is reachable from the preceding task in
+    the task dependency graph. To prevent incoming wavelets of a subsequent epoch
+    from being processed prematurely, each branch in a shared slot blocks its
+    associated color upon receiving its final expected wavelet. The color is
+    subsequently unblocked when the corresponding logical task is activated.
 
-    :param data_task_colors: The color each data task listens on, keyed by task index.
-    :return: ``(slots, task_to_slot, task_to_state)``, the last two mapping a task
-             index to its slot number and to its state within that slot.
-    :raises SyntaxError: If two data tasks share a color without being ordered.
+    :param tasks: List of CSL tasks for a PE.
+    :param data_task_colors: Map from data task index to hardware color.
+    :return: A tuple of (slots, task_to_slot, task_to_state).
+    :raises SyntaxError: If unordered data tasks share a color.
     """
     by_color: dict[int, list[int]] = {}
     for task_index, task in enumerate(tasks):

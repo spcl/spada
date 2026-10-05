@@ -1,9 +1,5 @@
 #!/bin/sh
-# E2E: two opposite shift bundles per phase, one color each, repeated R times.
-# Kernel: exchange_bundle_1D.sptl  params: M (pairs), D (distance), R (repeats), M <= D.
-# The PEs in [0:M) and [D:D+M) swap pairwise once per repeat, so after an odd R
-# OUT_out[i] == inp[i + D] and OUT_out[i + D] == inp[i], and after an even R nothing moved.
-# R also sets how many wavelet filters each PE needs, which is what caps it at three.
+# E2E test: exchange_bundle_1D.sptl (params: M, D, R)
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

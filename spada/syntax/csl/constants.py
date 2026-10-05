@@ -48,29 +48,25 @@ _MEMCPY_COLORS = {
 }
 MEMCPY_COLORS = _MEMCPY_COLORS[ARCH]
 
-# See https://sdk.cerebras.net/csl/language/dsds#fabric-queues
+# Fabric queue IDs available for application communication.
+# See https://sdk.cerebras.ai/csl/language/dsds#fabric-queues
 _INPUT_QUEUE_IDS = {
-    'wse2': list(range(0, 2)),  # Ignoring 2-7 as they are smaller in capacity
-    # On WSE-3 a data task's ID *is* its input queue, and memcpy takes 0 and 1 for its own; binding
-    # either of them with ``@initialize_queue`` is rejected as "already been set".
-    'wse3': list(range(2, 8)),
+    'wse2': list(range(0, 2)),  # Queues 0-1 provide full capacity on WSE-2
+    'wse3': list(range(2, 8)),  # Queues 2-7; queues 0-1 are reserved by memcpy
 }
 INPUT_QUEUE_IDS = _INPUT_QUEUE_IDS[ARCH]
 
 _OUTPUT_QUEUE_IDS = {
-    'wse2': list(range(2, 4)),  # Ignoring 0-1,4-5 as they are smaller in capacity
-    'wse3': list(range(2, 8)),  # All queues are equivalent, but memcpy reserves 0 and 1
+    'wse2': list(range(2, 4)),  # Queues 2-3 provide full capacity on WSE-2
+    'wse3': list(range(2, 8)),  # Queues 2-7; queues 0-1 are reserved by memcpy
 }
 OUTPUT_QUEUE_IDS = _OUTPUT_QUEUE_IDS[ARCH]
 
-# Microthreads that drive in-flight asynchronous DSD operations. Two operations may never run on
-# one microthread at the same time. WSE-2 has no say in the matter: the ID is the queue ID of the
-# operation's highest-priority fabric operand, which is why its input and output pools above are
-# disjoint. WSE-3 keeps that default but lets ``.ut_id`` override it, which it must, since a PE
-# there needs an input and an output queue of the same number at once (see
-# https://sdk.cerebras.net/csl/language/microthreads_wse3). An empty list means the target cannot
-# name microthreads, so the default stands. Queues 0 and 1 belong to memcpy on WSE-3, and so do the
-# microthreads it drives them with.
+# Hardware microthread IDs for asynchronous DSD operations.
+# On WSE-2, the microthread ID is implicitly tied to the queue ID of the highest-priority
+# fabric operand. On WSE-3, microthreads 2-7 can be explicitly assigned via the `.ut_id`
+# DSD field (queues 0-1 and their corresponding microthreads are reserved by memcpy).
+# See https://sdk.cerebras.ai/csl/language/microthreads_wse3
 _MICROTHREAD_IDS = {
     'wse2': [],
     'wse3': list(range(2, 8)),
@@ -88,16 +84,10 @@ HARDWARE_FABRIC_DIMS = _HARDWARE_FABRIC_DIMS[ARCH]
 # See https://sdk.cerebras.ai/csl/language/builtins#switching-configuration-semantics
 SWITCH_POSITIONS = 4
 
-# Number of switching command slots a control wavelet carries (``<control>``'s MAX_CMDS).
-#
-# NOTE: only slot 0 is ever executed. Measured on the simulator, every switch-configured router a
-# wavelet reaches applies the command in slot 0; slots 1-7 had no effect in any topology tested
-# (the sender's own router, one hop, two hops through a plain relay, and two switch-configured
-# routers in sequence). A wavelet therefore cannot advance one router while skipping another on its
-# path, which is why ``routing.plan_switch_advances`` requires the routers along a path to agree.
-# ``<control>``'s ``encode_payload`` also loops over all eight slots regardless of the array length
-# it is given, so it must be passed exactly eight; ``encode_single_payload`` writes slot 0 only and
-# is what the compiler emits.
+# Number of switching command slots in a CSL control wavelet (<control>'s MAX_CMDS).
+# Hardware routers execute command slot 0 across all traversed switch-configured routers;
+# remaining slots are ignored. Control messages therefore advance all routers along their
+# path uniformly, using encode_single_payload.
 MAX_CONTROL_COMMANDS = 8
 
 # Colors whose routers support switches. WSE-3 only implements switches on a subset of colors.
@@ -113,10 +103,9 @@ SWITCHABLE_COLORS = [color for color in _SWITCHABLE_COLORS[ARCH] if color in COL
 _SWITCH_POSITION_ALLOWS_BOTH = {'wse2': False, 'wse3': True}
 SWITCH_POSITION_ALLOWS_BOTH = _SWITCH_POSITION_ALLOWS_BOTH[ARCH]
 
-# Router filters usable per PE, over all colors. The hardware has four, but the memcpy module
-# reserves one, so a program may configure three (Schnyder, "Distributed Sorting on the Cerebras
-# Wafer-Scale Engine", ch. 7).
-#
-# NOTE: a filter must not be reconfigured while wavelets it counts are still in flight. Filters are
-# therefore set once in the layout and never rewritten between phases.
+# Maximum hardware counter filters configurable per PE across all colors.
+# While the hardware provides four filters per PE, the memcpy runtime module reserves one,
+# leaving three available for application routing.
+# Hardware filters cannot be safely reconfigured while traffic is active, so they are
+# initialized at layout time.
 FILTERS_PER_PE = 3

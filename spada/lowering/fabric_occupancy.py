@@ -1,9 +1,7 @@
-"""
-Occupancy of fabric transfers on one processing element.
+"""Analysis of fabric transfer occupancy on a single processing element.
 
-``_collect_unique_dsds`` uses these spans to decide which transfers may share a fabric queue or a
-microthread. A sequential ``for`` body is counted twice, so a color that returns on the next
-iteration overlaps whatever sits between its two uses and keeps its own queue.
+Provides utilities to compute transfer order, queue occupancy spans, and
+microthread concurrency intervals used during CSL queue and microthread allocation.
 """
 
 from typing import Optional
@@ -16,20 +14,16 @@ from spada.syntax.spatial_ir import stream_lifetime
 def statement_transfer_points(
     statement: spir.Statement, names: set[spir.Identifier], inbound: bool
 ) -> list[spir.Identifier]:
-    """
-    Fabric transfers in ``statement``, in source order, with sequential ``for`` bodies repeated.
+    """Collect fabric transfers in ``statement`` in source order, duplicating sequential ``for`` bodies.
 
-    Walking a loop body once makes its colours look sequential, so occupancy pooling would give
-    them one queue. The next iteration of an earlier colour can already occupy the router when a
-    later colour of the same body remaps that queue -- WSE-2 then aborts with "Attempt to remap
-    input queue N, from C_i to C_j, but the router is holding wavelets". Appending the body a
-    second time makes a colour used on both sides of another occupy a span that overlaps it, the
-    same rule that keeps a reused colour's queue across a gap between unrolled phases.
+    Repeating loop bodies captures loop-carried reuse in occupancy intervals, ensuring that
+    a color used across iterations cannot be prematurely remapped to another queue while
+    in-flight wavelets remain.
 
     :param statement: The statement to walk.
     :param names: Streams that bind a fabric queue in this direction.
     :param inbound: True to collect receives, False to collect sends.
-    :return: The transferred streams, with each ``for`` body listed twice.
+    :return: Transferred stream identifiers with each ``for`` body duplicated.
     """
     if isinstance(statement, spir.ForStatement):
         body = transfer_points(statement.body, names, inbound)
@@ -72,19 +66,13 @@ def transfer_points(
 def queue_spans(
     compute: spir.ComputeBlock, names: set[spir.Identifier], queue_key, inbound: bool
 ) -> dict[str, tuple[int, int]]:
-    """
-    Occupancy of each queue key along the linearized send/receive order of this PE.
-
-    Sequential ``for`` bodies are counted twice so a colour that comes back on the next iteration
-    keeps its queue across the loop-carried gap; see ``statement_transfer_points``. Uses of the
-    same channel still collapse to one span, so a colour that comes back after a gap between
-    unrolled phases keeps its queue for the whole of that span.
+    """Compute the occupancy span (first_use, last_use) of each queue key along the transfer order.
 
     :param compute: The compute block being lowered.
-    :param names: Streams that actually bind a fabric queue in this direction.
-    :param queue_key: Maps a stream identifier to its grouping key (channel, or the name itself).
-    :param inbound: True to walk receives, False to walk sends.
-    :return: Mapping of grouping key to ``(first_use, last_use)`` in linearized order.
+    :param names: Streams that bind a fabric queue in this direction.
+    :param queue_key: Function mapping a stream identifier to its grouping key.
+    :param inbound: True to inspect receives, False for sends.
+    :return: Map from grouping key to inclusive ``(first_use, last_use)`` indices.
     """
     points = transfer_points(compute.statements, names, inbound)
 

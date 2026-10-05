@@ -1,17 +1,15 @@
 /**
- * Two overlapping 1D interval shifts, in opposite directions, repeated R times.
+ * Repeated pairwise exchange between two blocks of PEs.
  *
- * D + M PEs on a line. The PEs in [0:M) and those in [D:D+M) swap values pairwise: PE i
- * trades with PE i + D. Each direction is a shift bundle of its own on a color of its own,
- * so one exchange costs two colors however many pairs there are. M <= D, so the two halves
- * are disjoint.
+ * Given D + M PEs on a line, PEs [0:M) swap values with PEs [D:D+M) (PE i swaps
+ * with PE i + D). The exchange repeats over R phases.
  *
- * This is the skeleton of a sorting network's phase (see the bundled Batcher), reduced to
- * one operation: every PE is a source on one color and a filtered destination on the other.
- * R repeats it in R phases, none of which shares a color with another, so every PE ends up
- * with R wavelet filters and R is what the per-PE filter budget limits.
+ * Each phase uses two channels (one east, one west) bundled with counter filters
+ * at the receivers. Because hardware filters cannot be reconfigured during a run,
+ * each repeat consumes one filter per PE, limiting R to the per-PE filter limit
+ * (R <= 3 on WSE-2 and WSE-3).
  *
- * Constraints: 2 <= M <= D, R >= 1.
+ * Constraints: 2 <= M <= D, 1 <= R <= 3.
  **/
 kernel @exchange_bundle_1d<M, D, R>(
     stream<f32, 1>[D + M, 1] readonly  inp,

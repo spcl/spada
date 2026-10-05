@@ -243,7 +243,7 @@ kernel @blockcopy<K> (stream<f32, K>[1, 1] readonly src,
 def test_wse3_concurrent_transfers_use_distinct_microthreads():
     """Two transfers in flight at once may not share a microthread.
 
-    A laplacian PE receives from one neighbour and forwards to another in the same task. On WSE-3
+    A laplacian PE receives from one neighbor and forwards to another in the same task. On WSE-3
     the input and output queue pools both start at 2, so leaving the microthread at its default --
     the queue ID of the highest-priority fabric operand -- put both on microthread 2 and aborted the
     simulation with ``trying to term ut_instr[2], but it's not ours``.

@@ -1,12 +1,5 @@
 #!/bin/sh
-# E2E test: distributed sparse GEMV y = alpha * A * x + beta * y.
-# Grid PX × PY; each PE holds a padded COO block of A with bound NZ.
-# Phase 1: load COO A; Phase 2: load x (j=0) and y (i=0); Phase 3: broadcast x in Y;
-# Phase 4: local COO SpMV; Phase 5: pipelined chain reduce z in X,
-#   root applies alpha*z + beta*y and outputs result.
-# Reference: OUT_out.npy[0, j, :] == (alpha * A_full @ x_flat + beta * y_flat)[j*K:(j+1)*K]
-# Tested with (PX, PY) ∈ {(2,2), (2,3), (3,2), (3,4)}, K=2, NZ=K*K,
-# and a sparser case (2,2) with NZ=2 < K*K and explicit zero padding.
+# E2E test: spmv.sptl (params: PX, PY, K, NZ)
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

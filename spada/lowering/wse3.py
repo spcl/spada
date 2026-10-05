@@ -176,9 +176,8 @@ def data_task_id_builtin(
 ) -> str:
     """Return the ``@get_data_task_id(...)`` expression for ``slot``.
 
-    WSE-2 constructs a data-task ID from the color the receive listens on.
-    WSE-3 constructs it from the input queue already bound to that color;
-    passing the color is rejected as ``expected 'input_queue' expression, got: 'color'``.
+    On WSE-2, data task IDs are constructed from the color.
+    On WSE-3, data task IDs are constructed from the bound input queue.
 
     :param rect: The PE block being generated.
     :param slot: The data-task slot, whose color is the receive's fabric color.

@@ -479,7 +479,7 @@ def _fabin_queues(code: str) -> dict[str, str]:
 
 def test_odd_even_sort_looped_interior_keeps_distinct_input_queues():
     """
-    Even-round east and odd-round west are both inbound on an odd interior PE. The west neighbour
+    Even-round east and odd-round west are both inbound on an odd interior PE. The west neighbor
     can inject the next even-round block on C0 while this PE is already receiving the odd-round
     one on C3. Sharing input queue 0 is what the WSE-2 simulator rejects as remapping C0 onto C3
     while the router still holds wavelets (L=2 K=16).
@@ -491,13 +491,13 @@ def test_odd_even_sort_looped_interior_keeps_distinct_input_queues():
     assert len(set(odd_interior.values())) == 2, odd_interior
     assert len(even_interior) == 2, even_interior
     assert len(set(even_interior.values())) == 2, even_interior
-    # Endpoints have one inbound colour and do not need a second queue.
+    # Endpoints have one inbound color and do not need a second queue.
     assert len(_fabin_queues(files['code_0_0.csl'])) == 1
     assert len(_fabin_queues(files['code_3_0.csl'])) == 1
 
 
 ###
-# shearsort_2D_looped: (RC)^L R neighbour rounds as runtime loops on eight static channels
+# shearsort_2D_looped: (RC)^L R neighbor rounds as runtime loops on eight static channels
 ###
 
 _SHEARSORT_LOOPED = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial',
@@ -533,7 +533,7 @@ def test_shearsort_looped_uses_eight_static_channels():
 
     interior = files['code_2_2.csl']
     assert 'for (@range(i32, 0, 2, 1))' in interior, interior
-    # Four outbound colours (even-row east, odd-row west, even-column south, odd-column north)
+    # Four outbound colors (even-row east, odd-row west, even-column south, odd-column north)
     # and four inbound, each emitted once rather than unrolled over L or N.
     assert interior.count('fabout_dsd') == 4, interior
     assert interior.count('fabin_dsd') == 4, interior
@@ -554,8 +554,8 @@ def test_shearsort_looped_code_is_independent_of_n():
 
 def test_shearsort_looped_interior_keeps_distinct_input_queues():
     """
-    A fully interior PE receives on two row colours and two column colours. WSE-3 binds each
-    inbound colour to its own queue for the whole kernel, so those four must be distinct.
+    A fully interior PE receives on two row colors and two column colors. WSE-3 binds each
+    inbound color to its own queue for the whole kernel, so those four must be distinct.
     """
     _require_wse3_shearsort()
     files = _lower_shearsort_looped(2, K=1)
