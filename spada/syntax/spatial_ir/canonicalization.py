@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from itertools import product
 from spada.syntax.spatial_ir import irnodes as spir, analysis, passes
 from spada.syntax.spatial_ir.grid_geometry import Rectangle
+from spada.syntax.spatial_ir.symbolic_grid import KeyedList, grid_key
 
 
 def inline_metaprogramming(kernel: spir.Kernel) -> spir.Kernel:
@@ -341,16 +342,16 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
     Inlines phases into their constituent computation and dataflow blocks by adding waits and appending all streams,
     respectively.
     """
-    rect_place: dict[tuple[int, int, int, int], spir.PlaceBlock] = {}
-    rect_dataflow: dict[tuple[int, int, int, int], spir.DataflowBlock] = {}
-    rect_compute: dict[tuple[int, int, int, int], spir.ComputeBlock] = {}
+    rect_place = KeyedList()
+    rect_dataflow = KeyedList()
+    rect_compute = KeyedList()
     used_versions: dict[str, set[int]] = defaultdict(set)
-    shared_place_identifiers: dict[tuple[int, int, int, int], set[spir.Identifier]] = defaultdict(set)
+    shared_place_identifiers = KeyedList(set)
 
     # After canonicalize phases, kernel body can only contain phases or place blocks
     for block in kernel.body:
-        rect = block.get_grid_rect()
         if isinstance(block, spir.PlaceBlock):
+            rect = grid_key(block)
             if rect in rect_place:
                 _, statements, shared_ids = _rewrite_place_declarations(
                     block.statements,
@@ -368,11 +369,11 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
                     _register_identifier(used_versions, statement.field_name)
                     shared_place_identifiers[rect].add(statement.field_name)
         elif isinstance(block, spir.Phase):
-            phase_replacements: dict[tuple[int, int, int, int], dict[spir.Identifier, spir.Identifier]] = defaultdict(dict)
+            phase_replacements = KeyedList(dict)
 
             # Extend place blocks
             for place in block.place:
-                rect = place.get_grid_rect()
+                rect = grid_key(place)
                 if rect in rect_place:
                     phase_replacements[rect].update({
                         oldv.identifier: newv.identifier
@@ -396,7 +397,7 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
             # Extend dataflow blocks
             phase_stream_names: dict[spir.Identifier, spir.Identifier] = {}
             for df in block.dataflow:
-                rect = df.get_grid_rect()
+                rect = grid_key(df)
                 if rect in rect_dataflow:
                     replacements = dict(phase_replacements[rect])
                     replacements.update({
@@ -421,7 +422,7 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
 
             # Concatenate compute blocks with an endphase statement
             for compute in block.compute:
-                rect = compute.get_grid_rect()
+                rect = grid_key(compute)
                 if rect in rect_compute:
                     if not _ends_with_phase_barrier(rect_compute[rect].statements):
                         rect_compute[rect].statements.append(spir.AwaitAllStatement())

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Union, Optional, Literal
 from spada.syntax.common import visitor
 from spada.syntax.common.basenode import BaseNode, LineInfo
+from spada.syntax.common.symbolic import Coord
 from spada.syntax.common.types import ScalarType, IRType
 from spada.syntax.spatial_ir.grid_geometry import Rectangle
 
@@ -360,6 +361,27 @@ class Expression(SpatialNode):
         return self.value.eval() if hasattr(self.value, 'eval') else self.value
 
 
+def expression_of(value: 'int | Coord | Expression', dtype: ScalarType = ScalarType.i32) -> 'Expression':
+    """
+    Converts a coordinate or size to an expression.
+
+    :param value: An integer (emitted as a literal of type ``dtype``), a symbolic coordinate ``N + d``
+                  (emitted as the parameter expression ``N + d``), or an expression (copied).
+    :param dtype: The literal type for integers.
+    :return: The expression.
+    """
+    if isinstance(value, Expression):
+        return copy.deepcopy(value)
+    if isinstance(value, Coord):
+        anchor = Expression(Identifier(value.anchor, 0))
+        if value.offset == 0:
+            return anchor
+        op = '+' if value.offset > 0 else '-'
+        return Expression(BinaryOperator(anchor, op, Expression(ConstantLiteral(abs(value.offset), dtype))))
+    assert isinstance(value, int), f'Cannot convert {value!r} to an expression'
+    return Expression(ConstantLiteral(value, dtype))
+
+
 @dataclass
 class RangeExpression(SpatialNode):
     """
@@ -386,10 +408,12 @@ class RangeExpression(SpatialNode):
             return self.start.as_ir()
 
     @staticmethod
-    def from_args(start: int, stop: int, step: Optional[int] = None) -> 'RangeExpression':
-        start_expr = Expression(ConstantLiteral(start, ScalarType.i32))
-        stop_expr = Expression(ConstantLiteral(stop, ScalarType.i32))
-        step_expr = Expression(ConstantLiteral(step if step else 1, ScalarType.i32))
+    def from_args(start: 'int | Coord | Expression',
+                  stop: 'int | Coord | Expression',
+                  step: Optional[int] = None) -> 'RangeExpression':
+        start_expr = expression_of(start)
+        stop_expr = expression_of(stop)
+        step_expr = expression_of(step if step else 1)
 
         return RangeExpression(start_expr, stop_expr, step_expr)
 
@@ -411,17 +435,21 @@ class SubgridExpression(SpatialNode):
     y_range: RangeExpression
 
     @staticmethod
-    def from_tuple(x: tuple[int, int, int], y: tuple[int, int, int]) -> 'SubgridExpression':
-        range_x = Expression(ConstantLiteral(x[0], ScalarType.i32))
-        range_x_end = Expression(ConstantLiteral(x[1], ScalarType.i32))
-        range_y = Expression(ConstantLiteral(y[0], ScalarType.i32))
-        range_y_end = Expression(ConstantLiteral(y[1], ScalarType.i32))
+    def from_tuple(x: tuple, y: tuple) -> 'SubgridExpression':
+        """
+        Creates a subgrid expression from ``(start, stop[, step])`` tuples whose entries are integers
+        or symbolic coordinates.
+        """
+        range_x = expression_of(x[0])
+        range_x_end = expression_of(x[1])
+        range_y = expression_of(y[0])
+        range_y_end = expression_of(y[1])
         if len(x) == 3:
-            step_x = Expression(ConstantLiteral(x[2], ScalarType.i32))
+            step_x = expression_of(x[2])
         else:
             step_x = None
         if len(y) == 3:
-            step_y = Expression(ConstantLiteral(y[2], ScalarType.i32))
+            step_y = expression_of(y[2])
         else:
             step_y = None
 
