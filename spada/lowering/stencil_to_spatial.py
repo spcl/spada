@@ -8,9 +8,10 @@ from spada.lowering.stencil_to_spatial_dataflow import ProgramDataflow
 from spada.lowering.stencil_to_spatial_place import ProgramPlacement
 
 from spada.lowering.versioning import Versioning
+from spada.syntax.common.symbolic import Coord, is_symbolic
 from spada.syntax.common.types import ScalarType
-from spada.syntax.spatial_ir.canonical_subgrids import canonicalize_subgrids, fill_compute_rectangle
-from spada.syntax.spatial_ir.grid_geometry import split_rectangles
+from spada.lowering.regions import canonicalize_subgrids
+from spada.syntax.spatial_ir.canonical_subgrids import fill_compute_rectangle
 
 from spada.syntax.stencil_ir.domain_collector import DomainCollector
 from spada.syntax.stencil_ir.canonicalize_expression import CanonicalizeExpression
@@ -171,15 +172,23 @@ def _construct_arg(name: str, arg_t: sast.FieldType | ScalarType) -> spa.KernelA
         array_size_x = domain.x[1] - domain.x[0]
         array_size_y = domain.y[1] - domain.y[0]
         array_size_z = domain.z[1] - domain.z[0]
-        stream_type = spa.StreamType(arg_t.dtype, spa.Expression(spa.ConstantLiteral(array_size_z, spa.ScalarType.i16)))
+        stream_type = spa.StreamType(arg_t.dtype, spa.expression_of(array_size_z, spa.ScalarType.i16))
 
-        array_type = spa.ArrayType(stream_type, [array_size_x, array_size_y])
+        array_type = spa.ArrayType(stream_type, [_shape_entry(array_size_x), _shape_entry(array_size_y)])
         identifier = spa.Identifier(name, 0)
         return spa.KernelArgument(array_type, identifier)
     else:
         assert isinstance(arg_t, ScalarType)
         identifier = spa.Identifier(name, 0)
         return spa.KernelArgument(arg_t, identifier)
+
+
+def _shape_entry(size: int | Coord) -> int | spa.Expression:
+    """
+    :param size: An integer or symbolic array extent.
+    :return: The extent as an ``ArrayType`` shape entry (integers stay integers).
+    """
+    return spa.expression_of(size) if is_symbolic(size) else size
 
 
 def input_phase(body: list[spa.PlaceBlock],

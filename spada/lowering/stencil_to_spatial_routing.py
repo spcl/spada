@@ -1,8 +1,11 @@
 import copy
+import itertools
 from enum import Enum, auto
 from spada.lowering.versioning import Versioning
 import spada.syntax.spatial_ir.irnodes as spa
+from spada.syntax.common.symbolic import is_symbolic
 from spada.syntax.spatial_ir.canonicalization import canonicalize_phases, inline_phases
+from spada.syntax.spatial_ir.symbolic_grid import coord_of_expr
 
 
 class ChannelStrategy(Enum):
@@ -158,6 +161,29 @@ class DxDyVisitor(spa.NodeVisitor):
         self.max_dy = max(self.max_dy, abs(s.dy.eval()))
 
 
+class _StreamUseCollector(spa.NodeVisitor):
+    """
+    Collects the identifiers of all streams that are sent to or received from in a block.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.stream_names: list[spa.Identifier] = []
+
+    def _add(self, name):
+        if isinstance(name, spa.Identifier) and name not in self.stream_names:
+            self.stream_names.append(name)
+
+    def visit_SendStatement(self, stmt: spa.SendStatement):
+        self._add(stmt.stream_name)
+
+    def visit_ReceiveStatement(self, stmt: spa.ReceiveStatement):
+        self._add(stmt.stream_name)
+
+    def visit_ReceiveGenerator(self, gen: spa.ReceiveGenerator):
+        self._add(gen.stream_name)
+
+
 class SplitTransformer(spa.NodeTransformer):
     """
     Splits the blocks of a kernel according to a checkerboard pattern.
@@ -202,6 +228,7 @@ class SplitTransformer(spa.NodeTransformer):
         self.stream_map = dict()
         self.versioning = versioning
         self._active_compute_block = None
+        self._parity_override: dict[str, int] = {}
         self.int_type = int_type
 
     def _split_subgrid_x(self, subgrid: spa.SubgridExpression) -> list[spa.SubgridExpression]:
@@ -214,13 +241,13 @@ class SplitTransformer(spa.NodeTransformer):
 
         result = [first]
 
-        x_start = subgrid.x_range.start.value.eval() + 1
+        x_start = coord_of_expr(subgrid.x_range.start) + 1
 
-        if x_start < subgrid.x_range.stop.eval():
+        if x_start < coord_of_expr(subgrid.x_range.stop):
 
             second = spa.SubgridExpression(
                 spa.RangeExpression(
-                    spa.Expression(spa.ConstantLiteral(x_start, self.int_type)), subgrid.x_range.stop, x_step),
+                    spa.expression_of(x_start, self.int_type), subgrid.x_range.stop, x_step),
                 subgrid.y_range)
 
             result.append(copy.deepcopy(second))
@@ -239,10 +266,10 @@ class SplitTransformer(spa.NodeTransformer):
 
         result = [copy.deepcopy(first)]
 
-        y_start_2 = subgrid.y_range.start.value.eval() + 1
+        y_start_2 = coord_of_expr(subgrid.y_range.start) + 1
 
-        if y_start_2 < subgrid.y_range.stop.eval():
-            y_start = spa.Expression(spa.ConstantLiteral(y_start_2, self.int_type))
+        if y_start_2 < coord_of_expr(subgrid.y_range.stop):
+            y_start = spa.expression_of(y_start_2, self.int_type)
 
             second = spa.SubgridExpression(
                 subgrid.x_range,
@@ -349,13 +376,74 @@ class SplitTransformer(spa.NodeTransformer):
         result = []
 
         for b in split_blocks:
-            self._active_compute_block = b
-
-            result.append(self.generic_visit(b))
+            axes = self._symbolic_parity_axes(b)
+            if not axes:
+                self._active_compute_block = b
+                result.append(self.generic_visit(b))
+            else:
+                # The stream choice depends on the parity of symbolic block starts: emit one copy per
+                # parity vector, each guarded by compile-time loops that keep exactly the matching copy.
+                for parities in itertools.product((0, 1), repeat=len(axes)):
+                    variant = copy.deepcopy(b)
+                    self._active_compute_block = variant
+                    self._parity_override = dict(zip(axes, parities))
+                    variant = self.generic_visit(variant)
+                    result.append(self._guard(variant, axes, parities))
+                    self._parity_override = {}
 
             self._active_compute_block = None
 
         return result
+
+    def _symbolic_parity_axes(self, block: spa.ComputeBlock) -> list[str]:
+        """
+        :param block: A split compute block.
+        :return: The axes (``'x'``, ``'y'``) along which the block communicates through relative streams
+                 and whose block start is a symbolic coordinate, in the order x, y.
+        """
+        collector = _StreamUseCollector()
+        collector.visit(block)
+        used_axes = set()
+        for name in collector.stream_names:
+            streams = self.stream_map.get(name)
+            if streams is None or not isinstance(streams[0].stream, spa.RelativeStreamDeclaration):
+                continue
+            used_axes.add('x' if streams[0].stream.dx.value.eval() != 0 else 'y')
+        return [axis for axis in ('x', 'y')
+                if axis in used_axes and is_symbolic(coord_of_expr(self._axis_range(block, axis).start))]
+
+    @staticmethod
+    def _axis_range(block: spa.ComputeBlock, axis: str) -> spa.RangeExpression:
+        return block.subgrid.x_range if axis == 'x' else block.subgrid.y_range
+
+    def _guard(self, block: spa.ComputeBlock, axes: list[str], parities: tuple[int, ...]) -> spa.MetaForBlock:
+        """
+        Wraps a block in nested compile-time loops ``for u16 __parity_a in [0 : p]``, one per axis, where
+        ``p`` is ``(start_a % 2)`` for parity 1 and ``1 - (start_a % 2)`` for parity 0. After parameter
+        concretization, each loop runs once if the block start has the given parity and zero times
+        otherwise.
+        """
+        inner = block
+        for axis, parity in reversed(list(zip(axes, parities))):
+            start = self._axis_range(block, axis).start
+            two = spa.Expression(spa.ConstantLiteral(2, self.int_type))
+            start_parity = spa.Expression(spa.BinaryOperator(copy.deepcopy(start), '%', two))
+            if parity == 1:
+                stop = start_parity
+            else:
+                one = spa.Expression(spa.ConstantLiteral(1, self.int_type))
+                stop = spa.Expression(spa.BinaryOperator(one, '-', start_parity))
+            zero = spa.Expression(spa.ConstantLiteral(0, self.int_type))
+            inner = spa.MetaForBlock(
+                variables=[spa.TypedIdentifier(spa.ScalarType.u16, spa.Identifier(f'__parity_{axis}', 0))],
+                range_expression=[spa.RangeExpression(zero, stop)],
+                body=[inner])
+        return inner
+
+    def _block_parity(self, axis: str) -> int:
+        if axis in self._parity_override:
+            return self._parity_override[axis]
+        return coord_of_expr(self._axis_range(self._active_compute_block, axis).start) % 2
 
     def visit_SendStatement(self, stmt: spa.SendStatement):
         stmt.stream_name = self._resolve_communication_stream(stmt.stream_name, is_receive=False)
@@ -385,11 +473,11 @@ class SplitTransformer(spa.NodeTransformer):
 
         if abs(dx) > 0:
             sign = dx > 0
-            block_parity: int = self._active_compute_block.subgrid.x_range.start.value.eval() % 2
+            block_parity: int = self._block_parity('x')
         else:
             assert abs(dy) > 0
             sign = dy > 0
-            block_parity: int = self._active_compute_block.subgrid.y_range.start.value.eval() % 2
+            block_parity: int = self._block_parity('y')
 
         assert isinstance(block_parity, int)
 

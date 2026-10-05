@@ -4,6 +4,7 @@ from spada.syntax.spatial_ir.grid_geometry import split_rectangles
 from spada.syntax.spatial_ir.irnodes import Kernel, SubgridExpression, DataflowBlock, PlaceBlock, ComputeBlock, \
     Phase
 import spada.syntax.spatial_ir.irnodes as spa
+from spada.syntax.spatial_ir.symbolic_grid import grid_key
 
 
 def fill_compute_rectangle(kernel: spa.Kernel, block_variable_type: spa.ScalarType = spa.ScalarType.u16) -> spa.Kernel:
@@ -39,7 +40,7 @@ class RectangleCollector(spa.NodeVisitor):
         self.max_y = 0
     
     def process_block(self, block: spa.ComputeBlock | spa.DataflowBlock | spa.PlaceBlock):
-        grid = block.get_grid_rect()
+        grid = grid_key(block)
         self.max_x = max(self.max_x, grid[1])
         self.max_y = max(self.max_y, grid[3])
     

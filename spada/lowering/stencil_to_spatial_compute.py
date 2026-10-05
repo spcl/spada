@@ -8,7 +8,8 @@ from spada.lowering.versioning import Versioning
 from spada.syntax.common.basenode import Wildcard
 from spada.syntax.common.tree_matching import PatternTransformer
 from spada.syntax.common.types import ScalarType
-from spada.syntax.spatial_ir.grid_geometry import Rectangle, group_rectangles_by_domain, split_rectangles
+from spada.lowering.regions import partition
+from spada.syntax.spatial_ir.grid_geometry import Rectangle
 from spada.syntax.stencil_ir.domain_collector import DomainCollector
 import spada.syntax.spatial_ir.irnodes as spa
 import spada.syntax.stencil_ir.irnodes as sast
@@ -44,8 +45,7 @@ class ProgramCompute:
             body = self.vertical_visitor.stmts
 
         # Merge all statements into a compute blocks
-        split = split_rectangles(body)
-        merged = group_rectangles_by_domain(split)
+        merged = partition(body)
 
         # Convert to Compute blocks
         compute_blocks = []
