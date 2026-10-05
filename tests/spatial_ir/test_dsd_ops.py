@@ -240,59 +240,6 @@ kernel @blockcopy<K> (stream<f32, K>[1, 1] readonly src,
         assert destination.endswith('_dsd') and source.endswith('_dsd'), code
 
 
-def test_a_reused_color_keeps_its_input_queue_across_a_gap():
-    """
-    On the interior Batcher PE, one inbound color is used on both sides of another. Sharing the
-    queue across that gap is what the simulator rejects: remapping it onto the middle color while
-    wavelets of the outer color remain. The outer color must keep the queue for its whole span.
-    """
-    path = os.path.join(
-        os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort', 'batcher_oddeven_1D.sptl'
-    )
-    kernel = parser.parse_file(path)
-    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, L=3, K=1, R=1))
-    files = {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)}
-    code = files['code_2_0.csl']
-
-    colors = dict(re.findall(r'const (\w+)_color_in: color = @get_color\((\d+)\);', code))
-    queues = dict(re.findall(
-        r'const (\w+)_in_dsd = @get_dsd\(fabin_dsd, .*?input_queue = @get_input_queue\((\d+)\)',
-        code))
-    # fwd__17 and fwd__37 share a color and straddle bwd__30.
-    assert colors['fwd__17'] == colors['fwd__37']
-    assert colors['fwd__17'] != colors['bwd__30']
-    assert queues['fwd__17'] == queues['fwd__37']
-    assert queues['fwd__17'] != queues['bwd__30']
-
-
-def test_wse3_inbound_colors_do_not_share_an_input_queue():
-    """WSE-3 remaps a queue onto the next color and faults if it is not empty.
-
-    Batcher L=2 is the case that hit ``Attempt to remap input queue 2 from C1 to C3``
-    when occupancy pooling reused the queue across sequential colors.
-    """
-    if constants.ARCH != 'wse3':
-        pytest.skip('WSE-2 may remap a drained queue onto the next color')
-    path = os.path.join(
-        os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort', 'batcher_oddeven_1D.sptl'
-    )
-    kernel = parser.parse_file(path)
-    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, L=2, K=2, R=1))
-    files = {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)}
-    code = files['code_1_0.csl']
-    colors = dict(re.findall(r'const (\w+)_color_in: color = @get_color\((\d+)\);', code))
-    queues = dict(re.findall(
-        r'const (\w+)_in_dsd = @get_dsd\(fabin_dsd, .*?input_queue = @get_input_queue\((\d+)\)',
-        code))
-    by_color: dict[str, set[str]] = {}
-    for name, color in colors.items():
-        if name in queues:
-            by_color.setdefault(color, set()).add(queues[name])
-    assert len(by_color) >= 2, code
-    used_queues = [next(iter(qs)) for qs in by_color.values()]
-    assert len(used_queues) == len(set(used_queues)), (by_color, code)
-
-
 def test_wse3_concurrent_transfers_use_distinct_microthreads():
     """Two transfers in flight at once may not share a microthread.
 

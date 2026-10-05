@@ -18,8 +18,7 @@ the whole stream and a counter filter decides which words each one keeps; the la
 its ramp alone and thereby takes the stream out of the network.
 
 This is the arrangement Schnyder's 2D reduce-scatter uses ("Distributed Sorting on the Cerebras
-Wafer-Scale Engine", fig. 7.6), and ``tests/csl_runtime/test_shift_bundle_filters.sh`` is a
-hand-written version of it that pins down the hardware behaviour relied on here.
+Wafer-Scale Engine", fig. 7.6).
 """
 from __future__ import annotations
 

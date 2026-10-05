@@ -8,7 +8,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/_lib.sh"
 
-SAMPLE="$(cd "$(dirname "$0")/../../samples/spatial/simple" && pwd)/shift_bundle_1D.sptl"
+SAMPLE="$SCRIPT_DIR/samples/shift_bundle_1D.sptl"
 FOLDER="shift_bundle_1d_sptl"
 
 run_shift() {

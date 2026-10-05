@@ -1,9 +1,5 @@
 """
 Tests for bundling overlapping 1D interval shifts onto one color.
-
-The mechanism these check the lowering against is measured in
-``tests/csl_runtime/test_shift_bundle_filters.sh``, which runs a hand-written version of the same
-layout on the simulator.
 """
 import os
 import re
@@ -263,45 +259,9 @@ def test_a_pe_cannot_use_more_filters_than_the_hardware_has():
         cslrouting._check_filter_budget(entries)
 
 
-def _bundled_batcher(l: int, k: int = 1):
-    path = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort',
-                        'batcher_oddeven_bundled_1D.sptl')
-    kernel = parser.parse_file(path)
-    kernel = passes.concretize_parameters(kernel, L=l, K=k, R=1)
-    kernel = passes.constexpr_propagation(kernel)
-    return lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)
-
-
 def _colors_of(layout: str, pattern: str = '') -> set[int]:
     routes = layout[layout.index('// Routes'):]
     return {int(color) for color in re.findall(r'@get_color\((\d+)\)[^;]*' + pattern, routes)}
-
-
-@pytest.mark.parametrize('l, colors', [(2, 6), (3, 10)])
-def test_the_batcher_fits_the_colors_it_has(l: int, colors: int):
-    # A bundled phase puts all of its matchings on one color pair; the phases left unbundled take a
-    # pair per matching, but share those across phases wherever their sources agree mod 2d.
-    from spada.syntax.csl import constants
-
-    used = _colors_of(next(f.code for f in _bundled_batcher(l) if 'layout' in f.filename))
-    assert len(used) == colors
-    assert len(used) <= len(constants.COLORS)
-
-
-def test_sixteen_keys_need_three_overlapping_input_queues():
-    """
-    At L = 4 a reused inbound color stays live across a gap that already holds two other colors.
-    WSE-2 has two input queues, so occupancy pooling refuses. WSE-3 has six, but remapping a
-    non-empty queue is illegal, and L = 4 wants seven colors in each direction over the kernel --
-    seven outbound once memcpy's copy-back of `out` is counted, which is what it reports first.
-    batcher_oddeven_wse3_1D is the variant that fits there.
-    """
-    from spada.syntax.csl import constants
-
-    if len(constants.INPUT_QUEUE_IDS) >= 3 and constants.ARCH != 'wse3':
-        pytest.skip(f'{constants.ARCH} has {len(constants.INPUT_QUEUE_IDS)} input queues, enough for L=4')
-    with pytest.raises(SyntaxError, match='concurrent (in|out)put queues'):
-        _bundled_batcher(4)
 
 
 def _wse3_batcher(l: int, k: int = 1):
@@ -356,34 +316,6 @@ def test_sixteen_keys_fit_the_queues_of_a_target_that_reuses_none():
     files = _wse3_batcher(4)
     assert _queues_per_pe(files, 'input') <= len(constants.INPUT_QUEUE_IDS)
     assert _queues_per_pe(files, 'output') < len(constants.OUTPUT_QUEUE_IDS)
-
-
-def test_only_the_widest_batcher_phases_are_bundled():
-    # Bundling costs one filter at every participating PE and a PE has three, so the sample bundles
-    # every phase that satisfies 4d >= N. At L = 3 that is already three phases (d = 4, 2, 2).
-    from spada.syntax.csl import constants
-
-    layout = next(f.code for f in _bundled_batcher(3) if 'layout' in f.filename)
-    used, filtered, switched = _colors_of(layout), _colors_of(layout, r'\.filter'), _colors_of(layout, r'\.switches')
-
-    assert len(filtered) == 2 * constants.FILTERS_PER_PE  # three phases, two directions each
-    assert filtered == switched  # a bundled color is one whose sources hand over to relay mode
-    assert not (used - filtered) & switched  # the pooled ones hold a single static configuration
-
-
-def test_a_wider_block_costs_wavelets_not_colors():
-    # The Batcher trades K keys per comparator instead of one. A bundle of M sources then carries
-    # M*K wavelets per epoch, of which each destination keeps the K its filter windows out -- the
-    # colors and the filters stay as they are, only the counters grow.
-    narrow = next(f.code for f in _bundled_batcher(3, 1) if 'layout' in f.filename)
-    wide = next(f.code for f in _bundled_batcher(3, 4) if 'layout' in f.filename)
-
-    assert _colors_of(wide) == _colors_of(narrow)
-    assert _colors_of(wide, r'\.filter') == _colors_of(narrow, r'\.filter')
-    # At L=3 the bundled phases have two and four sources, so cycles of 8 and 16 words.
-    assert '.limit1 = 7, .max_counter = 3' in wide
-    assert '.limit1 = 15, .max_counter = 3' in wide
-    assert '.init_counter = (pe_x - 1) * 4' in wide
 
 
 def test_a_scalar_receive_lowers_to_a_data_task():

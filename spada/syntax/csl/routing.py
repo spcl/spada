@@ -76,7 +76,7 @@ class FilterConfig:
     otherwise -- withheld is not the same as consumed: the wavelet carries on along the router's
     ``tx`` directions, so PEs further along still see it. Only a router that transmits to the ramp
     alone drops what it withholds, which is what takes a wavelet out of the network.
-    (Measured; see ``tests/csl_runtime/test_shift_bundle_filters.sh``. The manual describes
+    (Measured on the simulator. The manual describes
     ``max_counter`` as exclusive, but a wavelet arriving at ``counter == max_counter`` is delivered.)
 
     The fields are expression strings rather than integers because a filter's window generally
@@ -808,7 +808,7 @@ def plan_switch_advances(rectangles: list[Rectangle[PEBlock]]) -> int:
             # A source that only flips its own router does so on the last data wavelet, but only
             # on WSE-2. Posting a SWITCH_ADV into the same output queue afterwards is what drops
             # a data wavelet there when a back-pressured send of three or more f32 values fills
-            # that queue (see tests/csl_runtime/test_shift_bundle_filters.sh). WSE-3 queues hold
+            # that queue. WSE-3 queues hold
             # eight words, so SWITCH_ADV is safe; origin-pooled Batcher destinations also switch
             # and only a traveling control wavelet moves them. Remote routers still need that
             # wavelet, and a two-position turnaround still needs two of them.

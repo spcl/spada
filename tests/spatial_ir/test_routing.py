@@ -496,26 +496,6 @@ def test_odd_even_sort_looped_interior_keeps_distinct_input_queues():
     assert len(_fabin_queues(files['code_3_0.csl'])) == 1
 
 
-def test_unrolled_phases_still_share_a_queue_when_spans_are_disjoint():
-    """
-    Occupancy pooling across successive phases is still required on WSE-2: a Batcher endpoint
-    receives on two colours that never overlap, and there is only one input queue to spare.
-    """
-    if len(csl.INPUT_QUEUE_IDS) < 2:
-        pytest.skip(f'{csl.ARCH} has no pool of input queues to share')
-    path = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'sort',
-                        'batcher_oddeven_1D.sptl')
-    kernel = parser.parse_file(path)
-    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, L=2, K=2, R=1))
-    files = {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)}
-    queues = _fabin_queues(files['code_0_0.csl'])
-    assert len(queues) == 2, queues
-    if csl.ARCH == 'wse3':
-        assert len(set(queues.values())) == 2, queues
-    else:
-        assert len(set(queues.values())) == 1, queues
-
-
 ###
 # shearsort_2D_looped: (RC)^L R neighbour rounds as runtime loops on eight static channels
 ###

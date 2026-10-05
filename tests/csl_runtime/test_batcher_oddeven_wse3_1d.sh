@@ -1,14 +1,5 @@
 #!/bin/sh
-# E2E test: the WSE-3 1D Batcher odd-even mergesort (2^L PEs, a block of K f32 keys per PE).
-# Kernel: batcher_oddeven_wse3_1D.sptl  params: L, K, R
-# Same result as batcher_oddeven_1D -- each of the R rows sorts independently -- and the same
-# network as the bundled variant. What it adds is L = 4, which the bundled variant cannot reach on
-# wse3: there a queue is bound to a color for the whole kernel, so a PE needs one per color it ever
-# uses, and the bundled variant wants seven of the six. Pooling the unbundled phases by the origin's
-# residue rather than by direction spends one queue per distance in each direction instead of two,
-# which brings it to five. The routers switch for it, on twelve colors of the fifteen wse3 can switch.
-# This kernel is written for the queue model of wse3 and is only run there; the bundled variant is
-# the better fit on wse2, whose routers here would not switch at all.
+# E2E test: batcher_oddeven_wse3_1D.sptl  params: L, K, R
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -18,7 +9,7 @@ SORT_DIR="$(cd "$(dirname "$0")/../../samples/spatial/sort" && pwd)"
 FOLDER="batcher_oddeven_wse3_1d_sptl"
 
 if [ "${WSE_ARCH:-wse2}" != "wse3" ]; then
-    echo "Skipping: this variant targets wse3; on wse2 use test_batcher_oddeven_bundled_1d.sh."
+    echo "Skipping: this kernel targets wse3."
     exit 0
 fi
 

@@ -183,16 +183,14 @@ without being filtered.
     is at most `max_counter`. A window of `words` out of a stream of `length * words` is therefore
     `limit1 = length * words - 1`, `max_counter = words - 1`, and an `init_counter` chosen so that
     the counter reads zero as the wanted block arrives.
-    `tests/csl_runtime/test_shift_bundle_filters.sh` is the hand-written layout this was measured
-    with.
 
 !!! danger "Error: Too Many Wavelet Filters"
     WSE-2 has four filters per PE, of which the `memcpy` module reserves one, so **three** are usable
     (`FILTERS_PER_PE`). A PE needs one per color it filters. *If a PE would need more, a compile error
     is raised*; the fix is to give some of the streams their own channels, which trades filters for
     colors. Three filters therefore means at most three bundled phases per PE, whatever the kernel:
-    `batcher_oddeven_bundled_1D.sptl` would want ten at $2^4$ PEs and bundles only its three widest
-    phases, which is where most of the colors are saved anyway.
+    a Batcher sort would want ten at $2^4$ PEs, so `batcher_oddeven_wse3_1D.sptl` bundles only its
+    widest phases, which is where most of the colors are saved anyway.
 
     Reconfiguring a filter while wavelets are still in flight on its color is a data race, and the
     destination that terminates the stream cannot be reconfigured until the stream has drained,
@@ -210,8 +208,7 @@ its own is how a kernel declines the trade. What it then costs is colors, and th
 by reusing a channel across phases. Two unbundled shifts may share one safely when they agree on
 axis and signed distance and their sources agree modulo twice that distance, because a PE's role —
 source, relay or destination — is then a function of its position modulo twice the distance alone,
-so one static configuration serves every phase in the pool. `batcher_oddeven_bundled_1D.sptl` pools
-on exactly this rule, and `batcher_oddeven_1D.sptl` is the same rule written out as arithmetic.
+so one static configuration serves every phase in the pool.
 
 The agreement on the *sign* of the distance can be dropped without giving that up. Keep the axis, the
 magnitude and the source residue modulo twice it, and let the direction of travel vary: the sources

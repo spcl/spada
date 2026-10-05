@@ -101,10 +101,10 @@ Sample SPADA programs are in `samples/`:
 | `samples/stencils.py` | GT4Py stencil definitions (Laplacian, vertical advection, UVBKE, …) |
 | `samples/advanced_stencils.py` | GT4Py definitions for horizontal diffusion kernels |
 | `samples/benchmarks/` | Pre-compiled `.spst`/`.sptl` pairs for five kernels at five domain sizes |
-| `samples/spatial/simple/` | Basic single-PE and streaming operations: `add`, `copy`, `forward_sum`, `backward_sum`, `mult_scalar`, `streaming_copy`, plus the one-color `shift_bundle_1D` and `exchange_bundle_1D` microkernels |
+| `samples/spatial/simple/` | Basic single-PE and streaming operations: `add`, `copy`, `forward_sum`, `backward_sum`, `mult_scalar`, `streaming_copy`, plus the one-color `exchange_bundle_1D` microkernel |
 | `samples/spatial/blas/` | Linear algebra: `axpy`, `matvec`, `gemv`, `gemv_twophase`, `spmv` |
 | `samples/spatial/collectives/` | Reductions (`scalar`, `chain`, `tree`, `twophase` in 1D/2D) and broadcasts (`broadcast_1D`, `broadcast_2D`, and multicast variants) |
-| `samples/spatial/sort/` | Sorting networks over `R` independent rows of `2^L` PEs holding `K` keys each, one contiguous sequence of `N*K` keys per row: `batcher_oddeven_1D` (a color per matching), `batcher_oddeven_bundled_1D` (the widest phases bundled onto one color pair), `batcher_oddeven_wse3_1D` (the same, pooling the rest by origin rather than by direction, which reaches `L = 4` on WSE-3), and `odd_even_sort_1D_looped` (N neighbour compare-splits as a runtime loop, four static channels). `shearsort_2D_looped` is the 2D snake-order mesh sort on `N x N` PEs, the same neighbour rounds as a runtime loop on eight static channels (WSE-3) |
+| `samples/spatial/sort/` | Sorting networks over `R` independent rows of `2^L` PEs holding `K` keys each, one contiguous sequence of `N*K` keys per row: `batcher_oddeven_wse3_1D` (the widest phases bundled onto one color, the rest pooled by origin, which reaches `L = 4` on WSE-3), and `odd_even_sort_1D_looped` (N neighbour compare-splits as a runtime loop, four static channels). `shearsort_2D_looped` is the 2D snake-order mesh sort on `N x N` PEs, the same neighbour rounds as a runtime loop on eight static channels (WSE-3) |
 | `samples/spatial/stencils/` | Stencil examples: `laplacian` (high-level) and `laplacian_routed` (explicit routing) |
 | `samples/spst/` | Stencil IR examples |
 
