@@ -12,6 +12,9 @@ and destination counter filters:
 3. Destination routers statically forward wavelets to both the local ramp and downstream neighbors
    (or to the ramp only for the final destination). Hardware counter filters at each destination
    select the designated slice of data.
+
+This is the arrangement in Louis Schnyders Bachelor thesis, "Distributed Sorting on the Cerebras Wafer-Scale Engine",
+fig. 7.6. Unpublished; reach out to the author or L. Gianinazzi for a private copy.
 """
 from __future__ import annotations
 
