@@ -1,6 +1,6 @@
 #!/bin/sh
 # E2E: shearsort on an N x N mesh, N = 2^L, N neighbour odd-even rounds as a runtime loop
-# (shearsort_2D_looped.sptl). Each PE holds a block of K f32 keys; every comparator is a
+# (shearsort_2D.sptl). Each PE holds a block of K f32 keys; every comparator is a
 # compare-split, so the network sorts all N*N*K keys into snake order: even rows left to
 # right, odd rows right to left, each block still ascending.
 # Reference: flatten(OUT_a_out in snake order) == sort(a_in.reshape(n*n*k)).
@@ -24,7 +24,7 @@ run_sort() {
     k=$2
     echo "--- shearsort_2d_looped L=$l K=$k ---"
 
-    sptlc "$SAMPLES_DIR/shearsort_2D_looped.sptl" "$FOLDER" -p L=$l -p K=$k
+    sptlc "$SAMPLES_DIR/shearsort_2D.sptl" "$FOLDER" -p L=$l -p K=$k
 
     python3 - <<PYEOF
 import numpy as np

@@ -501,7 +501,7 @@ def test_odd_even_sort_looped_interior_keeps_distinct_input_queues():
 ###
 
 _SHEARSORT_LOOPED = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial',
-                                 'sort', 'shearsort_2D_looped.sptl')
+                                 'sort', 'shearsort_2D.sptl')
 
 
 def _lower_shearsort_looped(L: int, K: int = 1) -> dict[str, str]:

@@ -61,7 +61,7 @@ all.
     real loop and so costs code and compile time independent of the number of rounds.
     `samples/spatial/sort/odd_even_sort_1D_looped.sptl` is the example: N odd-even rounds on four
     static channels, one CSL loop, no per-round barrier. The 2D analogue is
-    `samples/spatial/sort/shearsort_2D_looped.sptl`: eight static neighbour channels, nested
+    `samples/spatial/sort/shearsort_2D.sptl`: eight static neighbour channels, nested
     loops, no switches. A fully interior PE there receives on four colours in one epoch, which
     fits WSE-3's six exclusive queues and not WSE-2's two.
 
@@ -232,5 +232,5 @@ Engine* for the 2D reduce-scatter.
     reconfiguration reprograms the routers between rounds outright, which is the only known way to
     put an arbitrary *sequence* of sends and receives on one color: for a long enough sequence there
     is a PE for which no fixed cycle of switch positions exists. Until then, splitting the rounds
-    across channels — as `odd_even_sort_1D_looped.sptl` and `shearsort_2D_looped.sptl` do —
+    across channels — as `odd_even_sort_1D_looped.sptl` and `shearsort_2D.sptl` do —
     remains the per-kernel fallback.
