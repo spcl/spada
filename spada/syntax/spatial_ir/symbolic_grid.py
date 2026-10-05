@@ -86,7 +86,7 @@ def grid_key(block) -> tuple:
     """
     try:
         return block.get_grid_rect()
-    except (TypeError, AttributeError):
+    except (TypeError, AttributeError, ValueError):
         pass
     (x0, x1, sx), (y0, y1, sy) = subgrid_bounds(block.subgrid)
     if sx != 1 or sy != 1:

@@ -12,6 +12,7 @@ from spada.syntax.common.symbolic import Coord, is_symbolic
 from spada.syntax.common.types import ScalarType
 from spada.lowering.regions import canonicalize_subgrids
 from spada.syntax.spatial_ir.canonical_subgrids import fill_compute_rectangle
+from spada.syntax.spatial_ir.symbolic_grid import coord_of_expr
 
 from spada.syntax.stencil_ir.domain_collector import DomainCollector
 from spada.syntax.stencil_ir.canonicalize_expression import CanonicalizeExpression
@@ -21,11 +22,15 @@ from spada.syntax.stencil_ir.ssa import SSAVisitor
 from spada.syntax.spatial_ir.passes import mark_readonly_writeonly_arguments
 from spada.syntax.spatial_ir.analysis import detect_undefined_array_access
 
-def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: ChannelStrategy = ChannelStrategy.TRIVIAL) -> spa.Kernel:
+def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: ChannelStrategy = ChannelStrategy.TRIVIAL,
+                             parameters: list[str] | None = None) -> spa.Kernel:
     """Lower a stencil to a spatial program.
 
     Args:
         stencil (Stencil): The stencil program to lower.
+        channel_strategy: The channel assignment strategy for streams.
+        parameters: Kernel parameter names, for stencils whose domain is symbolic (see
+            ``spada.lowering.parametric``). Requires an active ``ConstraintLog``.
 
     Returns:
         Spatial: The lowered spatial program.
@@ -80,7 +85,8 @@ def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: ChannelStr
             output_compute = output_phase(comp, arguments, versioning, placement_gen)
             body.append(spa.Phase([], [], output_compute))
 
-    kernel = spa.Kernel(name=stencil.name or "", parameters=[], arguments=arguments, body=body)
+    kernel = spa.Kernel(name=stencil.name or "", parameters=[spa.Parameter(p) for p in parameters or []],
+                        arguments=arguments, body=body)
 
     # Add a dummy compute block that spans everything
     kernel = fill_compute_rectangle(kernel)
@@ -93,10 +99,11 @@ def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: ChannelStr
 
     kernel = mark_readonly_writeonly_arguments(kernel)
 
-    # Verification
-    undefined = detect_undefined_array_access(kernel)
-    for id, x_range, y_range in undefined:
-        print(f"ERROR: undefined identifier {id.as_ir()} in block {x_range}, {y_range}")
+    # Verification (requires concrete subgrids; parametric kernels are checked after concretization)
+    if not parameters:
+        undefined = detect_undefined_array_access(kernel)
+        for id, x_range, y_range in undefined:
+            print(f"ERROR: undefined identifier {id.as_ir()} in block {x_range}, {y_range}")
 
     return kernel
 
@@ -264,7 +271,7 @@ def _copy_array(src: spa.Identifier,
 
     :return: The copy loop ``dst[k] = src[k]``.
     """
-    length = min(src_t.shape[0], dst_t.shape[0])
+    length = min(coord_of_expr(src_t.shape[0]), coord_of_expr(dst_t.shape[0]))
     k = spa.TypedIdentifier(ScalarType.i32, versioning.next_version('k'))
     copy_stmt = spa.AssignmentStatement(spa.ArraySlice(dst, [spa.Expression(k.identifier)]),
                                         spa.Expression(spa.ArraySlice(src, [spa.Expression(k.identifier)])))
