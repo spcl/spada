@@ -5,7 +5,7 @@ from typing import Sequence, Collection
 import spada.syntax.stencil_ir.irnodes as sast
 import copy
 
-from spada.syntax.stencil_ir import def_use_analysis
+from spada.syntax.stencil_ir import analysis, def_use_analysis
 from spada.syntax.stencil_ir.def_use_analysis import ScopedUse, ScopedDefinition
 
 
@@ -137,10 +137,15 @@ class DomainInference(sast.ScopedNodeVisitor):
         for child in reversed(node.body):
             self.visit(child)
         # Initialize input domains as the union of the domains of their uses
+        loop_carried = analysis.loop_carried_names(node)
         for inp, inptype in zip(node.inputs, node.operation_type.source):
             if isinstance(inptype, sast.ScalarType):
                 continue
-            in_domains = self._domains_of_uses_in_scope(node, inp)
+            if inp.name in loop_carried:
+                in_domains = self._loop_carried_domains(node, inp)
+                in_domains.extend(u.field_type.domain for u in self.def_use.get(inp, []) if u.definition_scope == node)
+            else:
+                in_domains = self._domains_of_uses_in_scope(node, inp)
             in_domain = _union_domains(in_domains)
             if inptype.domain.is_unknown():
                 inptype.domain = copy.deepcopy(in_domain)
@@ -173,6 +178,21 @@ class DomainInference(sast.ScopedNodeVisitor):
 
         for inp, inptype in zip(conditions, node.operation_type.source):
             inptype.domain = out_domain
+
+    def _loop_carried_domains(self, computation: sast.ComputationBlock, inp: sast.Identifier) -> list[sast.Cartesian]:
+        """
+        Get the domains in which a FORWARD/BACKWARD computation reads the incoming version of a loop-carried
+        field: its result domain, shifted by every vertical offset at which the field is accessed.
+
+        :param computation: The sequential computation block
+        :param inp: The incoming version of the loop-carried field
+        :return: A list of domains
+        """
+        out_domain = next((out_t.domain for out, out_t in zip(computation.outputs, computation.operation_type.destination)
+                           if out.name == inp.name), self.domain.intersect_with_ranges(computation.interval))
+        offsets = {node.subscript[2] for node in computation.walk()
+                   if isinstance(node, sast.Subscript) and node.value.name == inp.name}
+        return [out_domain.add((0, 0, dz)) for dz in sorted(offsets)]
 
     def _in_scope_definitions(self, value: sast.Identifier, scope: sast.ComputationBlock) -> list[ScopedDefinition]:
         """

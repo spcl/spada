@@ -263,6 +263,53 @@ def test_inline_phases_freshens_replicated_streams():
     assert compute.statements[2].stream_name.as_ir() == 's#1'
 
 
+def test_inline_phases_shares_freshened_stream_across_subgrids_of_a_phase():
+    """
+    A stream that spans several subgrids is declared once per subgrid. If it is freshened because an earlier
+    phase used the same name, all of its declarations and uses in the phase must receive the same fresh name;
+    otherwise senders and receivers on different subgrids no longer communicate.
+    """
+    left = spir.SubgridExpression(_make_range(0, 2), _make_range(0, 4))
+    right = spir.SubgridExpression(_make_range(2, 4), _make_range(0, 4))
+
+    def stream_decl():
+        return spir.StreamDeclaration(spir.StreamType(spir.ScalarType.i16), spir.Identifier('s', 0),
+                                      spir.RelativeStreamDeclaration(_make_number(-1), _make_number(0)))
+
+    def send(subgrid):
+        return spir.ComputeBlock(_make_block_vars(), subgrid,
+                                 [spir.SendStatement(spir.Identifier('tmp', 0), spir.Identifier('s', 0))])
+
+    kernel = spir.Kernel(
+        name='test',
+        parameters=[],
+        arguments=[],
+        body=[
+            spir.PlaceBlock(_make_block_vars(), _make_subgrid(),
+                            [spir.FieldDeclaration(spir.ScalarType.i16, spir.Identifier('tmp', 0))]),
+            spir.Phase(place=[], dataflow=[spir.DataflowBlock(_make_block_vars(), _make_subgrid(), [stream_decl()])],
+                       compute=[send(_make_subgrid())]),
+            spir.Phase(place=[],
+                       dataflow=[
+                           spir.DataflowBlock(_make_block_vars(), left, [stream_decl()]),
+                           spir.DataflowBlock(_make_block_vars(), right, [stream_decl()]),
+                       ],
+                       compute=[send(left), send(right)]),
+        ],
+    )
+
+    inlined = canonicalization.inline_phases(kernel)
+
+    second_phase_streams = set()
+    for block in inlined.body:
+        if isinstance(block, spir.DataflowBlock):
+            second_phase_streams.update(s.stream_name.as_ir() for s in block.statements if s.stream_name.version)
+        elif isinstance(block, spir.ComputeBlock):
+            second_phase_streams.update(s.stream_name.as_ir() for s in block.statements
+                                        if isinstance(s, spir.SendStatement) and s.stream_name.version)
+    assert second_phase_streams == {'s#1'}
+
+
 def _make_number(num: int):
     return spir.Expression(spir.ConstantLiteral(num, spir.ScalarType.i16))
 

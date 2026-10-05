@@ -59,6 +59,8 @@ def infer_inputs_and_outputs(program: sast.Program):
             node.operation_type.destination = node.operation_type.destination[:len(node.body[-1].values)]
 
     # Collect inputs/outputs per computation and only include globally-necessary fields in a second pass
+    defined_names = set(k.name for k in program.inputs)
+    loop_carried_names: set[str] = set()
     for comp in program.computations:
         if isinstance(comp, sast.ReturnOp):
             continue
@@ -68,14 +70,22 @@ def infer_inputs_and_outputs(program: sast.Program):
         outputs_per_computation.append(collector.outputs)
 
         # Set the inputs to be anything that is used and defined outside (i.e., not overridden)
-        comp.inputs = _unique_id_list(collector.inputs - collector.outputs, False)
+        inputs = collector.inputs - collector.outputs
+        # Values of loop-carried fields flow in from previous computations (levels before the interval)
+        carried = analysis.loop_carried_names(comp)
+        loop_carried_names |= carried
+        inputs |= {sast.Identifier(name) for name in carried & defined_names}
+        comp.inputs = _unique_id_list(inputs, False)
         comp.operation_type.source = comp.operation_type.source[:len(comp.inputs)]  # Adjust type information
+        comp.operation_type.source += [sast.ViewType.empty()
+                                       for _ in range(len(comp.inputs) - len(comp.operation_type.source))]
 
         # Initialize outputs to final outputs of the block
         comp.outputs = _unique_id_list(collector.outputs, True)
-        
+        defined_names |= set(k.name for k in comp.outputs)
+
     # Reduce outputs based on usage in subsequent computations
-    in_scope_names = set(k.name for k in program.outputs)
+    in_scope_names = set(k.name for k in program.outputs) | loop_carried_names
     # Add all inputs to the set of subsequent names
     for comp in program.computations:
         if isinstance(comp, sast.ReturnOp):

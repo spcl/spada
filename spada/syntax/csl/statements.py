@@ -275,7 +275,14 @@ def emit_for(statement: spir.ForStatement, dsds: UniqueDSDDict, dtypes: dict[spi
         var_name = name_to_csl(var.identifier)
         var_type = dtype_as_csl(var.dtype)
         indent = "    " * depth
-        result += f"{indent}for (@range({var_type}, {start}, {end}, {step})) |{var_name}| {{\n"
+        if step < 0:
+            # @range does not iterate for negative steps, so count upwards and derive the index
+            trip_count = max(0, (start - end - step - 1) // -step)
+            counter = f"__it_{var_name}"
+            result += f"{indent}for (@range({var_type}, 0, {trip_count}, 1)) |{counter}| {{\n"
+            result += f"{indent}    const {var_name}: {var_type} = {start} - {-step} * {counter};\n"
+        else:
+            result += f"{indent}for (@range({var_type}, {start}, {end}, {step})) |{var_name}| {{\n"
 
     # Body (indent one level deeper than the deepest loop)
     body_indent = "    " * len(ranges)

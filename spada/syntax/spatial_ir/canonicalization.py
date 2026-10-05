@@ -193,19 +193,35 @@ def _rewrite_place_declarations(
 def _rewrite_stream_declarations(
         statements: list[spir.StreamDeclaration],
         used_versions: dict[str, set[int]],
+        phase_names: dict[spir.Identifier, spir.Identifier],
 ) -> tuple[dict[spir.Identifier, spir.Identifier], list[spir.StreamDeclaration]]:
+    """
+    Renames stream declarations that clash with streams of earlier phases.
+
+    A stream is declared once per subgrid that takes part in it, so all declarations of a name within one phase
+    are the same stream and must keep sharing a name across rectangles.
+
+    :param statements: The stream declarations of one dataflow block.
+    :param used_versions: The identifier versions used so far in the kernel (updated in place).
+    :param phase_names: The names assigned to the streams of the current phase (updated in place).
+    :return: The replacements to apply to the uses, and the rewritten declarations.
+    """
     replacements: dict[spir.Identifier, spir.Identifier] = {}
     appended_statements: list[spir.StreamDeclaration] = []
 
     for statement in statements:
         stream_name = statement.stream_name
-        rewritten_statement = copy.deepcopy(statement)
-        if stream_name.version in used_versions[stream_name.name]:
-            fresh_identifier = _make_fresh_identifier(used_versions, stream_name)
-            replacements[stream_name] = copy.deepcopy(fresh_identifier)
-            rewritten_statement.stream_name = fresh_identifier
+        if stream_name not in phase_names:
+            if stream_name.version in used_versions[stream_name.name]:
+                phase_names[stream_name] = _make_fresh_identifier(used_versions, stream_name)
+            else:
+                phase_names[stream_name] = stream_name
+            _register_identifier(used_versions, phase_names[stream_name])
 
-        _register_identifier(used_versions, rewritten_statement.stream_name)
+        rewritten_statement = copy.deepcopy(statement)
+        if phase_names[stream_name] != stream_name:
+            replacements[stream_name] = copy.deepcopy(phase_names[stream_name])
+            rewritten_statement.stream_name = copy.deepcopy(phase_names[stream_name])
         appended_statements.append(rewritten_statement)
 
     return replacements, appended_statements
@@ -378,6 +394,7 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
                         _register_identifier(used_versions, statement.field_name)
 
             # Extend dataflow blocks
+            phase_stream_names: dict[spir.Identifier, spir.Identifier] = {}
             for df in block.dataflow:
                 rect = df.get_grid_rect()
                 if rect in rect_dataflow:
@@ -387,7 +404,8 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
                         for oldv, newv in zip(df.variables, rect_dataflow[rect].variables)
                     })
 
-                    stream_replacements, statements = _rewrite_stream_declarations(df.statements, used_versions)
+                    stream_replacements, statements = _rewrite_stream_declarations(
+                        df.statements, used_versions, phase_stream_names)
                     phase_replacements[rect].update(stream_replacements)
                     rect_dataflow[rect].statements.extend(_apply_identifier_replacements(statements, replacements))
                 else:
@@ -396,7 +414,8 @@ def inline_phases(kernel: spir.Kernel) -> spir.Kernel:
                     statements = _apply_identifier_replacements(
                         rect_dataflow[rect].statements, phase_replacements[rect])
                     rect_dataflow[rect].statements = []
-                    stream_replacements, rewritten_statements = _rewrite_stream_declarations(statements, used_versions)
+                    stream_replacements, rewritten_statements = _rewrite_stream_declarations(
+                        statements, used_versions, phase_stream_names)
                     phase_replacements[rect].update(stream_replacements)
                     rect_dataflow[rect].statements.extend(rewritten_statements)
 

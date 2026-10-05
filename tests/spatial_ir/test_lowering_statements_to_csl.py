@@ -104,6 +104,31 @@ def test_receive_statement_array_strided():
     assert '@range(i16, 0, 9, 3)' in f.code, "Expected strided range not found in generated CSL"
 
 
+def test_for_negative_step_iterates_downwards():
+    """CSL's @range does not iterate for negative steps, so backward loops count upwards and derive the index."""
+    spatial_ir_code = '''
+    kernel @test_backward_loop<>(stream<f32, 4>[1, 1] readonly input, stream<f32, 4>[1, 1] writeonly output) {
+        place u16 i, u16 j in [0:1, 0:1] {
+            f32[5] a;
+        }
+        compute u16 i, u16 j in [0:1, 0:1] {
+            await receive(a, input[i, j]);
+            for i32 k in [2:-1:-1] {
+                a[k] = a[k] + a[(k + 1)];
+            }
+            await send(a, output[i, j]);
+        }
+    }
+    '''
+
+    kernel = create_inline_spatial_ir(spatial_ir_code)
+    code = '\n'.join(f.code for f in lower_spatial_ir_to_csl(kernel))
+
+    assert '@range(i32, 2, -1, -1)' not in code
+    assert 'for (@range(i32, 0, 3, 1)) |__it_k|' in code, code
+    assert 'const k: i32 = 2 - 1 * __it_k;' in code, code
+
+
 def test_send_statement_scalar():
     """Test send statement with scalar types."""
     spatial_ir_code = '''

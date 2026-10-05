@@ -228,6 +228,133 @@ def test_vadv():
         assert subgrids_dont_overlap(spatial_program)
 
 
+def _lower_gt4py(file: str, function: str, domain=(4, 4, 4)) -> Program:
+    from spada.syntax.gt4py import parser as gt4py_parser
+    from spada.lowering import gt4py_to_stencil_ir
+
+    gtfuncs = gt4py_parser.parse_file(str(Path(__file__).parent / Path('../../samples') / file))
+    return gt4py_to_stencil_ir.lower_gt4py_to_stencil_ir(gtfuncs[function], domain=domain)
+
+
+@pytest.mark.parametrize('file,function', [
+    ('stencils.py', 'vertical_advection'),
+    ('stencils.py', 'pure_vertical'),
+    ('gt4py_test_instances.py', 'forward_partial_inout'),
+    ('gt4py_test_instances.py', 'forward_lookahead_inout'),
+    ('gt4py_test_instances.py', 'forward_carried_temporary'),
+    ('gt4py_test_instances.py', 'backward_carried_after_write'),
+])
+def test_fwbw_vertical_accesses_are_versioned_by_iteration(file, function):
+    """
+    In a FORWARD/BACKWARD computation, a vertically-offset read of a field that the computation writes must
+    refer to the computation's result if the level was already processed (k - n for FORWARD, k + n for
+    BACKWARD), and to the incoming version otherwise -- never to the version that is current at the point
+    of the read in the loop body. The incoming version must be an input of the computation.
+    """
+    from spada.syntax.stencil_ir import analysis
+
+    program = _lower_gt4py(file, function)
+    sequential = [c for c in program.computations
+                  if isinstance(c, ComputationBlock) and c.schedule != ComputationType.PARALLEL]
+    assert sequential
+
+    for comp in sequential:
+        written = analysis.names_written_in(comp)
+        outputs = {out.name: out for out in comp.outputs}
+        inputs = {inp.name: inp for inp in comp.inputs}
+        for node in comp.walk():
+            if not isinstance(node, Subscript) or node.subscript[2] == 0 or node.value.name not in written:
+                continue
+            name = node.value.name
+            if analysis.is_loop_carried_access(comp, node):
+                assert name in outputs, f'{name} is loop-carried but not an output of the computation'
+                assert node.value == outputs[name], f'{node.as_ir()} must refer to {outputs[name].as_ir()}'
+            else:
+                assert node.value == inputs[name], f'{node.as_ir()} must refer to {inputs[name].as_ir()}'
+        for name in analysis.loop_carried_names(comp):
+            if any(name in analysis.names_written_in(c) for c in program.computations[:program.computations.index(comp)]
+                   if isinstance(c, ComputationBlock)) or name in {i.name for i in program.inputs}:
+                assert name in inputs, f'Incoming version of loop-carried field {name} must be an input'
+
+
+def test_vadv_loop_carried_reads_do_not_extend_domains():
+    # Reading ccol/dcol at k - 1 must not require the intermediates of the current iteration at k - 1,
+    # hence u_stage only needs the levels of the domain
+    program = _lower_gt4py('stencils.py', 'vertical_advection')
+    u_stage_t = program.operation_type.source[[i.name for i in program.inputs].index('u_stage')]
+    assert (u_stage_t.domain.z.start, u_stage_t.domain.z.end) == (0, 4)
+
+
+@pytest.mark.parametrize('function', ['pure_vertical', 'vertical_advection'])
+def test_written_inputs_initialize_field_storage(function):
+    """
+    Computations only write the levels of their interval into the program-scope storage of a field. For a
+    field that is both an input and written, that storage must be initialized with the received input.
+    """
+    program = _lower_gt4py('stencils.py', function)
+    type_inference.infer_field_extents(program)
+    type_inference.infer_field_domains(program)
+    kernel = lower_stencil_to_spatial(program)
+
+    output_buffers = {stmt.local_array for stmt in kernel.walk()
+                      if isinstance(stmt, spa.SendStatement) and isinstance(stmt.stream_name, spa.ArraySlice)
+                      and stmt.stream_name.array.name == '__kernel_out_0'}
+    assert len(output_buffers) == 1
+    output_buffer = output_buffers.pop()
+
+    input_name = output_buffer.name
+    initialized = False
+    for block in kernel.walk():
+        if not isinstance(block, spa.ComputeBlock):
+            continue
+        received = {stmt.local_array for stmt in block.statements if isinstance(stmt, spa.ReceiveStatement)}
+        for stmt in block.walk():
+            if (isinstance(stmt, spa.AssignmentStatement) and isinstance(stmt.destination, spa.ArraySlice)
+                    and stmt.destination.array == output_buffer
+                    and isinstance(stmt.source.value, spa.ArraySlice)
+                    and stmt.source.value.array == spa.Identifier(input_name, 0)
+                    and spa.Identifier(input_name, 0) in received):
+                initialized = True
+    assert initialized, f'{output_buffer.as_ir()} is not initialized from the received input'
+
+
+@pytest.mark.parametrize('function', ['vertical_advection', 'uvbke', 'laplacian', 'one_d_diff'])
+def test_input_receives_index_within_arguments(function):
+    """
+    Kernel argument arrays start at the origin of the field's domain, which only coincides with grid
+    coordinate 0 if the field has the largest halo on the negative side. Every PE that receives an input
+    must therefore index the argument array relative to that origin, staying within its bounds.
+    """
+    import re
+
+    program = _lower_gt4py('stencils.py', function)
+    type_inference.infer_field_extents(program)
+    type_inference.infer_field_domains(program)
+    kernel = lower_stencil_to_spatial(program)
+    shapes = {arg.identifier.name: arg.dtype.shape for arg in kernel.arguments if isinstance(arg.dtype, spa.ArrayType)}
+
+    def index_range(index: spa.RangeExpression | spa.Expression, grid: spa.RangeExpression) -> tuple[int, int]:
+        match = re.fullmatch(r'\(?[\w#]+(?: - (\d+))?\)?', index.as_ir())
+        assert match, index.as_ir()
+        offset = int(match.group(1) or 0)
+        return grid.start.eval() - offset, grid.stop.eval() - 1 - offset
+
+    checked = 0
+    for block in kernel.walk():
+        if not isinstance(block, spa.ComputeBlock):
+            continue
+        for stmt in block.statements:
+            if not (isinstance(stmt, spa.ReceiveStatement) and isinstance(stmt.stream_name, spa.ArraySlice)):
+                continue
+            name = stmt.stream_name.array.name
+            for index, grid, size in zip(stmt.stream_name.indices, (block.subgrid.x_range, block.subgrid.y_range),
+                                         shapes[name]):
+                lo, hi = index_range(index, grid)
+                assert 0 <= lo and hi < size, f'{stmt.as_ir()} on {block.subgrid.as_ir()} exceeds {name}[{size}]'
+            checked += 1
+    assert checked > 0
+
+
 def test_gt4py_integration():
     from spada.syntax.gt4py import parser as gt4py_parser
     
