@@ -24,16 +24,16 @@ jobs:
       with:
         python-version: "3.10"
         cache: "pip"
+        cache-dependency-path: pyproject.toml
 
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pytest
-        if [ -f requirements-ci.txt ]; then pip install -r requirements-ci.txt; fi
+        pip install -e ".[dev]"
 
     - name: Test with pytest
       run: |
-        PYTHONPATH=`pwd` pytest
+        pytest
 
   # WSE-2 and WSE-3 share one runner so Singularity and the SDK are installed
   # once.
@@ -52,12 +52,12 @@ jobs:
       with:
         python-version: "3.10"
         cache: "pip"
+        cache-dependency-path: pyproject.toml
 
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pytest
-        if [ -f requirements-ci.txt ]; then pip install -r requirements-ci.txt; fi
+        pip install -e ".[dev]"
 
     - name: Install CSL dependencies
       env:
@@ -103,6 +103,25 @@ jobs:
 
     - name: Test CSL with simulator
       run: |
-        pip install --no-deps -e .
         export PATH=$PATH:`pwd`/cerebras-sdk
         WSE_ARCH=${{ matrix.wse-arch }} ./tests/csl_runtime/run_tests.sh
+
+  build-package:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.10"
+        cache: "pip"
+        cache-dependency-path: pyproject.toml
+
+    - name: Build sdist and wheel
+      run: |
+        python -m pip install --upgrade pip
+        pip install build twine
+        python -m build
+        twine check dist/*
