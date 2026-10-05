@@ -66,6 +66,25 @@ kernel @scalar_exchange_chain<R>(
 _CHAIN_PHASES = 12
 
 
+def _lower_or_skip_queue_limit(kernel, **kwargs):
+    """
+    Lowers ``kernel``, skipping the test where a PE needs more input queues than WSE-3 has.
+
+    WSE-3 keeps one input queue per inbound color for the whole kernel, so a PE that receives on
+    more than six channels cannot be lowered there.
+
+    :param kernel: A concretized kernel.
+    :param kwargs: Passed on to ``lower_spatial_ir_to_csl``.
+    :return: The generated CSL files.
+    """
+    try:
+        return lower_spatial_ir_to_csl(kernel, **kwargs)
+    except SyntaxError as error:
+        if constants.ARCH == 'wse3' and 'concurrent input queues' in str(error):
+            pytest.skip(f'needs more input queues than WSE-3 has: {str(error).splitlines()[0]}')
+        raise
+
+
 def _scalar_exchange_chain(phases: int = _CHAIN_PHASES):
     kernel = parser.parse_string(_SCALAR_EXCHANGE_CHAIN)
     kernel = passes.concretize_parameters(kernel, R=phases)
@@ -80,7 +99,7 @@ def test_task_recycling_codegen_uses_else_if_dispatch_for_recycled_slots():
     kernel = passes.concretize_parameters(kernel, LX=8, LY=8, K=16)
     kernel = passes.constexpr_propagation(kernel)
 
-    csl_files = lower_spatial_ir_to_csl(kernel, task_fusion=False)
+    csl_files = _lower_or_skip_queue_limit(kernel, task_fusion=False)
     code = next(file.code for file in csl_files if file.filename == 'code_0_0.csl')
 
     task_id_occurrences: dict[str, int] = {}
@@ -115,6 +134,10 @@ def test_csl_runtime_task_recycling_sample_lowers(filename: str):
     assert csl_files, 'expected at least one generated CSL file'
     combined = '\n'.join(f.code for f in csl_files)
     assert combined.strip(), 'expected non-empty CSL'
+    local_tasks = max(len(re.findall(r'const task_\d+_id = ', f.code)) for f in csl_files)
+    if local_tasks <= len(constants.LOCAL_TASK_IDS):
+        pytest.skip(f'{local_tasks} local tasks fit the {len(constants.LOCAL_TASK_IDS)} IDs of '
+                    f'{constants.ARCH}, so nothing is recycled')
     assert '__task_slot_' in combined, 'expected task-ID recycling in generated CSL'
 
 
@@ -218,7 +241,7 @@ def test_codegen_avoids_local_task_id_color_overlap():
     kernel = parser.parse_file(path)
     kernel = passes.constexpr_propagation(kernel)
 
-    csl_files = lower_spatial_ir_to_csl(
+    csl_files = _lower_or_skip_queue_limit(
         kernel, task_fusion=False, copy_elision=True, prune_memory=True)
     combined = '\n'.join(f.code for f in csl_files)
 

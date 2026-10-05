@@ -1077,6 +1077,8 @@ def _microthread_intervals(compute: spir.ComputeBlock, input_names: set[spir.Ide
             if isinstance(node, spir.AwaitCompletionStatement):
                 close(pending.pop(node.completion_name.as_ir(), []), index)
                 continue
+            if isinstance(node, spir.ForeachStatement) and not node.parameter_range:
+                continue  # A data task runs on no microthread.
             for inbound, names in ((True, input_names), (False, output_names)):
                 stream = _fabric_transfer_stream(node, inbound)
                 if stream is None or stream not in names:
@@ -1096,12 +1098,15 @@ def _microthread_intervals(compute: spir.ComputeBlock, input_names: set[spir.Ide
 def _fabric_transfer_stream(node: spir.SpatialNode, inbound: bool) -> Optional[spir.Identifier]:
     """
     The stream a node transfers in the requested direction, or ``None``.
+
+    A data-task receive (``foreach`` with no range) counts only on WSE-3, where its task ID is an
+    input queue and so needs one reserved.
     """
     if inbound:
         if isinstance(node, spir.ReceiveStatement):
             return stream_lifetime.underlying_stream(node.stream_name)
-        if (isinstance(node, spir.ForeachStatement) and node.parameter_range
-                and node.receive_stream is not None):
+        if (isinstance(node, spir.ForeachStatement) and node.receive_stream is not None
+                and (node.parameter_range or csl.ARCH == 'wse3')):
             return stream_lifetime.underlying_stream(node.receive_stream.stream_name)
         return None
     if isinstance(node, spir.SendStatement):
@@ -1114,8 +1119,8 @@ def _streams_with_fabric_dsds(compute: spir.ComputeBlock, memcpy_mode: bool,
     """
     Streams that lower to a fabric DSD in one direction, so they need a hardware queue.
 
-    A data-task receive (``foreach`` with no range) binds the color itself and does not take a
-    queue. Memcpy arguments are already in local memory, so they do not either.
+    A data-task receive (``foreach`` with no range) binds the color itself and takes a queue only on
+    WSE-3. Memcpy arguments are already in local memory, so they do not take one either.
 
     :param compute: The compute block being lowered.
     :param memcpy_mode: Whether memcpy mode is used.
@@ -1278,7 +1283,13 @@ def _collect_unique_dsds(
                 raise SyntaxError(f'Foreach generator "{stream_name.as_ir()}" without a defined '
                                   f'range must only be used with a kernel argument or extern_stream.'
                                   f'\n  In line {stmt.lineinfo}')
-            # A data task will be created instead (handled in _generate_data_task)
+            # A data task will be created instead (handled in _generate_data_task_slot). On WSE-3
+            # its ID is an input queue, which only a fabric descriptor records.
+            if (csl.ARCH == 'wse3' and not (memcpy_mode and stream_name in stream_args)
+                    and stream_name.as_ir() in stream_candidates):
+                dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, f'{name_to_csl(stream_name)}_color', 1,
+                                          allocate_input_queue(stream_name))
+                dsds[stream_name.as_ir()].append((f'{name_to_csl(stream_name)}_in_dsd', dsd))
             return
         if stream_name.as_ir() not in stream_candidates:
             return

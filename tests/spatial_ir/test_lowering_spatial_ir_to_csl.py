@@ -1,7 +1,27 @@
 import os
 from spada.lowering.spatial_ir_to_csl import lower_spatial_ir_to_csl
+from spada.syntax.csl import constants
 from spada.syntax.spatial_ir import parser, passes
 import pytest
+
+
+def _lower_or_skip_queue_limit(kernel, **kwargs):
+    """
+    Lowers ``kernel``, skipping the test where a PE needs more input queues than WSE-3 has.
+
+    WSE-3 keeps one input queue per inbound color for the whole kernel, so a PE that receives on
+    more than six channels cannot be lowered there.
+
+    :param kernel: A concretized kernel.
+    :param kwargs: Passed on to ``lower_spatial_ir_to_csl``.
+    :return: The generated CSL files.
+    """
+    try:
+        return lower_spatial_ir_to_csl(kernel, **kwargs)
+    except SyntaxError as error:
+        if constants.ARCH == 'wse3' and 'concurrent input queues' in str(error):
+            pytest.skip(f'needs more input queues than WSE-3 has: {str(error).splitlines()[0]}')
+        raise
 
 
 def test_non_concrete_program():
@@ -67,7 +87,7 @@ def test_tree_reduce_1d_compiles_512_pes():
     # K must be >= 2: K=1 breaks foreach/receive lowering (empty DSD slot for __x).
     kernel = passes.concretize_parameters(kernel, L=9, K=2)
     kernel = passes.constexpr_propagation(kernel)
-    csl_files = lower_spatial_ir_to_csl(kernel, copy_elision=True, prune_memory=True)
+    csl_files = _lower_or_skip_queue_limit(kernel, copy_elision=True, prune_memory=True)
     assert csl_files, 'expected at least one generated CSL file'
     assert all(f.code.strip() for f in csl_files), 'expected non-empty CSL bodies'
 

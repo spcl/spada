@@ -15,6 +15,9 @@ permissions:
 jobs:
   test-pytest:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        wse-arch: ["wse2", "wse3"]
 
     steps:
     - uses: actions/checkout@v4
@@ -32,6 +35,8 @@ jobs:
         pip install -e ".[dev]"
 
     - name: Test with pytest
+      env:
+        WSE_ARCH: ${{ matrix.wse-arch }}
       run: |
         pytest
 
