@@ -7,7 +7,7 @@ import copy
 import functools
 from io import StringIO
 import textwrap
-from typing import Optional
+from spada.lowering import fabric_occupancy, wse3
 from spada.syntax.common.types import BIT_WIDTH
 from spada.syntax.spatial_ir import irnodes as spir, canonicalization, analysis, passes
 from spada.syntax.spatial_ir import copy_elimination
@@ -394,7 +394,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         raise
 
     cslrouting.declare_switch_advances(rect, header, color_map, dsds)
-    _declare_queue_initialization(dsds, rect, footer, color_map)
+    wse3.declare_queue_initialization(dsds, rect, footer, color_map)
 
     # Fuse tasks as much as possible to reduce number of resources
     if task_fusion:
@@ -408,7 +408,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
             print(f'P{rect.x_range[0]},{rect.y_range[0]}: Reduced from {len_for_reporting} to {len(tasks)} tasks.')
 
     data_task_colors = {
-        i: _data_task_color(rect.metadata, i, task, color_map)
+        i: wse3.data_task_color(rect.metadata, i, task, color_map)
         for i, task in enumerate(tasks) if task.task_type == 'data'
     }
     # On WSE-2 a data-task ID *is* its color, so a local task must not reuse one.
@@ -441,7 +441,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     # Declare each data task ID. Data tasks that share a color are aliases of one hardware ID, and
     # a state variable selects which of them the shared task runs as.
     for slot in task_bindings.data_slots:
-        id_expr = _data_task_id_builtin(rect.metadata, slot, tasks, dsds)
+        id_expr = wse3.data_task_id_builtin(rect.metadata, slot, tasks, dsds)
         for task_index in slot.task_indices:
             current_code.write(f'const dtask_{task_index}_id = {id_expr};\n')
         if slot.recycled:
@@ -532,7 +532,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     exit_task_sequential &= not any(
         t.task_type == 'data' for t in tasks for n, _ in t.outgoing if n == -1)  # No data tasks
     exit_task_blocked = any(n == -1 and typ == tdag.InterTaskEdge.UNBLOCK for t in tasks for n, typ in t.outgoing)
-    hardware_exit_id = None if exit_task_sequential else _exit_task_hardware_id(
+    hardware_exit_id = None if exit_task_sequential else wse3.exit_task_hardware_id(
         {slot.hardware_task_id for slot in task_bindings.local_slots}, set(color_map.values()))
 
     # Bind exit task
@@ -925,222 +925,6 @@ def _dsd_from_stream(stream_candidates: dict[str, tuple[spir.StreamDeclaration |
     return cslstruct.MemoryDSD(dsd_type, name, extents, idxvars, indices)
 
 
-def _declare_queue_initialization(dsds: UniqueDSDDict, rect: PEBlock, footer: StringIO,
-                                  color_map: dict[str, int]) -> None:
-    """
-    Binds every fabric queue this PE uses to its color, which WSE-3 requires.
-
-    On WSE-2 a fabric queue picks its color up from the descriptor that uses it. WSE-3 does not:
-    a queue must be tied to a color with ``@initialize_queue`` before any transfer over it will
-    proceed, and a program that omits it simply hangs. Queues are handed out per channel (see
-    ``_collect_unique_dsds``), so each one is named by exactly one color here.
-
-    :param dsds: The descriptors collected for this rectangle.
-    :param rect: The PE block being generated, used for the switch-advance descriptors.
-    :param footer: The ``comptime`` block to write the bindings into.
-    :param color_map: Stream name to color number, for the switch-advance descriptors.
-    """
-    if not csl.ARCH == 'wse3':
-        return
-
-    # (queue kind, queue id) -> color expression. Both the data descriptors and the control
-    # descriptors that carry switch advances need their queue bound.
-    bindings: dict[tuple[str, int], str] = {}
-    for entries in dsds.values():
-        for _, dsd in entries:
-            if not isinstance(dsd, cslstruct.FabricDSD) or not dsd.color:
-                continue
-            direction = 'in' if dsd.dsd_type == cslstruct.DSDType.fabin else 'out'
-            kind = 'input_queue' if dsd.dsd_type == cslstruct.DSDType.fabin else 'output_queue'
-            bindings.setdefault((kind, dsd.queue), f'{dsd.color}_{direction}')
-
-    for statement in rect.metadata.compute.statements:
-        if isinstance(statement, spir.CloseStatement) and statement.switch_advance:
-            stream = stream_lifetime.underlying_stream(statement.stream_name)
-            name = cslstmt.name_to_csl(stream)
-            queue = None
-            for _, dsd in dsds.get(stream.as_ir(), ()):
-                if isinstance(dsd, cslstruct.FabricDSD) and dsd.dsd_type == cslstruct.DSDType.fabout:
-                    queue = dsd.queue
-                    break
-            if queue is None:
-                queue = csl.OUTPUT_QUEUE_IDS[0]
-            bindings.setdefault(('output_queue', queue), f'@get_color({color_map[name + "_OUT"]})')
-
-    for (kind, queue), color in sorted(bindings.items()):
-        footer.write(f'    @initialize_queue(@get_{kind}({queue}), .{{ .color = {color} }});\n')
-
-
-def _statement_transfer_points(statement: spir.Statement, names: set[spir.Identifier],
-                               inbound: bool) -> list[spir.Identifier]:
-    """
-    Fabric transfers in ``statement``, in source order, with sequential ``for`` bodies repeated.
-
-    Walking a loop body once makes its colours look sequential, so occupancy pooling would give
-    them one queue. The next iteration of an earlier colour can already occupy the router when a
-    later colour of the same body remaps that queue -- WSE-2 then aborts with "Attempt to remap
-    input queue N, from C_i to C_j, but the router is holding wavelets". Appending the body a
-    second time makes a colour used on both sides of another occupy a span that overlaps it, the
-    same rule that keeps a reused colour's queue across a gap between unrolled phases.
-    """
-    if isinstance(statement, spir.ForStatement):
-        body = _transfer_points(statement.body, names, inbound)
-        return body + body
-
-    nested_skip: set[int] = set()
-    points: list[spir.Identifier] = []
-    for node in statement.walk():
-        if id(node) in nested_skip:
-            continue
-        if node is not statement and isinstance(node, spir.ForStatement):
-            for descendant in node.walk():
-                nested_skip.add(id(descendant))
-            points.extend(_statement_transfer_points(node, names, inbound))
-            continue
-        stream = _fabric_transfer_stream(node, inbound)
-        if stream is None or stream not in names:
-            continue
-        points.append(stream)
-    return points
-
-
-def _transfer_points(statements: list[spir.Statement], names: set[spir.Identifier],
-                     inbound: bool) -> list[spir.Identifier]:
-    points: list[spir.Identifier] = []
-    for statement in statements:
-        points.extend(_statement_transfer_points(statement, names, inbound))
-    return points
-
-
-def _queue_spans(compute: spir.ComputeBlock, names: set[spir.Identifier], queue_key,
-                 inbound: bool) -> dict[str, tuple[int, int]]:
-    """
-    Occupancy of each queue key along the linearized send/receive order of this PE.
-
-    Sequential ``for`` bodies are counted twice so a colour that comes back on the next iteration
-    keeps its queue across the loop-carried gap; see ``_statement_transfer_points``. Uses of the
-    same channel still collapse to one span, so a colour that comes back after a gap between
-    unrolled phases keeps its queue for the whole of that span.
-
-    :param compute: The compute block being lowered.
-    :param names: Streams that actually bind a fabric queue in this direction.
-    :param queue_key: Maps a stream identifier to its grouping key (channel, or the name itself).
-    :param inbound: True to walk receives, False to walk sends.
-    :return: Mapping of grouping key to ``(first_use, last_use)`` in linearized order.
-    """
-    points = _transfer_points(compute.statements, names, inbound)
-
-    spans: dict[str, tuple[int, int]] = {}
-    for index, stream in enumerate(points):
-        key = queue_key(stream)
-        if key in spans:
-            start, _ = spans[key]
-            spans[key] = (start, index)
-        else:
-            spans[key] = (index, index)
-    return spans
-
-
-def _microthread_intervals(compute: spir.ComputeBlock, input_names: set[spir.Identifier],
-                           output_names: set[spir.Identifier],
-                           queue_key) -> dict[str, list[tuple[int, int]]]:
-    """
-    The intervals over which each stream group holds a microthread on one PE.
-
-    Both directions are numbered in one space, since a microthread is one resource across them. A
-    transfer that keeps a completion handle is in flight until that handle is awaited, which is where
-    real concurrency comes from: a receive started before a send is still running while the send is.
-    A self-awaited transfer is given its own slot and the next one, because the activation that
-    awaits it also starts what follows.
-
-    :param compute: The compute block being lowered.
-    :param input_names: Streams that bind an input queue on this PE.
-    :param output_names: Streams that bind an output queue on this PE.
-    :param queue_key: Maps a stream identifier to its grouping key (channel, or the name itself).
-    :return: Mapping of direction-prefixed grouping key to the intervals it is in flight over.
-    """
-    live: dict[str, list[tuple[int, int]]] = {}
-    pending: dict[str, list[tuple[str, int]]] = {}
-    index = 0
-
-    def close(keys: list[tuple[str, int]], end: int) -> None:
-        for key, start in keys:
-            live.setdefault(key, []).append((start, end))
-
-    for statement in compute.statements:
-        for node in statement.walk():
-            if isinstance(node, spir.AwaitAllStatement):
-                for keys in pending.values():
-                    close(keys, index)
-                pending.clear()
-                continue
-            if isinstance(node, spir.AwaitCompletionStatement):
-                close(pending.pop(node.completion_name.as_ir(), []), index)
-                continue
-            if isinstance(node, spir.ForeachStatement) and not node.parameter_range:
-                continue  # A data task runs on no microthread.
-            for inbound, names in ((True, input_names), (False, output_names)):
-                stream = _fabric_transfer_stream(node, inbound)
-                if stream is None or stream not in names:
-                    continue
-                key = f'{"in" if inbound else "out"} {queue_key(stream)}'
-                completion = getattr(node, 'completion_name', None)
-                if completion is None:
-                    live.setdefault(key, []).append((index, index + 1))
-                else:
-                    pending.setdefault(completion.name.as_ir(), []).append((key, index))
-                index += 1
-    for keys in pending.values():
-        close(keys, index)
-    return live
-
-
-def _fabric_transfer_stream(node: spir.SpatialNode, inbound: bool) -> Optional[spir.Identifier]:
-    """
-    The stream a node transfers in the requested direction, or ``None``.
-
-    A data-task receive (``foreach`` with no range) counts only on WSE-3, where its task ID is an
-    input queue and so needs one reserved.
-    """
-    if inbound:
-        if isinstance(node, spir.ReceiveStatement):
-            return stream_lifetime.underlying_stream(node.stream_name)
-        if (isinstance(node, spir.ForeachStatement) and node.receive_stream is not None
-                and (node.parameter_range or csl.ARCH == 'wse3')):
-            return stream_lifetime.underlying_stream(node.receive_stream.stream_name)
-        return None
-    if isinstance(node, spir.SendStatement):
-        return stream_lifetime.underlying_stream(node.stream_name)
-    return None
-
-
-def _streams_with_fabric_dsds(compute: spir.ComputeBlock, memcpy_mode: bool,
-                              stream_args: set[spir.Identifier], inbound: bool) -> set[spir.Identifier]:
-    """
-    Streams that lower to a fabric DSD in one direction, so they need a hardware queue.
-
-    A data-task receive (``foreach`` with no range) binds the color itself and takes a queue only on
-    WSE-3. Memcpy arguments are already in local memory, so they do not take one either.
-
-    :param compute: The compute block being lowered.
-    :param memcpy_mode: Whether memcpy mode is used.
-    :param stream_args: Kernel-argument streams, which memcpy has already copied.
-    :param inbound: True for receives, False for sends.
-    :return: The stream identifiers that need a queue in that direction.
-    """
-    result: set[spir.Identifier] = set()
-    argument_names = {name.as_ir() for name in stream_args}
-    for statement in compute.statements:
-        for node in statement.walk():
-            name = _fabric_transfer_stream(node, inbound)
-            if name is None:
-                continue
-            if memcpy_mode and name.as_ir() in argument_names:
-                continue
-            result.add(name)
-    return result
-
-
 def _collect_unique_dsds(
     tasks: list[tdag.CSLTask],
     rect: PEBlock,
@@ -1204,10 +988,10 @@ def _collect_unique_dsds(
         channel = channel_of_stream.get(stream.as_ir(), 'auto')
         return stream.as_ir() if channel == 'auto' else f'channel {channel}'
 
-    input_names = _streams_with_fabric_dsds(rect.compute, memcpy_mode, stream_args, inbound=True)
-    output_names = _streams_with_fabric_dsds(rect.compute, memcpy_mode, stream_args, inbound=False)
-    input_spans = _queue_spans(rect.compute, input_names, queue_key, inbound=True)
-    output_spans = _queue_spans(rect.compute, output_names, queue_key, inbound=False)
+    input_names = fabric_occupancy.streams_with_fabric_dsds(rect.compute, memcpy_mode, stream_args, inbound=True)
+    output_names = fabric_occupancy.streams_with_fabric_dsds(rect.compute, memcpy_mode, stream_args, inbound=False)
+    input_spans = fabric_occupancy.queue_spans(rect.compute, input_names, queue_key, inbound=True)
+    output_spans = fabric_occupancy.queue_spans(rect.compute, output_names, queue_key, inbound=False)
     # WSE-3 remaps a fabric queue onto the next color at the first transfer that uses it, and
     # faults or stalls if the queue still holds wavelets. Occupancy in the compute block is not
     # enough to prove it is empty, so every color keeps its own queue. That also keeps data-task
@@ -1228,7 +1012,7 @@ def _collect_unique_dsds(
     # microthread and abort with "trying to term ut_instr[N], but it's not ours". Microthreads are
     # one resource across both directions, so they are handed out together.
     microthread_of = stream_lifetime.assign_microthreads(
-        _microthread_intervals(rect.compute, input_names, output_names, queue_key),
+        fabric_occupancy.microthread_intervals(rect.compute, input_names, output_names, queue_key),
         csl.MICROTHREAD_IDS, location=location)
 
     def allocate_microthread(stream: spir.Identifier, inbound: bool) -> int | None:
@@ -1596,109 +1380,6 @@ def _write_indented_block(current_code: StringIO, block: str, indent: str) -> No
         return
     for line in block.splitlines():
         current_code.write(f'{indent}{line}\n')
-
-
-def _exit_task_hardware_id(used_ids: set[int], color_ids: set[int]) -> int:
-    """Return a local-task ID for ``exit_task`` that nothing else has bound.
-
-    Walks the activatable range from 8 and skips IDs already taken by program
-    slots, by memcpy/system reservations, and on WSE-2 by colors (which are also
-    data-task IDs there).
-
-    :param used_ids: Hardware IDs already assigned to local-task slots.
-    :param color_ids: Colors allocated to this PE.
-    :return: A free activatable identifier.
-    """
-    occupied = set(used_ids) | set(csl.RESERVED_LOCAL_TASK_IDS)
-    if csl.ARCH != 'wse3':
-        occupied |= set(color_ids)
-    for tid in range(8, 31):
-        if tid not in occupied:
-            return tid
-    raise SyntaxError(
-        'No free local task ID remains for exit_task '
-        f'(occupied {sorted(occupied)}).')
-
-
-def _data_task_color(rect: PEBlock, task_index: int, task: tdag.CSLTask, color_map: dict[str, int]) -> int:
-    """
-    Returns the color a data task listens on.
-
-    On WSE-2 that color is also the hardware task ID. On WSE-3 the ID is the
-    input queue bound to this color; see ``_data_task_id_builtin``.
-
-    :param task_index: Only used to name the task in the error message.
-    """
-    stmt = rect.compute.statements[task.statements[0]]
-    assert isinstance(stmt, spir.ForeachStatement)
-    sname = stmt.receive_stream.stream_name
-    if isinstance(sname, spir.ArraySlice):
-        sname = sname.array
-    if name_to_csl(sname) + '_H2D' in color_map:
-        return color_map[name_to_csl(sname) + '_H2D']
-    if name_to_csl(sname) + '_IN' in color_map:
-        return color_map[name_to_csl(sname) + '_IN']
-    raise ValueError(f'Cannot find color for stream "{name_to_csl(sname)}" in data task {task_index}')
-
-
-def _input_queue_for_data_slot(
-    rect: PEBlock,
-    slot: task_recycling.DataTaskSlot,
-    tasks: list[tdag.CSLTask],
-    dsds: UniqueDSDDict,
-) -> int:
-    """Return the fabric input queue the receives in ``slot`` share.
-
-    On WSE-3 a data task's hardware ID is that queue, which
-    ``_declare_queue_initialization`` has already bound to the slot's color.
-
-    :param rect: The PE block being generated.
-    :param slot: The data-task slot whose color the receives listen on.
-    :param tasks: All tasks of this PE.
-    :param dsds: Fabric descriptors of this PE, which record the queue assignment.
-    :return: The input-queue identifier.
-    """
-    queues: set[int] = set()
-    for task_index in slot.task_indices:
-        task = tasks[task_index]
-        stmt = rect.compute.statements[task.statements[0]]
-        assert isinstance(stmt, spir.ForeachStatement)
-        sname = stmt.receive_stream.stream_name
-        if isinstance(sname, spir.ArraySlice):
-            sname = sname.array
-        for _, dsd in dsds.get(sname.as_ir(), []):
-            if isinstance(dsd, cslstruct.FabricDSD) and dsd.dsd_type == cslstruct.DSDType.fabin:
-                queues.add(dsd.queue)
-    if len(queues) != 1:
-        found = sorted(queues) if queues else 'none'
-        raise SyntaxError(
-            f'WSE-3 data task on color {slot.color} needs exactly one input queue, found {found}.\n'
-            "  note: @get_data_task_id takes an input_queue on WSE-3, not a color")
-    return next(iter(queues))
-
-
-def _data_task_id_builtin(
-    rect: PEBlock,
-    slot: task_recycling.DataTaskSlot,
-    tasks: list[tdag.CSLTask],
-    dsds: UniqueDSDDict,
-) -> str:
-    """Return the ``@get_data_task_id(...)`` expression for ``slot``.
-
-    WSE-2 constructs a data-task ID from the color the receive listens on.
-    WSE-3 constructs it from the input queue already bound to that color;
-    passing the color is rejected as ``expected 'input_queue' expression, got: 'color'``.
-
-    :param rect: The PE block being generated.
-    :param slot: The data-task slot, whose color is the receive's fabric color.
-    :param tasks: All tasks of this PE, indexed as in the slot.
-    :param dsds: Fabric descriptors of this PE, which record the queue assignment.
-    :return: A CSL expression of type ``data_task_id``.
-    """
-    if csl.ARCH == 'wse3':
-        queue = _input_queue_for_data_slot(rect, slot, tasks, dsds)
-        return f'@get_data_task_id(@get_input_queue({queue}))'
-    return f'@get_data_task_id(@get_color({slot.color}))'
 
 
 def _generate_data_task_slot(

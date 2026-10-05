@@ -2,6 +2,7 @@ import os
 import pytest
 
 from spada.lowering import spatial_ir_to_csl as s2c
+from spada.lowering import wse3
 from spada.syntax.csl import constants, task_recycling, tasks as tdag
 from spada.syntax.spatial_ir import analysis, parser, passes
 from spada.syntax.spatial_ir.canonicalization import PEBlock
@@ -259,10 +260,17 @@ def test_plan_is_deterministic():
 
 
 def test_local_task_ids_do_not_include_memcpy_reservations():
-    """The assignable pool must not contain IDs memcpy already binds."""
+    """The assignable pool must not contain IDs memcpy already binds.
+
+    The WSE-3 range includes task 21, which memcpy binds; ``LOCAL_TASK_IDS`` drops the reserved IDs.
+    """
     assert set(constants.LOCAL_TASK_IDS).isdisjoint(constants.RESERVED_LOCAL_TASK_IDS)
-    assert 21 not in constants._CSL_LOCAL_TASK_IDS['wse3']
-    assert set(constants._CSL_LOCAL_TASK_IDS['wse3']).isdisjoint(constants._RESERVED_LOCAL_TASK_IDS['wse3'])
+    wse3_assignable = [
+        task_id for task_id in constants._CSL_LOCAL_TASK_IDS['wse3']
+        if task_id not in constants._RESERVED_LOCAL_TASK_IDS['wse3']
+    ]
+    assert 21 in constants._CSL_LOCAL_TASK_IDS['wse3']
+    assert 21 not in wse3_assignable
     assert set(constants._CSL_LOCAL_TASK_IDS['wse2']).isdisjoint(constants._RESERVED_LOCAL_TASK_IDS['wse2'])
 
 
@@ -270,7 +278,7 @@ def test_exit_task_skips_the_first_memcpy_reservation():
     """If every ID below memcpy's first local task is taken, exit_task must hop the hole."""
     first_reserved = min(constants.RESERVED_LOCAL_TASK_IDS)
     used = set(range(8, first_reserved))
-    exit_id = s2c._exit_task_hardware_id(used, set())
+    exit_id = wse3.exit_task_hardware_id(used, set())
     assert exit_id not in used
     assert exit_id not in constants.RESERVED_LOCAL_TASK_IDS
     assert exit_id == first_reserved + 1

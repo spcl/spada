@@ -293,7 +293,7 @@ def declare_switch_advances(rect: Rectangle[PEBlock], header: StringIO, color_ma
     ``switch_advance`` field; this only has to provide the descriptor it is sent through.
 
     The descriptor reuses the *same* output queue as the stream's data, which is mandatory rather
-    than tidy: a queue is bound to one color on WSE-3 (see ``_declare_queue_initialization``), and
+    than tidy: a queue is bound to one color on WSE-3 (see :func:`spada.lowering.wse3.declare_queue_initialization`), and
     queues are handed out per channel, so sending a control wavelet for one color through the queue
     that belongs to another silently fails to advance anything. A close only ever runs on a PE that
     sends the stream, so the outgoing descriptor always exists.
