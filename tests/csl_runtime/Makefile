@@ -93,10 +93,9 @@ check-host:
 
 .PHONY: check-python
 check-python:
-	@python3 -m pip install --quiet -r "$(REPO_ROOT)/requirements-ci.txt" && \
-	    python3 -m pip install --no-deps --quiet -e "$(REPO_ROOT)" || { \
+	@python3 -m pip install --quiet -e "$(REPO_ROOT)[dev]" || { \
 	    echo "ERROR: Failed to install Python dependencies."; \
-	    echo "Run: python3 -m pip install -r $(REPO_ROOT)/requirements-ci.txt && python3 -m pip install --no-deps -e $(REPO_ROOT)"; \
+	    echo "Run: python3 -m pip install -e '$(REPO_ROOT)[dev]'"; \
 	    exit 1; \
 	}
 
