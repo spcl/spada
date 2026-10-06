@@ -2,6 +2,7 @@ import os
 import pytest
 
 from spada.lowering import spatial_ir_to_csl as s2c
+from spada.lowering import wse3
 from spada.syntax.csl import constants, task_recycling, tasks as tdag
 from spada.syntax.spatial_ir import analysis, parser, passes
 from spada.syntax.spatial_ir.canonicalization import PEBlock
@@ -72,8 +73,9 @@ def test_task_recycling_all_tasks_assigned():
 def test_task_recycling_plan_reuses_local_slots():
     tasks = _create_unfused_tasks()
     local_task_count = sum(1 for task in tasks if task.task_type == 'local')
-
-    assert local_task_count > len(constants.LOCAL_TASK_IDS)
+    if local_task_count <= len(constants.LOCAL_TASK_IDS):
+        pytest.skip(f'{local_task_count} local tasks fit the {len(constants.LOCAL_TASK_IDS)} IDs of '
+                    f'{constants.ARCH}, so nothing is recycled')
 
     plan = task_recycling.plan_task_bindings(tasks, tdag.TaskCreationBehavior.STATE_MACHINE_ON_OVERRUN)
 
@@ -255,3 +257,28 @@ def test_plan_is_deterministic():
     plan2 = task_recycling.plan_task_bindings(tasks, tdag.TaskCreationBehavior.STATE_MACHINE_ON_OVERRUN)
     assert plan1.task_to_local_slot == plan2.task_to_local_slot
     assert plan1.task_to_local_state == plan2.task_to_local_state
+
+
+def test_local_task_ids_do_not_include_memcpy_reservations():
+    """The assignable pool must not contain IDs memcpy already binds.
+
+    The WSE-3 range includes task 21, which memcpy binds; ``LOCAL_TASK_IDS`` drops the reserved IDs.
+    """
+    assert set(constants.LOCAL_TASK_IDS).isdisjoint(constants.RESERVED_LOCAL_TASK_IDS)
+    wse3_assignable = [
+        task_id for task_id in constants._CSL_LOCAL_TASK_IDS['wse3']
+        if task_id not in constants._RESERVED_LOCAL_TASK_IDS['wse3']
+    ]
+    assert 21 in constants._CSL_LOCAL_TASK_IDS['wse3']
+    assert 21 not in wse3_assignable
+    assert set(constants._CSL_LOCAL_TASK_IDS['wse2']).isdisjoint(constants._RESERVED_LOCAL_TASK_IDS['wse2'])
+
+
+def test_exit_task_skips_the_first_memcpy_reservation():
+    """If every ID below memcpy's first local task is taken, exit_task must hop the hole."""
+    first_reserved = min(constants.RESERVED_LOCAL_TASK_IDS)
+    used = set(range(8, first_reserved))
+    exit_id = wse3.exit_task_hardware_id(used, set())
+    assert exit_id not in used
+    assert exit_id not in constants.RESERVED_LOCAL_TASK_IDS
+    assert exit_id == first_reserved + 1

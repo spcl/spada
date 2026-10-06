@@ -13,6 +13,7 @@ The passes in this module are deliberately separate so that each can be tested o
 * :func:`verify_stream_bounds` -- checks ``stream<T, BOUND>`` against the transferred element count.
 * :func:`check_use_after_close` -- rejects any use of a stream past its close.
 * :func:`check_channel_conflicts` -- rejects concurrent use of a channel.
+* :func:`assign_fabric_queues` -- colors live channel spans onto hardware fabric queues.
 * :func:`elide_redundant_closes` -- drops closes whose channel is never reused.
 """
 from collections import defaultdict
@@ -126,14 +127,96 @@ def _declared_stream_names(kernel: spir.Kernel) -> set[spir.Identifier]:
     }
 
 
+def _dataflow_declarations(kernel: spir.Kernel) -> dict[spir.Identifier, spir.StreamDeclaration]:
+    return {
+        statement.stream_name: statement
+        for node in kernel.walk()
+        if isinstance(node, spir.DataflowBlock)
+        for statement in node.statements
+    }
+
+
+def _kernel_identifier_sizes(kernel: spir.Kernel) -> dict[spir.Identifier, list[int]]:
+    """
+    Returns the shape of every field placed in the kernel, merged across its ``place`` blocks.
+
+    A field that two place blocks give different shapes is dropped rather than guessed at, which
+    makes the counting that uses this give up instead of counting the wrong array.
+    """
+    sizes: dict[spir.Identifier, list[int]] = {}
+    conflicting: set[spir.Identifier] = set()
+    for node in kernel.walk():
+        if not isinstance(node, spir.PlaceBlock):
+            continue
+        for name, shape in _identifier_sizes(node).items():
+            if name in sizes and sizes[name] != shape:
+                conflicting.add(name)
+            sizes[name] = shape
+    for name in conflicting:
+        del sizes[name]
+    return sizes
+
+
+def _is_synchronous(statement: spir.Statement) -> bool:
+    """
+    Returns whether a statement, and everything nested in it, completes before the next one starts.
+
+    A statement that names a completion may still be in flight afterwards, so nothing may be
+    concluded from having executed it.
+    """
+    return all(getattr(node, 'completion_name', None) is None for node in statement.walk())
+
+
+def _bound_exhausted_at(compute: spir.ComputeBlock, use: StreamUse,
+                        declaration: Optional[spir.StreamDeclaration],
+                        sizes: dict[spir.Identifier, list[int]]) -> Optional[int]:
+    """
+    Returns the index of the statement that transfers the last element of a bounded stream, or
+    ``None`` if that statement cannot be identified.
+
+    This is where a bounded stream closes itself, which is earlier than the end of the phase and
+    sometimes has to be: a PE that hands its router over to the next sender of a shift bundle at its
+    close cannot wait for the rest of the phase, since the rest of the phase may be waiting on the
+    traffic that the hand-over lets through.
+
+    ``None`` is returned unless every use up to that statement is synchronous and no use follows it,
+    so that the close is only placed where the stream is demonstrably finished.
+    """
+    if declaration is None or declaration.dtype.bound is None:
+        return None
+    try:
+        bound = declaration.dtype.bound.eval()
+    except Exception:  # pragma: no cover - defensive: a non-constant bound
+        return None
+    if not isinstance(bound, int):
+        return None
+
+    transferred = {'send': 0, 'receive': 0}
+    directions = [kind for kind in ('send', 'receive') if (use.sent if kind == 'send' else use.received)]
+    for index in use.uses:
+        statement = compute.statements[index]
+        if not _is_synchronous(statement):
+            return None
+        for kind in directions:
+            count = _transferred_elements(statement, use.name, kind, sizes)
+            if count is None:
+                return None
+            transferred[kind] += count
+        if all(transferred[kind] >= bound for kind in directions):
+            # Anything after this exceeds the bound; ``verify_stream_bounds`` reports it.
+            return index if index == use.uses[-1] else None
+    return None
+
+
 def insert_implicit_closes(kernel: spir.Kernel) -> spir.Kernel:
     """
     Materializes the implicit close of every stream at the end of its scope.
 
-    For each compute block, an ``awaitall`` followed by ``await <stream>.close()`` is appended for
-    every stream the block uses and does not already close, in the phase in which that block last
-    uses it. The closes are emitted *after* the barrier because the phase's implicit awaits may be
-    waiting on operations that are still using those very streams.
+    A bounded stream closes itself where its bound is exhausted, so its close goes directly after
+    the statement that transfers its last element. Everything else is closed at the end of the phase
+    in which the block last uses it, as an ``awaitall`` followed by ``await <stream>.close()``. Those
+    closes are emitted *after* the barrier because the phase's implicit awaits may be waiting on
+    operations that are still using those very streams.
 
     Must run after ``canonicalize_phases`` (so that ``kernel.body`` contains only phases and place
     blocks) and ``uniquify_stream_names`` (so that a stream name means one stream), and before
@@ -145,6 +228,8 @@ def insert_implicit_closes(kernel: spir.Kernel) -> spir.Kernel:
     declared = _declared_stream_names(kernel)
     if not declared:
         return kernel
+    declarations = _dataflow_declarations(kernel)
+    sizes = _kernel_identifier_sizes(kernel)
 
     phases = [block for block in kernel.body if isinstance(block, spir.Phase)]
 
@@ -175,11 +260,28 @@ def insert_implicit_closes(kernel: spir.Kernel) -> spir.Kernel:
             if not to_close:
                 continue
 
-            compute.statements.append(spir.AwaitAllStatement())
-            for use in to_close:
+            def make_close(use: StreamUse) -> spir.CloseStatement:
                 close = spir.CloseStatement(copy.deepcopy(use.expression))
                 close.lineinfo = getattr(use.expression, 'lineinfo', None)
-                compute.statements.append(close)
+                return close
+
+            self_closing: dict[int, list[StreamUse]] = {}
+            at_end_of_phase: list[StreamUse] = []
+            for use in to_close:
+                index = _bound_exhausted_at(compute, use, declarations.get(use.name), sizes)
+                if index is None:
+                    at_end_of_phase.append(use)
+                else:
+                    self_closing.setdefault(index, []).append(use)
+
+            # Back to front, so that the indices of the insertions still to come stay valid.
+            for index in sorted(self_closing, reverse=True):
+                closes = [make_close(use) for use in self_closing[index]]
+                compute.statements[index + 1:index + 1] = closes
+
+            if at_end_of_phase:
+                compute.statements.append(spir.AwaitAllStatement())
+                compute.statements.extend(make_close(use) for use in at_end_of_phase)
 
     return kernel
 
@@ -636,6 +738,110 @@ def _never_concurrent(first: str, second: str, uses_per_rect: list[dict[spir.Ide
                     return False
 
     return used_anywhere
+
+
+def assign_fabric_queues(spans: dict[str, tuple[int, int]], queue_ids: list[int], *, kind: str,
+                         architecture: str, location: str,
+                         exclusive_keys: frozenset[str] | None = None) -> dict[str, int]:
+    """Assign fabric queues to stream groups based on occupancy spans.
+
+    Each group spans from its first use on the PE to its last. Because incoming wavelets
+    may arrive during gaps between epochs, queues cannot be safely remapped during a gap;
+    two groups may share a queue only if their active intervals are disjoint.
+
+    Groups in ``exclusive_keys`` are assigned dedicated queues that are never shared
+    across the entire kernel. This is required on WSE-3 for inbound colors and for
+    colors binding data tasks (where the task ID is the input queue ID).
+
+    :param spans: Map from stream group key to inclusive (first_use, last_use) statement indices.
+    :param queue_ids: Available hardware queue IDs.
+    :param kind: 'input' or 'output', used in diagnostics.
+    :param architecture: Target architecture name, used in diagnostics.
+    :param location: PE coordinate description, used in diagnostics.
+    :param exclusive_keys: Stream groups requiring dedicated, unshared queues.
+    :return: Map from stream group key to assigned queue ID.
+    """
+    if not spans:
+        return {}
+    if not queue_ids:
+        raise SyntaxError(
+            f'{location} needs {kind} queues, but {architecture} has none that a program may use.')
+
+    exclusive_keys = exclusive_keys or frozenset()
+    assigned: dict[str, int] = {}
+    for key in sorted(spans, key=lambda name: (spans[name][0], spans[name][1], name)):
+        start, end = spans[key]
+        used = {
+            assigned[other]
+            for other in assigned
+            if (key in exclusive_keys or other in exclusive_keys
+                or (start <= spans[other][1] and spans[other][0] <= end))
+        }
+        for queue in queue_ids:
+            if queue not in used:
+                assigned[key] = queue
+                break
+        else:
+            overlapping = sorted(
+                other for other, (other_start, other_end) in spans.items()
+                if other != key and (
+                    key in exclusive_keys or other in exclusive_keys
+                    or (start <= other_end and other_start <= end))
+            )
+            extra = ''
+            if key in exclusive_keys or exclusive_keys.intersection(overlapping):
+                extra = (
+                    '\n  note: on WSE-3 a data-task ID is its input queue, so two colors that bind '
+                    'a data task cannot share one')
+            raise SyntaxError(
+                f'{location} would need {len(used) + 1} concurrent {kind} queues '
+                f'(live groups {[key] + overlapping}), but a PE can use at most '
+                f'{len(queue_ids)} on {architecture}.\n'
+                f'  note: a fabric queue is remapped when a new color uses it, and the hardware '
+                f'rejects that while wavelets remain\n'
+                f'  note: a channel keeps one queue for the whole of its lifetime on the PE, '
+                f'including gaps between epochs{extra}')
+    return assigned
+
+
+def assign_microthreads(live: dict[str, list[tuple[int, int]]], microthread_ids: list[int], *,
+                        location: str) -> dict[str, int]:
+    """Assign microthreads to asynchronous transfer intervals on a PE.
+
+    Microthreads are occupied only while an asynchronous DSD operation is in flight.
+    Two transfers may share a microthread as long as their active intervals do not overlap.
+    Inbound and outbound groups are considered jointly because microthreads are a shared
+    resource across both transfer directions.
+
+    :param live: Map from stream group key to list of inclusive (start, end) statement intervals.
+    :param microthread_ids: Available microthread IDs.
+    :param location: PE coordinate description, used in diagnostics.
+    :return: Map from stream group key to assigned microthread ID.
+    """
+    if not live or not microthread_ids:
+        return {}
+
+    def concurrent(one: str, other: str) -> bool:
+        return any(start <= other_end and other_start <= end
+                   for start, end in live[one]
+                   for other_start, other_end in live[other])
+
+    assigned: dict[str, int] = {}
+    for key in sorted(live, key=lambda name: (min(live[name]), name)):
+        used = {assigned[other] for other in assigned if concurrent(key, other)}
+        for microthread in microthread_ids:
+            if microthread not in used:
+                assigned[key] = microthread
+                break
+        else:
+            overlapping = sorted(other for other in live if other != key and concurrent(key, other))
+            raise SyntaxError(
+                f'{location} would need {len(used) + 1} concurrent microthreads '
+                f'(live groups {[key] + overlapping}), but a PE may name at most '
+                f'{len(microthread_ids)}.\n'
+                f'  note: every asynchronous transfer in flight holds one microthread, counting '
+                f'both directions')
+    return assigned
 
 
 ###

@@ -1,0 +1,59 @@
+/**
+ * Repeated pairwise exchange between two blocks of PEs.
+ *
+ * Given D + M PEs on a line, PEs [0:M) swap values with PEs [D:D+M) (PE i swaps
+ * with PE i + D). The exchange repeats over R phases.
+ *
+ * Each phase uses two channels (one east, one west) bundled with counter filters
+ * at the receivers. Because hardware filters cannot be reconfigured during a run,
+ * each repeat consumes one filter per PE, limiting R to the per-PE filter limit
+ * (R <= 3 on WSE-2 and WSE-3).
+ *
+ * Constraints: 2 <= M <= D, 1 <= R <= 3.
+ **/
+kernel @exchange_bundle_1d<M, D, R>(
+    stream<f32, 1>[D + M, 1] readonly  inp,
+    stream<f32, 1>[D + M, 1] writeonly out
+) {
+    place i16 i, i16 j in [0:D + M, 0] {
+        f32 val
+        f32 tmp
+    }
+
+    phase {
+        compute i16 i, i16 j in [0:D + M, 0] {
+            await receive(val, inp[i, j])
+        }
+    }
+
+    for i16 r in [0:R] {
+        phase {
+            dataflow i16 i, i16 j in [0:D + M, 0] {
+                stream<f32, 1> fwd = relative_stream(D, 0) {
+                    hops = auto,
+                    channel = auto
+                }
+                stream<f32, 1> bwd = relative_stream(-D, 0) {
+                    hops = auto,
+                    channel = auto
+                }
+            }
+            compute i16 i, i16 j in [0:M, 0] {
+                await send(val, fwd)
+                await receive(tmp, bwd)
+                val = tmp
+            }
+            compute i16 i, i16 j in [D:D + M, 0] {
+                await receive(tmp, fwd)
+                await send(val, bwd)
+                val = tmp
+            }
+        }
+    }
+
+    phase {
+        compute i16 i, i16 j in [0:D + M, 0] {
+            await send(val, out[i, j])
+        }
+    }
+}

@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Tests share fixed temporary files (inp.npy, OUT_out.npy) within this directory.
+# Execute architecture test suites sequentially to avoid file collisions.
+
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -17,6 +20,7 @@ declare -a FAILED_TESTS
 
 echo -e "${BLUE}================================${NC}"
 echo -e "${BLUE}  Running Test Suite${NC}"
+echo -e "${BLUE}  WSE_ARCH=${WSE_ARCH:-wse2}${NC}"
 echo -e "${BLUE}================================${NC}"
 echo ""
 

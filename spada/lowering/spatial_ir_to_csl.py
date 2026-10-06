@@ -7,6 +7,7 @@ import copy
 import functools
 from io import StringIO
 import textwrap
+from spada.lowering import fabric_occupancy, wse3
 from spada.syntax.common.types import BIT_WIDTH
 from spada.syntax.spatial_ir import irnodes as spir, canonicalization, analysis, passes
 from spada.syntax.spatial_ir import copy_elimination
@@ -150,7 +151,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     # Plan the router switch advances, then drop every close no router has to act on
     cslrouting.plan_switch_advances(rectangles)
     if close_elision:
-        stream_lifetime.elide_redundant_closes(rectangles, needs_advance=lambda stmt: bool(stmt.switch_advance))
+        stream_lifetime.elide_redundant_closes(
+            rectangles, needs_advance=lambda stmt: bool(stmt.switch_advance) or stmt.advance_data_switch)
 
     for rect in rectangles:
         # Create a unique CSL code file based on rectangle offset
@@ -176,7 +178,8 @@ def lower_spatial_ir_to_csl(kernel: spir.Kernel,
     rect_size = x1 - x0, y1 - y0
 
     # Collect unique routes for all rectangles
-    routes_per_rectangle = cslrouting.collect_routes(rectangles, color_maps, disable_switching)
+    routes_per_rectangle, standalone_routes = cslrouting.collect_routes(rectangles, color_maps,
+                                                                       disable_switching, rect_offset)
 
     if use_memcpy_mode:
         layout_code.write(f'''
@@ -271,6 +274,10 @@ const memcpy = @import_module("<memcpy/get_params>", .{{
 {route_code}
         }}
     }}\n''')
+
+    # Sites that are no rectangle shifted as a whole bring their own loop.
+    for loop in standalone_routes:
+        layout_code.write('\n' + loop)
 
     for rinst in routing_instructions:
         layout_code.write(rinst + '\n')
@@ -378,14 +385,16 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
     dtypes = _collect_identifier_types(rect.metadata, kernel.arguments)
 
     try:
-        dsds = _collect_unique_dsds(tasks, rect.metadata, header, dtypes, kernel, use_memcpy_mode)
+        dsds = _collect_unique_dsds(
+            tasks, rect.metadata, header, dtypes, kernel, use_memcpy_mode,
+            location=f'PEs [{rect.x_range[0]}:{rect.x_range[1]}, {rect.y_range[0]}:{rect.y_range[1]}]')
     except KeyError as e:
         if e.args and isinstance(e.args[0], spir.Identifier):
             raise ValueError(f"Error in {e.args[0].lineinfo}. Undefined identifier \"{e.args[0].as_ir()}\".")
         raise
 
     cslrouting.declare_switch_advances(rect, header, color_map, dsds)
-    _declare_queue_initialization(dsds, rect, footer, color_map)
+    wse3.declare_queue_initialization(dsds, rect, footer, color_map)
 
     # Fuse tasks as much as possible to reduce number of resources
     if task_fusion:
@@ -398,14 +407,26 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         if len(tasks) != len_for_reporting:
             print(f'P{rect.x_range[0]},{rect.y_range[0]}: Reduced from {len_for_reporting} to {len(tasks)} tasks.')
 
-    task_bindings = task_recycling.plan_task_bindings(tasks, task_creation_behavior, set(color_map.values()))
+    data_task_colors = {
+        i: wse3.data_task_color(rect.metadata, i, task, color_map)
+        for i, task in enumerate(tasks) if task.task_type == 'data'
+    }
+    # On WSE-2 a data-task ID *is* its color, so a local task must not reuse one.
+    # On WSE-3 data-task IDs are input queues 0–7; colors and local tasks do not
+    # share a namespace. memcpy's local tasks are reserved on both generations.
+    disallowed_task_ids = set(csl.RESERVED_LOCAL_TASK_IDS)
+    if csl.ARCH != 'wse3':
+        disallowed_task_ids |= set(color_map.values())
+    task_bindings = task_recycling.plan_task_bindings(tasks, task_creation_behavior, disallowed_task_ids,
+                                                     data_task_colors)
 
     place_block_bytes = _place_block_storage_bytes(rect.metadata.place)
 
     print(f'Stats P{rect.x_range[0]},{rect.y_range[0]}: {place_block_bytes} bytes/PE, '
           f'{sum(1 if t.task_type == "local" else 0 for t in tasks)} local tasks across '
           f'{len(task_bindings.local_slots)} local task IDs, '
-          f'{sum(1 if t.task_type == "data" else 0 for t in tasks)} data tasks, '
+          f'{sum(1 if t.task_type == "data" else 0 for t in tasks)} data tasks across '
+          f'{len(task_bindings.data_slots)} colors, '
           f'{len(set(color_map.values()))} colors')
 
     # Declare each logical local task ID alias.
@@ -417,24 +438,16 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
             current_code.write(f'var {task_bindings.state_var(representative)}: u16 = '
                                f'{task_bindings.invalid_state_literal(representative)};\n')
 
-    # Declare each data task ID.
-    for i, task in enumerate(tasks):
-        if task.task_type != "data":
-            continue
-
-        stmt = rect.metadata.compute.statements[task.statements[0]]
-        assert isinstance(stmt, spir.ForeachStatement)
-        sname = stmt.receive_stream.stream_name
-        if isinstance(sname, spir.ArraySlice):
-            sname = sname.array
-        if name_to_csl(sname) + "_H2D" in color_map:
-            color = color_map[name_to_csl(sname) + "_H2D"]
-        elif name_to_csl(sname) + "_IN" in color_map:
-            color = color_map[name_to_csl(sname) + "_IN"]
-        else:
-            print(color_map)
-            raise ValueError(f'Cannot find color for stream "{name_to_csl(sname)}" in data task {i}')
-        current_code.write(f'const dtask_{i}_id = @get_data_task_id(@get_color({color}));\n')
+    # Declare each data task ID. Data tasks that share a color are aliases of one hardware ID, and
+    # a state variable selects which of them the shared task runs as.
+    for slot in task_bindings.data_slots:
+        id_expr = wse3.data_task_id_builtin(rect.metadata, slot, tasks, dsds)
+        for task_index in slot.task_indices:
+            current_code.write(f'const dtask_{task_index}_id = {id_expr};\n')
+        if slot.recycled:
+            representative = slot.representative_task_index
+            current_code.write(f'var {task_bindings.data_state_var(representative)}: u16 = '
+                               f'{task_bindings.data_state(representative)};\n')
 
     # Generate each local slot as one hardware task.
     for slot in task_bindings.local_slots:
@@ -505,22 +518,22 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         if not slot.recycled and tasks[slot.representative_task_index].blocked:
             footer.write(f'    @block(task_{slot.representative_task_index}_id);\n')
 
-    # Generate each data task.
-    for i, task in enumerate(tasks):
-        if task.task_type != 'data':
-            continue
-        _generate_data_task(rect.metadata, i, task, current_code, header, footer, dsds, dtypes, color_map, tasks)
-        footer.write(f'    @bind_data_task(dtask_{i}, dtask_{i}_id);\n')
-        if task.blocked:
-            footer.write(f'    @block(dtask_{i}_id);\n')
-
-    max_task_id = max((slot.hardware_task_id for slot in task_bindings.local_slots), default=csl.LOCAL_TASK_IDS[0] - 1)
+    # Generate each color's data task, dispatching between the receives that share it.
+    for slot in task_bindings.data_slots:
+        _generate_data_task_slot(rect.metadata, slot, current_code, header, dsds, dtypes, tasks, task_bindings)
+        representative = slot.representative_task_index
+        footer.write(f'    @bind_data_task({task_bindings.data_function_name(slot)}, '
+                     f'dtask_{representative}_id);\n')
+        if tasks[representative].blocked:
+            footer.write(f'    @block(dtask_{representative}_id);\n')
 
     # Create exit task that unblocks command stream
     exit_task_sequential = all(typ == tdag.InterTaskEdge.SEQUENCE for t in tasks for n, typ in t.outgoing if n == -1)
     exit_task_sequential &= not any(
         t.task_type == 'data' for t in tasks for n, _ in t.outgoing if n == -1)  # No data tasks
     exit_task_blocked = any(n == -1 and typ == tdag.InterTaskEdge.UNBLOCK for t in tasks for n, typ in t.outgoing)
+    hardware_exit_id = None if exit_task_sequential else wse3.exit_task_hardware_id(
+        {slot.hardware_task_id for slot in task_bindings.local_slots}, set(color_map.values()))
 
     # Bind exit task
     if not exit_task_sequential:
@@ -553,6 +566,14 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         current_code.write(f'    {task_bindings.state_var(representative)} = '
                            f'{task_bindings.invalid_state_literal(representative)};\n')
 
+    # Reset recycled data-slot state to the receive that runs first on each color.
+    for slot in task_bindings.data_slots:
+        if not slot.recycled:
+            continue
+        representative = slot.representative_task_index
+        current_code.write(f'    {task_bindings.data_state_var(representative)} = '
+                           f'{task_bindings.data_state(representative)};\n')
+
     # Reset data task counters and re-block dedicated tasks.
     for i, task in enumerate(tasks):
         if task.task_type == "data":
@@ -563,7 +584,10 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
             if stmt.parameter_range:
                 param_range = stmt.parameter_range[0]
                 current_code.write(f'    __num_dtask_{i} = {param_range.start.as_ir()};\n')
-        if task.task_type == 'data' and task.blocked:
+        # Blocking a shared color is the first receive's business: the later ones are installed and
+        # unblocked by their predecessors, and blocking here would hold up the first one.
+        if (task.task_type == 'data' and task.blocked
+                and i == task_bindings.data_slot(i).representative_task_index):
             current_code.write(f'    @block(dtask_{i}_id);\n')
         if task.task_type == 'local' and task.blocked and not task_bindings.is_recycled_local_task(i):
             current_code.write(f'    @block(task_{i}_id);\n')
@@ -590,7 +614,7 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
     if not exit_task_sequential:
         current_code.write(f'''
-const exit_task_id = @get_local_task_id({max_task_id + 1});
+const exit_task_id = @get_local_task_id({hardware_exit_id});
 task exit_task() void {{
     {benchmark_code.kernel_postamble}
     // On completion, unblock command stream
@@ -642,34 +666,50 @@ def _collect_colors_globally(kernel: spir.Kernel, rectangles: list[Rectangle[PEB
 
     max_channel = max(channel_is_read.union(channel_is_written), default=-1)
 
-    # Assign all "auto" channels
+    # Assign all "auto" channels, one per stream of a phase rather than one per declaration. A stream
+    # declared for a grid that consolidation splits shows up once per rectangle, and ``inline_phases``
+    # gives each copy a name of its own, so the copies are recognised by what they route rather than
+    # by their name: same phase, same offsets, same hops. Sharing them is what puts the matchings of
+    # a sorting network's phase on two colors instead of two per matching.
+    auto_channels = {}
     for rect in rectangles:
         for stream_decl in rect.metadata.dataflow.statements:
             assert stream_decl.stream.routing is not None
-            if stream_decl.stream.routing.resolved_channel == "auto":
-                stream_decl.stream.routing.channel = max_channel + 1
-                if stream_decl.stream_name in auto_stream_is_written:
-                    channel_is_written.add(max_channel + 1)
-                if stream_decl.stream_name in auto_stream_is_read:
-                    channel_is_read.add(max_channel + 1)
+            if stream_decl.stream.routing.resolved_channel != "auto":
+                continue
+            key = (stream_decl.phase, stream_lifetime.stream_group_key(stream_decl))
+            channel = auto_channels.get(key)
+            if channel is None:
                 max_channel += 1
+                channel = max_channel
+                auto_channels[key] = channel
+            stream_decl.stream.routing.channel = channel
+            if stream_decl.stream_name in auto_stream_is_written:
+                channel_is_written.add(channel)
+            if stream_decl.stream_name in auto_stream_is_read:
+                channel_is_read.add(channel)
 
-    # Allocate colors for each channel
+    # Allocate colors for each channel, the ones whose routers can switch first. WSE-3 implements
+    # switches on a subset of the colors, and whether a channel needs them is only known once its
+    # routes are planned, so handing those out first is what lets any channel of a program that stays
+    # within their number switch. On WSE-2 every color switches and this is the plain order.
+    allocation_order = csl.SWITCHABLE_COLORS + [color for color in csl.COLORS
+                                                if color not in csl.SWITCHABLE_COLORS]
     color_offset = 0
     for channel in range(max_channel + 1):
         if channel in channel_to_color:
             continue
         if channel not in channel_is_read and channel not in channel_is_written:
             continue  # Unused channel
-        if color_offset >= len(csl.COLORS):
+        if color_offset >= len(allocation_order):
             raise SyntaxError(
                 f'Too many communication channels allocated for CSL: channel {channel} cannot be assigned a color')
         if channel in channel_is_written:
-            channel_to_color[channel] = csl.COLORS[color_offset]
+            channel_to_color[channel] = allocation_order[color_offset]
             color_offset += 1
         if channel in channel_is_read:
             if channel not in channel_to_color:
-                channel_to_color[channel] = csl.COLORS[color_offset]
+                channel_to_color[channel] = allocation_order[color_offset]
                 color_offset += 1
 
     return channel_to_color
@@ -885,45 +925,6 @@ def _dsd_from_stream(stream_candidates: dict[str, tuple[spir.StreamDeclaration |
     return cslstruct.MemoryDSD(dsd_type, name, extents, idxvars, indices)
 
 
-def _declare_queue_initialization(dsds: UniqueDSDDict, rect: PEBlock, footer: StringIO,
-                                  color_map: dict[str, int]) -> None:
-    """
-    Binds every fabric queue this PE uses to its color, which WSE-3 requires.
-
-    On WSE-2 a fabric queue picks its color up from the descriptor that uses it. WSE-3 does not:
-    a queue must be tied to a color with ``@initialize_queue`` before any transfer over it will
-    proceed, and a program that omits it simply hangs. Queues are handed out per channel (see
-    ``_collect_unique_dsds``), so each one is named by exactly one color here.
-
-    :param dsds: The descriptors collected for this rectangle.
-    :param rect: The PE block being generated, used for the switch-advance descriptors.
-    :param footer: The ``comptime`` block to write the bindings into.
-    :param color_map: Stream name to color number, for the switch-advance descriptors.
-    """
-    if not csl.ARCH == 'wse3':
-        return
-
-    # (queue kind, queue id) -> color expression. Both the data descriptors and the control
-    # descriptors that carry switch advances need their queue bound.
-    bindings: dict[tuple[str, int], str] = {}
-    for entries in dsds.values():
-        for _, dsd in entries:
-            if not isinstance(dsd, cslstruct.FabricDSD) or not dsd.color:
-                continue
-            direction = 'in' if dsd.dsd_type == cslstruct.DSDType.fabin else 'out'
-            kind = 'input_queue' if dsd.dsd_type == cslstruct.DSDType.fabin else 'output_queue'
-            bindings.setdefault((kind, dsd.queue), f'{dsd.color}_{direction}')
-
-    for statement in rect.metadata.compute.statements:
-        if isinstance(statement, spir.CloseStatement) and statement.switch_advance:
-            name = cslstmt.name_to_csl(stream_lifetime.underlying_stream(statement.stream_name))
-            queue = csl.OUTPUT_QUEUE_IDS[0]
-            bindings.setdefault(('output_queue', queue), f'@get_color({color_map[name + "_OUT"]})')
-
-    for (kind, queue), color in sorted(bindings.items()):
-        footer.write(f'    @initialize_queue(@get_{kind}({queue}), .{{ .color = {color} }});\n')
-
-
 def _collect_unique_dsds(
     tasks: list[tdag.CSLTask],
     rect: PEBlock,
@@ -931,6 +932,7 @@ def _collect_unique_dsds(
     dtypes: dict[spir.Identifier, spir.IRType],
     kernel: spir.Kernel,
     memcpy_mode: bool,
+    location: str = 'PEs',
 ) -> UniqueDSDDict:
     """
     Returns a list of DSDs and generates them in the header.
@@ -958,27 +960,22 @@ def _collect_unique_dsds(
     for place_statement in rect.place.statements:
         if isinstance(place_statement, spir.FieldDeclaration):
             if isinstance(place_statement.dtype, spir.ArrayType):
-                try:
-                    eval_shape = [s if isinstance(s, int) else s.eval() for s in place_statement.dtype.shape]
-                    # If the product of the shape is 1, it is a scalar
-                    if not eval_shape or all(s == 1 for s in eval_shape):
-                        # Scalar, no DSD
-                        continue
-                except ValueError:
-                    # Dynamic shape, must create a DSD
-                    pass
+                # An array declared without extents is a scalar and gets no DSD. One of a single
+                # element still gets one: CSL takes it as an array wherever a DSD is called for and
+                # rejects the bare name as an operand -- "only DSD/DSR operands are allowed for
+                # async operations" for a transfer, and a type error for a move between two memory
+                # locations.
+                if not place_statement.dtype.shape:
+                    continue
 
                 array_candidates[place_statement.field_name.as_ir()] = (place_statement, place_statement.dtype.shape)
 
-    # Find used DSDs in compute block
-    # TODO: Infer input/output queue ID based on concurrency
-    input_queue_id_ctr = 0
-    output_queue_id_ctr = 0
-
-    # Streams that share a channel share a color, and a color binds to exactly one fabric queue per
-    # PE -- the hardware rejects "two master input queues for the same color". Queues are therefore
-    # handed out per channel; streams on ``auto`` channels get a color to themselves, so they key on
-    # their own name.
+    # Find used DSDs in compute block.
+    # Streams sharing a channel share a hardware color. A color binds to at most one fabric queue
+    # per PE. Queues are assigned per channel; streams with auto channels receive unique colors.
+    # Channels may share queues across disjoint occupancy intervals (see assign_fabric_queues).
+    # On WSE-3, inbound colors receive dedicated queues because data task IDs correspond directly
+    # to fabric input queue IDs.
     channel_of_stream = {
         declaration.stream_name.as_ir(): declaration.stream.routing.resolved_channel
         for declaration in rect.dataflow.statements
@@ -989,24 +986,61 @@ def _collect_unique_dsds(
         channel = channel_of_stream.get(stream.as_ir(), 'auto')
         return stream.as_ir() if channel == 'auto' else f'channel {channel}'
 
-    input_queue_of: dict[str, int] = {}
-    output_queue_of: dict[str, int] = {}
+    input_names = fabric_occupancy.streams_with_fabric_dsds(rect.compute, memcpy_mode, stream_args, inbound=True)
+    output_names = fabric_occupancy.streams_with_fabric_dsds(rect.compute, memcpy_mode, stream_args, inbound=False)
+    input_spans = fabric_occupancy.queue_spans(rect.compute, input_names, queue_key, inbound=True)
+    output_spans = fabric_occupancy.queue_spans(rect.compute, output_names, queue_key, inbound=False)
+    # On WSE-3, inbound and outbound colors are given dedicated queues to avoid runtime remapping.
+    exclusive = frozenset(input_spans) if csl.ARCH == 'wse3' else frozenset()
+    exclusive_out = frozenset(output_spans) if csl.ARCH == 'wse3' else frozenset()
+    input_queue_of = stream_lifetime.assign_fabric_queues(
+        input_spans, csl.INPUT_QUEUE_IDS,
+        kind='input', architecture=csl.ARCH, location=location,
+        exclusive_keys=exclusive)
+    output_queue_of = stream_lifetime.assign_fabric_queues(
+        output_spans, csl.OUTPUT_QUEUE_IDS,
+        kind='output', architecture=csl.ARCH, location=location,
+        exclusive_keys=exclusive_out)
+    # By default, an asynchronous DSD operation uses the queue ID of its highest-priority fabric
+    # operand as its microthread ID. On WSE-3, input and output queue IDs overlap, so microthreads
+    # are assigned explicitly to prevent collisions between concurrent sends and receives.
+    microthread_of = stream_lifetime.assign_microthreads(
+        fabric_occupancy.microthread_intervals(rect.compute, input_names, output_names, queue_key),
+        csl.MICROTHREAD_IDS, location=location)
+
+    def allocate_microthread(stream: spir.Identifier, inbound: bool) -> int | None:
+        return microthread_of.get(f'{"in" if inbound else "out"} {queue_key(stream)}')
 
     def allocate_input_queue(stream: spir.Identifier) -> int:
-        nonlocal input_queue_id_ctr
         key = queue_key(stream)
         if key not in input_queue_of:
-            input_queue_of[key] = csl.INPUT_QUEUE_IDS[input_queue_id_ctr % len(csl.INPUT_QUEUE_IDS)]
-            input_queue_id_ctr += 1
+            raise SyntaxError(
+                f'{location}: no input queue was reserved for {key} (stream "{stream.as_ir()}").')
         return input_queue_of[key]
 
     def allocate_output_queue(stream: spir.Identifier) -> int:
-        nonlocal output_queue_id_ctr
         key = queue_key(stream)
         if key not in output_queue_of:
-            output_queue_of[key] = csl.OUTPUT_QUEUE_IDS[output_queue_id_ctr % len(csl.OUTPUT_QUEUE_IDS)]
-            output_queue_id_ctr += 1
+            raise SyntaxError(
+                f'{location}: no output queue was reserved for {key} (stream "{stream.as_ir()}").')
         return output_queue_of[key]
+
+    # On WSE-2, a close that only flips this PE's own router does so on the last data wavelet, so
+    # the outgoing fabric descriptor has to carry ``.advance_switch``. The close itself emits no
+    # control wavelet and is kept only so this scan can see the flag.
+    streams_advance_on_send = {
+        stream_lifetime.underlying_stream(stmt.stream_name).as_ir()
+        for stmt in rect.compute.statements
+        if isinstance(stmt, spir.CloseStatement) and stmt.advance_data_switch
+    }
+
+    def _fabout(stream, extents) -> cslstruct.FabricDSD:
+        stream = stream_lifetime.underlying_stream(stream)
+        return cslstruct.FabricDSD(
+            cslstruct.DSDType.fabout, f'{name_to_csl(stream)}_color', extents,
+            allocate_output_queue(stream),
+            ut=allocate_microthread(stream, inbound=False),
+            advance_switch=stream.as_ir() in streams_advance_on_send)
 
     def _visit_foreach(stmt: spir.ForeachStatement) -> None:
         """
@@ -1026,7 +1060,13 @@ def _collect_unique_dsds(
                 raise SyntaxError(f'Foreach generator "{stream_name.as_ir()}" without a defined '
                                   f'range must only be used with a kernel argument or extern_stream.'
                                   f'\n  In line {stmt.lineinfo}')
-            # A data task will be created instead (handled in _generate_data_task)
+            # A data task will be created instead (handled in _generate_data_task_slot). On WSE-3
+            # its ID is an input queue, which only a fabric descriptor records.
+            if (csl.ARCH == 'wse3' and not (memcpy_mode and stream_name in stream_args)
+                    and stream_name.as_ir() in stream_candidates):
+                dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, f'{name_to_csl(stream_name)}_color', 1,
+                                          allocate_input_queue(stream_name))
+                dsds[stream_name.as_ir()].append((f'{name_to_csl(stream_name)}_in_dsd', dsd))
             return
         if stream_name.as_ir() not in stream_candidates:
             return
@@ -1048,7 +1088,9 @@ def _collect_unique_dsds(
                                 stmt.parameter_range[0].step)
             extents = (end.eval() - start.eval()) // (step.eval() if step is not None else 1)
         fabric_color = f'{name_to_csl(stream_name)}_color'
-        dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents, allocate_input_queue(stream_name))
+        dsd = cslstruct.FabricDSD(cslstruct.DSDType.fabin, fabric_color, extents,
+                                  allocate_input_queue(stream_name),
+                                  ut=allocate_microthread(stream_name, inbound=True))
         dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
     for stmt in rect.compute.statements:
@@ -1075,10 +1117,11 @@ def _collect_unique_dsds(
                             lambda a, b: a * b,
                             [s.eval() if not isinstance(s, int) else s for s in dtypes[stmt.local_array].shape], 1)
                 fabric_color = f'{name_to_csl(stream_name)}_color'
-                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_input_queue(stream_name))
+                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
+                                          allocate_input_queue(stream_name),
+                                          ut=allocate_microthread(stream_name, inbound=True))
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
             elif isinstance(stmt, spir.SendStatement) and stream_name.as_ir() in stream_candidates:
-                dsd_type = cslstruct.DSDType.fabout
                 dsd_name = f'{name_to_csl(stream_name)}_out_dsd'
                 extents = stream_candidates[stream_name.as_ir()][1]
                 if extents is not None:  # Use buffer size
@@ -1092,8 +1135,7 @@ def _collect_unique_dsds(
                         extents = functools.reduce(
                             lambda a, b: a * b,
                             [s.eval() if not isinstance(s, int) else s for s in dtypes[stmt.local_array].shape], 1)
-                fabric_color = f'{name_to_csl(stream_name)}_color'
-                dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_output_queue(stream_name))
+                dsd = _fabout(stream_name, extents)
                 dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
             if isinstance(stmt, spir.SendStatement):
@@ -1129,7 +1171,6 @@ def _collect_unique_dsds(
                 return
             # Stream DSD (i.e., await send in a foreach)
             stream_name = substmt.stream_name
-            dsd_type = cslstruct.DSDType.fabout
             dsd_name = f'{name_to_csl(stream_name)}_out_dsd'
             extents = stream_candidates[stream_name.as_ir()][1]
             if extents is not None:  # Use buffer size
@@ -1143,8 +1184,7 @@ def _collect_unique_dsds(
                     extents = functools.reduce(
                         lambda a, b: a * b,
                         [s.eval() if not isinstance(s, int) else s for s in dtypes[substmt.local_array].shape], 1)
-            fabric_color = f'{name_to_csl(stream_name)}_color'
-            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_output_queue(stream_name))
+            dsd = _fabout(stream_name, extents)
             dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
         def _visit_nested_receive(substmt: spir.ReceiveStatement):
@@ -1170,7 +1210,9 @@ def _collect_unique_dsds(
                         lambda a, b: a * b,
                         [s.eval() if not isinstance(s, int) else s for s in dtypes[local_array].shape], 1)
             fabric_color = f'{name_to_csl(stream_name)}_color'
-            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents, allocate_input_queue(stream_name))
+            dsd = cslstruct.FabricDSD(dsd_type, fabric_color, extents,
+                                      allocate_input_queue(stream_name),
+                                      ut=allocate_microthread(stream_name, inbound=True))
             dsds[stream_name.as_ir()].append((dsd_name, dsd))
 
         def _visit_local_array(operand):
@@ -1333,85 +1375,151 @@ def _write_indented_block(current_code: StringIO, block: str, indent: str) -> No
         current_code.write(f'{indent}{line}\n')
 
 
-def _generate_data_task(
+def _generate_data_task_slot(
+    rect: PEBlock,
+    slot: task_recycling.DataTaskSlot,
+    current_code: StringIO,
+    header: StringIO,
+    dsds: UniqueDSDDict,
+    dtypes: dict[spir.Identifier, spir.IRType],
+    tasks: list[tdag.CSLTask],
+    task_bindings: task_recycling.TaskBindingPlan,
+):
+    """
+    Generates the one CSL data task that a color binds.
+
+    A color that carries a single receive becomes that receive's task. A color reused by several
+    receives becomes a dispatcher over them, in the order they run, selected by the slot's state
+    variable -- the same shape :mod:`spada.syntax.csl.task_recycling` gives an overrun local task,
+    except that here sharing is forced rather than chosen.
+
+    :param rect: The rectangle PE block to generate.
+    :param slot: The color and the data tasks bound to it.
+    :param current_code: The caret to the code generator at the current position (global).
+    :param header: A code generator stream for a file's header (where the declarations are).
+    :param dsds: A dictionary mapping names to unique data structure descriptor objects.
+    :param dtypes: A dictionary mapping identifiers to their defined types.
+    :param tasks: A list of all tasks in the kernel.
+    :param task_bindings: The binding plan, which supplies the state variable and the states.
+    """
+    generated = [index for index in slot.task_indices
+                 if _declare_data_task_counter(rect, index, tasks[index], current_code)]
+    if not generated:
+        return
+
+    representative = rect.compute.statements[tasks[generated[0]].statements[0]]
+    argtype_csl = dtype_as_csl(representative.stream_variable.dtype)
+    argname = name_to_csl(representative.stream_variable.identifier)
+    current_code.write(f'task {task_bindings.data_function_name(slot)}({argname}: {argtype_csl}) void {{\n')
+
+    if len(generated) == 1:
+        _generate_data_task_body(rect, generated[0], tasks[generated[0]], current_code, header, dsds, dtypes,
+                                 tasks, task_bindings, argname, indent='    ', self_block=False)
+    else:
+        state_var = task_bindings.data_state_var(generated[0])
+        for branch, task_index in enumerate(generated):
+            keyword = 'if' if branch == 0 else 'else if'
+            current_code.write(f'    {keyword} ({state_var} == {task_bindings.data_state(task_index)}) {{\n')
+            _generate_data_task_body(rect, task_index, tasks[task_index], current_code, header, dsds, dtypes,
+                                     tasks, task_bindings, argname, indent='        ', self_block=True)
+            current_code.write('    }\n')
+    current_code.write('}\n')
+
+
+def _declare_data_task_counter(rect: PEBlock, task_index: int, task: tdag.CSLTask,
+                              current_code: StringIO) -> bool:
+    """
+    Declares the counter that tells a data task when it has received its last wavelet.
+
+    :return: Whether the task has a body to generate at all.
+    """
+    assert task.task_type == 'data'
+    assert len(task.statements) == 1
+
+    stmt_id = task.statements[0]
+    if not isinstance(stmt_id, int) or stmt_id < 0:
+        return False
+    stmt = rect.compute.statements[stmt_id]
+    assert isinstance(stmt, spir.ForeachStatement)
+    if stmt.parameter_range:
+        assert len(stmt.parameter_range) == 1, 'Only one-dimensional foreach loops are supported in data tasks'
+        var_dtype_csl = dtype_as_csl(stmt.variables[0].dtype)
+        current_code.write(f'var __num_dtask_{task_index}: {var_dtype_csl} = '
+                           f'{stmt.parameter_range[0].start.as_ir()};\n')
+    return True
+
+
+def _generate_data_task_body(
     rect: PEBlock,
     task_index: int,
     task: tdag.CSLTask,
     current_code: StringIO,
     header: StringIO,
-    footer: StringIO,
     dsds: UniqueDSDDict,
     dtypes: dict[spir.Identifier, spir.IRType],
-    color_map: dict[str, int],
     tasks: list[tdag.CSLTask],
+    task_bindings: task_recycling.TaskBindingPlan,
+    argname: str,
+    indent: str,
+    self_block: bool,
 ):
     """
-    Generates a data task from a foreach loop.
+    Generates what one data task does with a wavelet, without the surrounding task frame.
 
-    :param rect: The rectangle PE block to generate.
-    :param task: The data task to generate.
-    :param current_code: The caret to the code generator at the current position (global).
-    :param header: A code generator stream for a file's header (where the declarations are).
-    :param footer: A code generator stream for a file's footer (the comptime block where the array would be exported).
-    :param dsds: A dictionary mapping names to unique data structure descriptor objects.
-    :param dtypes: A dictionary mapping identifiers to their defined types.
-    :param color_map: Dictionary mapping each stream to its respective color id ({name}_color also works).
-    :param tasks: A list of all tasks in the kernel.
+    :param argname: The wavelet parameter of the generated task, which the receives sharing a color
+                    have in common; a receive that names it differently gets an alias.
+    :param self_block: Whether the task blocks its color once its last wavelet has arrived. Set for a
+                       shared color, where leaving it live would let the next epoch's wavelets be
+                       taken by this branch.
     """
     #   * If index is requested: before unblocking task, set k; inc at end of task
     #   * Wavelet-triggered task as fallback
-    assert task.task_type == 'data'
-    assert len(task.statements) == 1
-
-    stmt_id = task.statements[0]
-    if isinstance(stmt_id, int) and stmt_id >= 0:
-        stmt = rect.compute.statements[stmt_id]
-        assert isinstance(stmt, spir.ForeachStatement)
-    else:
-        return
+    stmt = rect.compute.statements[task.statements[0]]
+    assert isinstance(stmt, spir.ForeachStatement)
     next_task, itedge = task.outgoing[0]
     next_task_type = tasks[next_task].task_type if next_task != -1 else 'local'
     itedge_code = 'unblock' if itedge == tdag.InterTaskEdge.UNBLOCK else 'activate'
 
-    # If a range was specified, write counter and add code to execute next task
     if stmt.parameter_range:
-        assert len(stmt.parameter_range) == 1, 'Only one-dimensional foreach loops are supported in data tasks'
+        lines = []
+        if self_block:
+            lines.append(f'@block(dtask_{task_index}_id);')
         if next_task == -1:
-            next_task_code = f'@{itedge_code}(exit_task_id);'
+            lines.append(f'@{itedge_code}(exit_task_id);')
         else:
-            prefix = "d" if next_task_type == 'data' else ""
-            next_task_code = f'@{itedge_code}({prefix}task_{next_task}_id);'
+            prefix = 'd' if next_task_type == 'data' else ''
+            if next_task_type == 'local':
+                lines.extend(task_bindings.emit_local_transition_preamble(
+                    next_task, tasks[next_task].blocked, indent='').splitlines())
+            else:
+                lines.extend(task_bindings.emit_data_transition_preamble(next_task, indent='').splitlines())
+            lines.append(f'@{itedge_code}({prefix}task_{next_task}_id);')
 
-        var_dtype_csl = dtype_as_csl(stmt.variables[0].dtype)
         param_range = stmt.parameter_range[0]
-        current_code.write(f"var __num_dtask_{task_index}: {var_dtype_csl} = {param_range.start.as_ir()};\n")
-
-        next_task_code = f"""
-    __num_dtask_{task_index} += {1 if param_range.step is None else param_range.step.as_ir()};
-    if (__num_dtask_{task_index} == {param_range.stop.as_ir()}) {{
-        {next_task_code}
-    }}"""
+        step = 1 if param_range.step is None else param_range.step.as_ir()
+        body = f'\n{indent}    '.join(lines)
+        next_task_code = (f'{indent}__num_dtask_{task_index} += {step};\n'
+                          f'{indent}if (__num_dtask_{task_index} == {param_range.stop.as_ir()}) {{\n'
+                          f'{indent}    {body}\n'
+                          f'{indent}}}\n')
     else:
-        next_task_code = ""
+        next_task_code = ''
 
-    # Write frame for data task
-    argtype_csl = dtype_as_csl(stmt.stream_variable.dtype)
-    argname = name_to_csl(stmt.stream_variable.identifier)
-    current_code.write(f"task dtask_{task_index}({argname}: {argtype_csl}) void {{\n")
     if stmt.variables:
-        current_code.write(
-            f'    var {name_to_csl(stmt.variables[0].identifier)}: {var_dtype_csl} = __num_dtask_{task_index};\n')
+        var_dtype_csl = dtype_as_csl(stmt.variables[0].dtype)
+        current_code.write(f'{indent}var {name_to_csl(stmt.variables[0].identifier)}: {var_dtype_csl} = '
+                           f'__num_dtask_{task_index};\n')
+    own_argname = name_to_csl(stmt.stream_variable.identifier)
+    if own_argname != argname:
+        current_code.write(f'{indent}const {own_argname} = {argname};\n')
 
     # Write op contents
     for substmt in stmt.body:
         code = cslstmt.generate_csl_statement(substmt, dsds, dtypes, None, header, in_foreach_or_map=True)
-
         for line in code.splitlines():
-            current_code.write(f'    {line}\n')
+            current_code.write(f'{indent}{line}\n')
 
-    # Write footer
     current_code.write(next_task_code)
-    current_code.write(f"\n}}\n")
 
 
 def _generate_task_code(rect: PEBlock,
@@ -1470,22 +1578,30 @@ def _generate_task_code(rect: PEBlock,
                             next_task, tasks[next_task].blocked, indent=indent)
                         task_id = f'task_{next_task}_id'
                     else:
+                        transition_preamble = task_bindings.emit_data_transition_preamble(
+                            next_task, indent=indent)
                         task_id = f'dtask_{next_task}_id'
 
                 async_target = dsd_ops.AsyncTarget(task_id, itedge.name.lower())
             else:
                 async_target = None
 
-            if transition_preamble:
-                current_code.write(transition_preamble)
-
             code = cslstmt.generate_csl_statement(stmt, dsds, dtypes, async_target, header)
             lines = code.splitlines()
 
-            # DSD operation or async call
-            if any(dsdop in line for line in lines for dsdop in dsd_ops.DSD_ASSIGNMENT_MAPPING):
-                # Asynchronous DSD op. DSD line already contains activation or unblocking
+            # A DSD operation given an async target performs the transition itself, either as the
+            # operation's ``.activate``/``.unblock`` field or as a call right after it. Naming the
+            # target is what distinguishes those from a statement that merely happens to use a DSD
+            # instruction -- a ``close``, whose control wavelets go out through a plain ``@mov32``.
+            if async_target is not None and async_target.target_task in code:
                 skip_activation = True
+
+            # The preamble installs the successor's state, so it belongs immediately before whatever
+            # hands control over. When the operation does that itself the preamble has to precede it;
+            # otherwise it waits for the explicit activate/unblock written further down.
+            if transition_preamble and skip_activation:
+                current_code.write(transition_preamble)
+                transition_preamble = ''
 
             for line in lines:
                 current_code.write(f'{indent}{line}\n')
@@ -1506,12 +1622,14 @@ def _generate_task_code(rect: PEBlock,
                 task_id = 'exit_task_id'
             else:
                 if tasks[next_task].task_type == 'local':
-                    if not transition_preamble:
-                        current_code.write(
-                            task_bindings.emit_local_transition_preamble(
-                                next_task, tasks[next_task].blocked, indent=indent))
+                    current_code.write(
+                        transition_preamble or task_bindings.emit_local_transition_preamble(
+                            next_task, tasks[next_task].blocked, indent=indent))
                     task_id = f'task_{next_task}_id'
                 else:
+                    current_code.write(
+                        transition_preamble or task_bindings.emit_data_transition_preamble(
+                            next_task, indent=indent))
                     task_id = f'dtask_{next_task}_id'
             if itedge == tdag.InterTaskEdge.ACTIVATE:
                 current_code.write(f'{indent}@activate({task_id});\n')

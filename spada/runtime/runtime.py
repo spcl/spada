@@ -94,6 +94,57 @@ class ProgramMetadata:
 ########################################################
 
 
+def memcpy_data_type(dtype: np.dtype) -> "crt.MemcpyDataType":
+    """Return the transfer width for a kernel argument of ``dtype``.
+
+    :param dtype: The declared argument dtype.
+    :return: The corresponding ``MemcpyDataType``.
+    """
+    if dtype.itemsize == 4:
+        return crt.MemcpyDataType.MEMCPY_32BIT
+    if dtype.itemsize == 2:
+        return crt.MemcpyDataType.MEMCPY_16BIT
+    raise ValueError(f"Cannot transfer {dtype} arrays: the SDK moves either 16 or 32 bits per "
+                     f"element, so a kernel argument must be 2 or 4 bytes wide.")
+
+
+def memcpy_word_dtype(dtype: np.dtype) -> np.dtype:
+    """Return the host buffer dtype for a kernel argument of ``dtype``, aligned to 32-bit words.
+
+    Cerebras SDK memcpy operations require 32-bit word alignment on the host even for 16-bit
+    transfers (MEMCPY_16BIT transfers the lower 16 bits of each 32-bit word).
+
+    :param dtype: The declared argument dtype.
+    :return: The original dtype if 32 bits wide, otherwise uint32.
+    """
+    return dtype if dtype.itemsize == 4 else np.dtype(np.uint32)
+
+
+def as_memcpy_words(data: np.ndarray) -> np.ndarray:
+    """Widen a 16-bit array into 32-bit words expected by host memcpy.
+
+    16-bit values are bitcast without sign extension to preserve exact binary representations.
+
+    :param data: Contiguous input array.
+    :return: The array itself if 32 bits wide, otherwise a widened copy.
+    """
+    if data.dtype.itemsize == 4:
+        return data
+    return data.view(np.uint16).astype(np.uint32)
+
+
+def from_memcpy_words(words: np.ndarray, dtype: np.dtype) -> np.ndarray:
+    """Narrow 32-bit memcpy words back to the target output dtype.
+
+    :param words: Buffer populated by ``memcpy_d2h``.
+    :param dtype: Target output dtype.
+    :return: Array reinterpreted in ``dtype``.
+    """
+    if dtype.itemsize == 4:
+        return words
+    return words.astype(np.uint16).view(dtype)
+
+
 def flatten_copy(
     name: str, data: np.ndarray, shape: List[int], runtime: crt.SdkRuntime, metadata: ProgramMetadata, benchmark: bool
 ):
@@ -117,14 +168,14 @@ def flatten_copy(
 
     runtime.memcpy_h2d(
         buffer_id,
-        src.ravel(),
+        as_memcpy_words(src).ravel(),
         metadata.inputs[name].rect_offset_used[0],  # PE offset in x direction
         metadata.inputs[name].rect_offset_used[1],  # PE offset in y direction
         shape[0],  # Width (number of PEs in x)
         shape[1],  # Height (number of PEs in y)
         shape[2],
         streaming=not metadata.memcpy_mode,  # Use streaming if not in memcpy mode
-        data_type=crt.MemcpyDataType.MEMCPY_32BIT if data.dtype == np.float32 else crt.MemcpyDataType.MEMCPY_16BIT,
+        data_type=memcpy_data_type(data.dtype),
         order=crt.MemcpyOrder.ROW_MAJOR if not metadata.inputs[name].column_major else crt.MemcpyOrder.COL_MAJOR,
         nonblock=not benchmark,  # Non-blocking copy if not benchmarking
     )
@@ -145,11 +196,11 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
     if buffer_id is None:
         raise ValueError(f"Buffer ID for '{name}' not found in program.")
 
-    # The SDK returns A[h][w][elem_per_pe]; allocate a buffer in that layout.
-    sdk_buf = np.empty((shape[1], shape[0], shape[2]), dtype=data.dtype)
+    # The SDK returns A[h][w][elem_per_pe]; allocate a buffer in that layout, one element per word.
+    words = np.empty((shape[1], shape[0], shape[2]), dtype=memcpy_word_dtype(data.dtype))
 
     runtime.memcpy_d2h(
-        sdk_buf.ravel(),
+        words.ravel(),
         buffer_id,
         metadata.outputs[name].rect_offset_used[0],  # PE offset in x direction
         metadata.outputs[name].rect_offset_used[1],  # PE offset in y direction
@@ -157,13 +208,13 @@ def copy_unflatten(name: str, data: np.ndarray, shape: List[int], runtime: crt.S
         shape[1],  # Height (number of PEs in y)
         shape[2],
         streaming=not metadata.memcpy_mode,  # Use streaming if not in memcpy mode
-        data_type=crt.MemcpyDataType.MEMCPY_32BIT if data.dtype == np.float32 else crt.MemcpyDataType.MEMCPY_16BIT,
+        data_type=memcpy_data_type(data.dtype),
         order=crt.MemcpyOrder.ROW_MAJOR if not metadata.outputs[name].column_major else crt.MemcpyOrder.COL_MAJOR,
         nonblock=False,  # Blocking copy to ensure data is ready after copy
     )
 
     # Transpose back from (h, w, elem) to (w, h, elem) to match our convention.
-    np.copyto(data, sdk_buf.transpose(1, 0, 2))
+    np.copyto(data, from_memcpy_words(words, data.dtype).transpose(1, 0, 2))
 
 
 def convert_timestamp(hw_timestamp: npt.NDArray[np.uint32]) -> npt.NDArray[np.uint64]:
@@ -288,7 +339,10 @@ class Program:
         cmaddr = cm_addr or os.environ.get("CM_ADDR", None)
         self.simulator = cmaddr is None
         print("SIMULATOR?", self.simulator)
-        self.runtime = crt.SdkRuntime(str(self.out_folder), suppress_simfab_trace=True, cmaddr=cmaddr)
+        # Enable fabric tracing when SPADA_SIMFAB_TRACE is set (useful for debugging simulator stalls).
+        trace = os.environ.get("SPADA_SIMFAB_TRACE") is not None
+        self.runtime = crt.SdkRuntime(str(self.out_folder), suppress_simfab_trace=not trace,
+                                      cmaddr=cmaddr)
 
         # Store input/output information from metadata
         self.inputs = self.metadata.inputs

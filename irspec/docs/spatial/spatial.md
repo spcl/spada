@@ -499,6 +499,9 @@ stream<T> stream_name = relative_stream(dx, dy) {
 where `hops` is a list of relative hops that the data takes between the sender and receiver.
 Each hop is given by a pair of constant literals, the sum of their absolute value must be 1.
 The sum of all the hops must be equal to the relative position of the stream.
+How many words the stream carries is not stated here but by its type: a bounded
+`stream<T, BOUND>` closes after `BOUND` elements, which is what frees its channel
+(see [Streams](#streams) and [closing streams](#closing-streams-with-close)).
 
 If two messages (elements of a `send`) are routed through a PE simultaneously,
 it must be ensured that they do not share a `channel`.
@@ -857,8 +860,9 @@ an explicit `close` on a bounded stream is redundant but legal. An unbounded str
 by an explicit `close`.
 
 !!! note "Note: Verification of Bounds"
-    When the compiler can infer stream bounds statically, it may generate a compiler error.
-    Otherwise, no diagnostic is emitted.
+    Where the number of elements transferred over a bounded stream can be determined statically, it
+    must match the stream's bound, otherwise a compile error is raised. Where it cannot be
+    determined statically, no diagnostic is emitted.
 
 At the end of a [phase](#phases), every stream that is in scope is implicitly closed. This is
 equivalent to injecting a `close` for each such stream on each participating PE immediately *after*

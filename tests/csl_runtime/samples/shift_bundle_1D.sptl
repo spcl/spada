@@ -1,0 +1,47 @@
+/**
+ * Shift values from PEs [0:M) to PEs [D:D+M) on a single channel.
+ *
+ * Sources [0:M) each send one value to destination PEs [D:D+M) at offset D.
+ * The paths overlap along intermediate routers. To share a single channel:
+ *   - Sources transmit in reverse order (nearest destination first), then switch to relay.
+ *   - Destinations stay in relay mode and use hardware counter filters to pick their value.
+ *
+ * Constraints: 2 <= M <= D.
+ **/
+kernel @shift_bundle_1d<M, D>(
+    stream<f32, 1>[D + M, 1] readonly  inp,
+    stream<f32, 1>[D + M, 1] writeonly out
+) {
+    place i16 i, i16 j in [0:D + M, 0] {
+        f32 val
+    }
+
+    phase {
+        compute i16 i, i16 j in [0:D + M, 0] {
+            await receive(val, inp[i, j])
+        }
+    }
+
+    phase {
+        // One declaration for the whole line: both halves have to agree on the channel, and the
+        // bundle is what lets them share it despite the overlap.
+        dataflow i16 i, i16 j in [0:D + M, 0] {
+            stream<f32, 1> fwd = relative_stream(D, 0) {
+                hops = auto,
+                channel = 0
+            }
+        }
+        compute i16 i, i16 j in [0:M, 0] {
+            await send(val, fwd)
+        }
+        compute i16 i, i16 j in [D:D + M, 0] {
+            await receive(val, fwd)
+        }
+    }
+
+    phase {
+        compute i16 i, i16 j in [0:D + M, 0] {
+            await send(val, out[i, j])
+        }
+    }
+}

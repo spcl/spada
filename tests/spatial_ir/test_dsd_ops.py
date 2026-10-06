@@ -1,8 +1,10 @@
+import os
+import re
 import pytest
 from spada.lowering import spatial_ir_to_csl as s2c
 from spada.syntax.spatial_ir import parser, passes
 from spada.syntax.spatial_ir.canonicalization import PEBlock
-from spada.syntax.csl import dsd_ops
+from spada.syntax.csl import constants, dsd_ops
 
 
 def test_dsd_op_detection():
@@ -153,16 +155,15 @@ kernel @looped<K, M> (stream<f32, K>[2, 1] readonly src,
             channel = 0
         }
     }
-    compute i16 i, i16 j in [0:2, 0] {
-        await receive(val, src[i, j])
-    }
     compute i16 i, i16 j in [0:1, 0] {
+        await receive(val, src[i, j])
         for i32 t in [0:M] {
             await send(val, east)
         }
         await send(val, dst[i, j])
     }
     compute i16 i, i16 j in [1:2, 0] {
+        await receive(val, src[i, j])
         for i32 t in [0:M] {
             await receive(other, east)
         }
@@ -205,6 +206,63 @@ kernel @scan<K> (stream<f32, K>[1, 1] readonly src,
     assert 'for (@range' in code, code
     # A scalar recurrence, not a vector add over a DSD.
     assert '@fadds(a_dsd' not in code, code
+
+
+@pytest.mark.parametrize('k', [1, 4])
+def test_an_array_of_one_element_still_gets_a_dsd(k: int):
+    """
+    A single-element array is a scalar in all but name, but CSL keeps treating it as an array: the
+    bare name is rejected as the operand of a transfer or of a move between memory locations. It
+    therefore needs a DSD like any other array, whatever its extent.
+    """
+    kernel = parser.parse_string(code="""
+kernel @blockcopy<K> (stream<f32, K>[1, 1] readonly src,
+                      stream<f32, K>[1, 1] writeonly dst) {
+    place i16 i, i16 j in [0, 0] {
+        f32[K] val
+        f32[K] res
+    }
+    compute i16 i, i16 j in [0, 0] {
+        await receive(res, src[i, j])
+        await map i16 m in [0:K] {
+            val[m] = res[m]
+        }
+        await send(val, dst[i, j])
+    }
+}""")
+    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, K=k))
+    code = {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel)}['code_0_0.csl']
+
+    # Every operand of every move is a DSD, whatever the arrays happen to be called.
+    moves = re.findall(r'@fmovs\((\w+), (\w+)[,)]', code)
+    assert moves, code
+    for destination, source in moves:
+        assert destination.endswith('_dsd') and source.endswith('_dsd'), code
+
+
+def test_wse3_concurrent_transfers_use_distinct_microthreads():
+    """Two transfers in flight at once may not share a microthread.
+
+    A laplacian PE receives from one neighbor and forwards to another in the same task. On WSE-3
+    the input and output queue pools both start at 2, so leaving the microthread at its default --
+    the queue ID of the highest-priority fabric operand -- put both on microthread 2 and aborted the
+    simulation with ``trying to term ut_instr[2], but it's not ours``.
+    """
+    if constants.ARCH != 'wse3':
+        pytest.skip('WSE-2 derives the microthread from the queue, and its two pools are disjoint')
+    path = os.path.join(
+        os.path.dirname(__file__), '..', '..', 'samples', 'benchmarks', 'laplacian_4_4_4.sptl')
+    kernel = parser.parse_file(path)
+    files = {f.filename: f.code for f in s2c.lower_spatial_ir_to_csl(kernel, disable_benchmarking=True)}
+    code = files['code_2_1.csl']
+
+    tasks = re.findall(r'task \w+\(\) void \{(.*?)\n\}', code, re.DOTALL)
+    concurrent = [
+        re.findall(r'\.ut_id = @get_ut_id\((\d+)\)', body) for body in tasks
+    ]
+    assert any(len(used) > 1 for used in concurrent), code
+    for used in concurrent:
+        assert len(used) == len(set(used)), (used, code)
 
 
 if __name__ == '__main__':

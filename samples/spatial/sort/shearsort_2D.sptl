@@ -1,0 +1,1655 @@
+/**
+ * 2D Shearsort on an N x N mesh (N = 2^L), sorting N*N*K keys into snake order.
+ *
+ * Each PE holds a block of K f32 keys. After sorting, the mesh is ordered in snake order:
+ * even rows are sorted ascending left-to-right, odd rows descending right-to-left, and PE blocks
+ * are internally sorted ascending.
+ *
+ * Algorithm
+ * ---------
+ * The algorithm executes L iterations of (row sort, column sort) followed by a final row sort:
+ *   - Even rows sort ascending (west to east).
+ *   - Odd rows sort descending (east to west).
+ *   - Columns sort ascending (north to south).
+ * Each 1D sort executes N rounds of neighbor compare-split operations on K-element blocks.
+ *
+ * Routing and channels
+ * --------------------
+ * The kernel uses 8 static channels, one per (axis, round parity, direction):
+ *   - Channels 0-3: row exchanges (even/odd round, east/west).
+ *   - Channels 4-7: column exchanges (even/odd round, south/north).
+ * Because roles on each channel remain fixed throughout the entire execution, no routers switch
+ * and no channel remapping is needed. The rounds are executed as sequential loops within compute
+ * blocks rather than separate compiler phases, avoiding barrier overhead.
+ *
+ * Constraints: L >= 1, K >= 1. Requires WSE-3, as interior PEs receive on 4 concurrent inbound
+ * channels in a single epoch.
+ **/
+kernel @shearsort_2d_looped<L, K>(stream<f32, K>[1<<L, 1<<L] readonly a_in,
+                                  stream<f32, K>[1<<L, 1<<L] writeonly a_out) {
+
+    place i16 i, i16 j in [0:1<<L, 0:1<<L] {
+        f32[K] val    // this PE's block, ascending
+        f32[K] other  // the partner's block
+        f32[K] res    // merge target
+        f32 x
+        f32 y
+        i16 pv  // walk into val
+        i16 pt  // walk into other
+        i16 pr  // where the walk writes
+        i16 take
+    }
+
+    // One epoch for the whole run: these eight channels never change hands, so they are
+    // declared at kernel level rather than per phase.
+    dataflow i16 i, i16 j in [0:1<<L, 0:1<<L] {
+        stream<f32> east_even = relative_stream(1, 0) {
+            hops = auto,
+            channel = 0
+        }
+        stream<f32> west_even = relative_stream(-1, 0) {
+            hops = auto,
+            channel = 1
+        }
+        stream<f32> east_odd = relative_stream(1, 0) {
+            hops = auto,
+            channel = 2
+        }
+        stream<f32> west_odd = relative_stream(-1, 0) {
+            hops = auto,
+            channel = 3
+        }
+        stream<f32> south_even = relative_stream(0, 1) {
+            hops = auto,
+            channel = 4
+        }
+        stream<f32> north_even = relative_stream(0, -1) {
+            hops = auto,
+            channel = 5
+        }
+        stream<f32> south_odd = relative_stream(0, 1) {
+            hops = auto,
+            channel = 6
+        }
+        stream<f32> north_odd = relative_stream(0, -1) {
+            hops = auto,
+            channel = 7
+        }
+    }
+
+    // (i=0, j=0): row low-even ascending, column low-even; idle on both odd rounds.
+    compute i16 i, i16 j in [0:1, 0:1] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 u in [0:K-1] {
+                pv = ((m - u) - 1) if ((m - u) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 s in [0:L] {
+            for i32 t in [0 : 1<<(L-1)] {
+                await send(val, east_even)
+                await receive(other, west_even)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+            for i32 t in [0 : 1<<(L-1)] {
+                await send(val, south_even)
+                await receive(other, north_even)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await send(val, east_even)
+            await receive(other, west_even)
+            // Keep the K smallest: merge upwards from the two block starts.
+            pv = 0
+            pt = 0
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x <= y else 0
+                res[m] = x if take == 1 else y
+                pv = pv + take
+                pt = pt + (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // (even-i interior, j=0): row low-even / high-odd ascending; column low-even.
+    compute i16 i, i16 j in [2 : (1<<L)-1 : 2, 0:1] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 u in [0:K-1] {
+                pv = ((m - u) - 1) if ((m - u) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 s in [0:L] {
+            for i32 t in [0 : 1<<(L-1)] {
+                await send(val, east_even)
+                await receive(other, west_even)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+                await receive(other, east_odd)
+                await send(val, west_odd)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+            for i32 t in [0 : 1<<(L-1)] {
+                await send(val, south_even)
+                await receive(other, north_even)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await send(val, east_even)
+            await receive(other, west_even)
+            // Keep the K smallest: merge upwards from the two block starts.
+            pv = 0
+            pt = 0
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x <= y else 0
+                res[m] = x if take == 1 else y
+                pv = pv + take
+                pt = pt + (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+            await receive(other, east_odd)
+            await send(val, west_odd)
+            // Keep the K largest: merge downwards from the two block ends.
+            pv = K - 1
+            pt = K - 1
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x >= y else 0
+                pr = (K - 1) - m
+                res[pr] = x if take == 1 else y
+                pv = pv - take
+                pt = pt - (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // (odd-i interior, j=0): row high-even / low-odd ascending; column low-even.
+    compute i16 i, i16 j in [1 : (1<<L)-1 : 2, 0:1] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 u in [0:K-1] {
+                pv = ((m - u) - 1) if ((m - u) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 s in [0:L] {
+            for i32 t in [0 : 1<<(L-1)] {
+                await receive(other, east_even)
+                await send(val, west_even)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+                await send(val, east_odd)
+                await receive(other, west_odd)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+            for i32 t in [0 : 1<<(L-1)] {
+                await send(val, south_even)
+                await receive(other, north_even)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await receive(other, east_even)
+            await send(val, west_even)
+            // Keep the K largest: merge downwards from the two block ends.
+            pv = K - 1
+            pt = K - 1
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x >= y else 0
+                pr = (K - 1) - m
+                res[pr] = x if take == 1 else y
+                pv = pv - take
+                pt = pt - (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+            await send(val, east_odd)
+            await receive(other, west_odd)
+            // Keep the K smallest: merge upwards from the two block starts.
+            pv = 0
+            pt = 0
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x <= y else 0
+                res[m] = x if take == 1 else y
+                pv = pv + take
+                pt = pt + (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // (i=N-1, j=0): row high-even ascending; column low-even.
+    compute i16 i, i16 j in [(1<<L)-1 : 1<<L, 0:1] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 u in [0:K-1] {
+                pv = ((m - u) - 1) if ((m - u) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 s in [0:L] {
+            for i32 t in [0 : 1<<(L-1)] {
+                await receive(other, east_even)
+                await send(val, west_even)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+            for i32 t in [0 : 1<<(L-1)] {
+                await send(val, south_even)
+                await receive(other, north_even)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await receive(other, east_even)
+            await send(val, west_even)
+            // Keep the K largest: merge downwards from the two block ends.
+            pv = K - 1
+            pt = K - 1
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x >= y else 0
+                pr = (K - 1) - m
+                res[pr] = x if take == 1 else y
+                pv = pv - take
+                pt = pt - (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // (i=0, even-j interior): row low-even ascending; column low-even / high-odd.
+    compute i16 i, i16 j in [0:1, 2 : (1<<L)-1 : 2] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 u in [0:K-1] {
+                pv = ((m - u) - 1) if ((m - u) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 s in [0:L] {
+            for i32 t in [0 : 1<<(L-1)] {
+                await send(val, east_even)
+                await receive(other, west_even)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+            for i32 t in [0 : 1<<(L-1)] {
+                await send(val, south_even)
+                await receive(other, north_even)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+                await receive(other, south_odd)
+                await send(val, north_odd)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await send(val, east_even)
+            await receive(other, west_even)
+            // Keep the K smallest: merge upwards from the two block starts.
+            pv = 0
+            pt = 0
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x <= y else 0
+                res[m] = x if take == 1 else y
+                pv = pv + take
+                pt = pt + (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // (even-i interior, even-j interior): row low-even / high-odd ascending;
+    // column low-even / high-odd. Fully interior, four inbound colors.
+    compute i16 i, i16 j in [2 : (1<<L)-1 : 2, 2 : (1<<L)-1 : 2] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 u in [0:K-1] {
+                pv = ((m - u) - 1) if ((m - u) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 s in [0:L] {
+            for i32 t in [0 : 1<<(L-1)] {
+                await send(val, east_even)
+                await receive(other, west_even)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+                await receive(other, east_odd)
+                await send(val, west_odd)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+            for i32 t in [0 : 1<<(L-1)] {
+                await send(val, south_even)
+                await receive(other, north_even)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+                await receive(other, south_odd)
+                await send(val, north_odd)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await send(val, east_even)
+            await receive(other, west_even)
+            // Keep the K smallest: merge upwards from the two block starts.
+            pv = 0
+            pt = 0
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x <= y else 0
+                res[m] = x if take == 1 else y
+                pv = pv + take
+                pt = pt + (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+            await receive(other, east_odd)
+            await send(val, west_odd)
+            // Keep the K largest: merge downwards from the two block ends.
+            pv = K - 1
+            pt = K - 1
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x >= y else 0
+                pr = (K - 1) - m
+                res[pr] = x if take == 1 else y
+                pv = pv - take
+                pt = pt - (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // (odd-i interior, even-j interior): row high-even / low-odd ascending;
+    // column low-even / high-odd.
+    compute i16 i, i16 j in [1 : (1<<L)-1 : 2, 2 : (1<<L)-1 : 2] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 u in [0:K-1] {
+                pv = ((m - u) - 1) if ((m - u) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 s in [0:L] {
+            for i32 t in [0 : 1<<(L-1)] {
+                await receive(other, east_even)
+                await send(val, west_even)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+                await send(val, east_odd)
+                await receive(other, west_odd)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+            for i32 t in [0 : 1<<(L-1)] {
+                await send(val, south_even)
+                await receive(other, north_even)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+                await receive(other, south_odd)
+                await send(val, north_odd)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await receive(other, east_even)
+            await send(val, west_even)
+            // Keep the K largest: merge downwards from the two block ends.
+            pv = K - 1
+            pt = K - 1
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x >= y else 0
+                pr = (K - 1) - m
+                res[pr] = x if take == 1 else y
+                pv = pv - take
+                pt = pt - (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+            await send(val, east_odd)
+            await receive(other, west_odd)
+            // Keep the K smallest: merge upwards from the two block starts.
+            pv = 0
+            pt = 0
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x <= y else 0
+                res[m] = x if take == 1 else y
+                pv = pv + take
+                pt = pt + (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // (i=N-1, even-j interior): row high-even ascending; column low-even / high-odd.
+    compute i16 i, i16 j in [(1<<L)-1 : 1<<L, 2 : (1<<L)-1 : 2] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 u in [0:K-1] {
+                pv = ((m - u) - 1) if ((m - u) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 s in [0:L] {
+            for i32 t in [0 : 1<<(L-1)] {
+                await receive(other, east_even)
+                await send(val, west_even)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+            for i32 t in [0 : 1<<(L-1)] {
+                await send(val, south_even)
+                await receive(other, north_even)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+                await receive(other, south_odd)
+                await send(val, north_odd)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await receive(other, east_even)
+            await send(val, west_even)
+            // Keep the K largest: merge downwards from the two block ends.
+            pv = K - 1
+            pt = K - 1
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x >= y else 0
+                pr = (K - 1) - m
+                res[pr] = x if take == 1 else y
+                pv = pv - take
+                pt = pt - (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // (i=0, odd-j interior): row low-even descending; column high-even / low-odd.
+    compute i16 i, i16 j in [0:1, 1 : (1<<L)-1 : 2] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 u in [0:K-1] {
+                pv = ((m - u) - 1) if ((m - u) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 s in [0:L] {
+            for i32 t in [0 : 1<<(L-1)] {
+                await send(val, east_even)
+                await receive(other, west_even)
+                // Keep the K largest: reverse row, west partner holds the large keys.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+            for i32 t in [0 : 1<<(L-1)] {
+                await receive(other, south_even)
+                await send(val, north_even)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+                await send(val, south_odd)
+                await receive(other, north_odd)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await send(val, east_even)
+            await receive(other, west_even)
+            // Keep the K largest: reverse row, west partner holds the large keys.
+            pv = K - 1
+            pt = K - 1
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x >= y else 0
+                pr = (K - 1) - m
+                res[pr] = x if take == 1 else y
+                pv = pv - take
+                pt = pt - (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // (even-i interior, odd-j interior): row low-even / high-odd descending;
+    // column high-even / low-odd.
+    compute i16 i, i16 j in [2 : (1<<L)-1 : 2, 1 : (1<<L)-1 : 2] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 u in [0:K-1] {
+                pv = ((m - u) - 1) if ((m - u) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 s in [0:L] {
+            for i32 t in [0 : 1<<(L-1)] {
+                await send(val, east_even)
+                await receive(other, west_even)
+                // Keep the K largest: reverse row, west partner holds the large keys.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+                await receive(other, east_odd)
+                await send(val, west_odd)
+                // Keep the K smallest: reverse row, east partner holds the small keys.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+            for i32 t in [0 : 1<<(L-1)] {
+                await receive(other, south_even)
+                await send(val, north_even)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+                await send(val, south_odd)
+                await receive(other, north_odd)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await send(val, east_even)
+            await receive(other, west_even)
+            // Keep the K largest: reverse row, west partner holds the large keys.
+            pv = K - 1
+            pt = K - 1
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x >= y else 0
+                pr = (K - 1) - m
+                res[pr] = x if take == 1 else y
+                pv = pv - take
+                pt = pt - (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+            await receive(other, east_odd)
+            await send(val, west_odd)
+            // Keep the K smallest: reverse row, east partner holds the small keys.
+            pv = 0
+            pt = 0
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x <= y else 0
+                res[m] = x if take == 1 else y
+                pv = pv + take
+                pt = pt + (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // (odd-i interior, odd-j interior): row high-even / low-odd descending;
+    // column high-even / low-odd.
+    compute i16 i, i16 j in [1 : (1<<L)-1 : 2, 1 : (1<<L)-1 : 2] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 u in [0:K-1] {
+                pv = ((m - u) - 1) if ((m - u) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 s in [0:L] {
+            for i32 t in [0 : 1<<(L-1)] {
+                await receive(other, east_even)
+                await send(val, west_even)
+                // Keep the K smallest: reverse row, east partner holds the small keys.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+                await send(val, east_odd)
+                await receive(other, west_odd)
+                // Keep the K largest: reverse row, west partner holds the large keys.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+            for i32 t in [0 : 1<<(L-1)] {
+                await receive(other, south_even)
+                await send(val, north_even)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+                await send(val, south_odd)
+                await receive(other, north_odd)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await receive(other, east_even)
+            await send(val, west_even)
+            // Keep the K smallest: reverse row, east partner holds the small keys.
+            pv = 0
+            pt = 0
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x <= y else 0
+                res[m] = x if take == 1 else y
+                pv = pv + take
+                pt = pt + (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+            await send(val, east_odd)
+            await receive(other, west_odd)
+            // Keep the K largest: reverse row, west partner holds the large keys.
+            pv = K - 1
+            pt = K - 1
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x >= y else 0
+                pr = (K - 1) - m
+                res[pr] = x if take == 1 else y
+                pv = pv - take
+                pt = pt - (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // (i=N-1, odd-j interior): row high-even descending; column high-even / low-odd.
+    compute i16 i, i16 j in [(1<<L)-1 : 1<<L, 1 : (1<<L)-1 : 2] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 u in [0:K-1] {
+                pv = ((m - u) - 1) if ((m - u) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 s in [0:L] {
+            for i32 t in [0 : 1<<(L-1)] {
+                await receive(other, east_even)
+                await send(val, west_even)
+                // Keep the K smallest: reverse row, east partner holds the small keys.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+            for i32 t in [0 : 1<<(L-1)] {
+                await receive(other, south_even)
+                await send(val, north_even)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+                await send(val, south_odd)
+                await receive(other, north_odd)
+                // Keep the K smallest: merge upwards from the two block starts.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await receive(other, east_even)
+            await send(val, west_even)
+            // Keep the K smallest: reverse row, east partner holds the small keys.
+            pv = 0
+            pt = 0
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x <= y else 0
+                res[m] = x if take == 1 else y
+                pv = pv + take
+                pt = pt + (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // (i=0, j=N-1): row low-even descending; column high-even.
+    compute i16 i, i16 j in [0:1, (1<<L)-1 : 1<<L] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 u in [0:K-1] {
+                pv = ((m - u) - 1) if ((m - u) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 s in [0:L] {
+            for i32 t in [0 : 1<<(L-1)] {
+                await send(val, east_even)
+                await receive(other, west_even)
+                // Keep the K largest: reverse row, west partner holds the large keys.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+            for i32 t in [0 : 1<<(L-1)] {
+                await receive(other, south_even)
+                await send(val, north_even)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await send(val, east_even)
+            await receive(other, west_even)
+            // Keep the K largest: reverse row, west partner holds the large keys.
+            pv = K - 1
+            pt = K - 1
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x >= y else 0
+                pr = (K - 1) - m
+                res[pr] = x if take == 1 else y
+                pv = pv - take
+                pt = pt - (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // (even-i interior, j=N-1): row low-even / high-odd descending; column high-even.
+    compute i16 i, i16 j in [2 : (1<<L)-1 : 2, (1<<L)-1 : 1<<L] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 u in [0:K-1] {
+                pv = ((m - u) - 1) if ((m - u) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 s in [0:L] {
+            for i32 t in [0 : 1<<(L-1)] {
+                await send(val, east_even)
+                await receive(other, west_even)
+                // Keep the K largest: reverse row, west partner holds the large keys.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+                await receive(other, east_odd)
+                await send(val, west_odd)
+                // Keep the K smallest: reverse row, east partner holds the small keys.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+            for i32 t in [0 : 1<<(L-1)] {
+                await receive(other, south_even)
+                await send(val, north_even)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await send(val, east_even)
+            await receive(other, west_even)
+            // Keep the K largest: reverse row, west partner holds the large keys.
+            pv = K - 1
+            pt = K - 1
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x >= y else 0
+                pr = (K - 1) - m
+                res[pr] = x if take == 1 else y
+                pv = pv - take
+                pt = pt - (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+            await receive(other, east_odd)
+            await send(val, west_odd)
+            // Keep the K smallest: reverse row, east partner holds the small keys.
+            pv = 0
+            pt = 0
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x <= y else 0
+                res[m] = x if take == 1 else y
+                pv = pv + take
+                pt = pt + (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // (odd-i interior, j=N-1): row high-even / low-odd descending; column high-even.
+    compute i16 i, i16 j in [1 : (1<<L)-1 : 2, (1<<L)-1 : 1<<L] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 u in [0:K-1] {
+                pv = ((m - u) - 1) if ((m - u) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 s in [0:L] {
+            for i32 t in [0 : 1<<(L-1)] {
+                await receive(other, east_even)
+                await send(val, west_even)
+                // Keep the K smallest: reverse row, east partner holds the small keys.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+                await send(val, east_odd)
+                await receive(other, west_odd)
+                // Keep the K largest: reverse row, west partner holds the large keys.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+            for i32 t in [0 : 1<<(L-1)] {
+                await receive(other, south_even)
+                await send(val, north_even)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await receive(other, east_even)
+            await send(val, west_even)
+            // Keep the K smallest: reverse row, east partner holds the small keys.
+            pv = 0
+            pt = 0
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x <= y else 0
+                res[m] = x if take == 1 else y
+                pv = pv + take
+                pt = pt + (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+            await send(val, east_odd)
+            await receive(other, west_odd)
+            // Keep the K largest: reverse row, west partner holds the large keys.
+            pv = K - 1
+            pt = K - 1
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x >= y else 0
+                pr = (K - 1) - m
+                res[pr] = x if take == 1 else y
+                pv = pv - take
+                pt = pt - (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+
+    // (i=N-1, j=N-1): row high-even descending; column high-even.
+    compute i16 i, i16 j in [(1<<L)-1 : 1<<L, (1<<L)-1 : 1<<L] {
+        await receive(val, a_in[i, j])
+        for i16 m in [1:K] {
+            for i16 u in [0:K-1] {
+                pv = ((m - u) - 1) if ((m - u) - 1) > 0 else 0
+                pt = pv + 1
+                x = val[pv]
+                y = val[pt]
+                val[pv] = x if x < y else y
+                val[pt] = y if x < y else x
+            }
+        }
+        for i32 s in [0:L] {
+            for i32 t in [0 : 1<<(L-1)] {
+                await receive(other, east_even)
+                await send(val, west_even)
+                // Keep the K smallest: reverse row, east partner holds the small keys.
+                pv = 0
+                pt = 0
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x <= y else 0
+                    res[m] = x if take == 1 else y
+                    pv = pv + take
+                    pt = pt + (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+            for i32 t in [0 : 1<<(L-1)] {
+                await receive(other, south_even)
+                await send(val, north_even)
+                // Keep the K largest: merge downwards from the two block ends.
+                pv = K - 1
+                pt = K - 1
+                for i16 m in [0:K] {
+                    x = val[pv]
+                    y = other[pt]
+                    take = 1 if x >= y else 0
+                    pr = (K - 1) - m
+                    res[pr] = x if take == 1 else y
+                    pv = pv - take
+                    pt = pt - (1 - take)
+                }
+                await map i16 m in [0:K] {
+                    val[m] = res[m]
+                }
+            }
+        }
+        for i32 t in [0 : 1<<(L-1)] {
+            await receive(other, east_even)
+            await send(val, west_even)
+            // Keep the K smallest: reverse row, east partner holds the small keys.
+            pv = 0
+            pt = 0
+            for i16 m in [0:K] {
+                x = val[pv]
+                y = other[pt]
+                take = 1 if x <= y else 0
+                res[m] = x if take == 1 else y
+                pv = pv + take
+                pt = pt + (1 - take)
+            }
+            await map i16 m in [0:K] {
+                val[m] = res[m]
+            }
+        }
+        await send(val, a_out[i, j])
+    }
+}

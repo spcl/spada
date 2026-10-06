@@ -12,9 +12,14 @@ SDK_DIR    := $(THIS_DIR)cerebras-sdk
 CSL_SDK_DIR ?= $(SDK_DIR)
 SDK_PATH_PREFIX := $(abspath $(CSL_SDK_DIR)):
 
+# Cerebras generation to compile and simulate for. The compiler reads it from the environment and
+# passes it to cslc as --arch; test scripts read it to skip cases the generation cannot express.
+WSE_ARCH ?= wse2
+
 TEST_ENV = PATH="$(SDK_PATH_PREFIX)$$PATH" \
 	PYTHONPATH="$(REPO_ROOT)$${PYTHONPATH:+:$$PYTHONPATH}" \
-	SINGULARITY_BIND="$(REPO_ROOT)$${SINGULARITY_BIND:+,$$SINGULARITY_BIND}"
+	SINGULARITY_BIND="$(REPO_ROOT)$${SINGULARITY_BIND:+,$$SINGULARITY_BIND}" \
+	WSE_ARCH="$(WSE_ARCH)"
 
 .DEFAULT_GOAL := help
 
@@ -29,6 +34,7 @@ help:
 	@echo "  make -C tests/csl_runtime check-sdk  [CSL_SDK_DIR=/path/to/sdk]"
 	@echo "  make -C tests/csl_runtime test        [CSL_SDK_DIR=/path/to/sdk]"
 	@echo "  make -C tests/csl_runtime test-one TEST=test_add.sh [CSL_SDK_DIR=/path/to/sdk]"
+	@echo "  make -C tests/csl_runtime test WSE_ARCH=wse3"
 	@echo "  make -C tests/csl_runtime shell       [CSL_SDK_DIR=/path/to/sdk]"
 	@echo "  make -C tests/csl_runtime smoke-sdk SDK_EXAMPLES_DIR=/path/to/csl-extras-*"
 	@echo ""
@@ -40,6 +46,7 @@ help:
 	@echo "  - On Apple Silicon macOS, use run-in-lima.sh instead:"
 	@echo "      tests/csl_runtime/run-in-lima.sh --sdk-url <url>"
 	@echo "  - CSL_SDK_DIR defaults to tests/csl_runtime/cerebras-sdk/ (populated by setup-sdk)."
+	@echo "  - WSE_ARCH selects the Cerebras generation (wse2 or wse3); it defaults to wse2."
 
 # ── SDK download and extraction ───────────────────────────────────────────────
 # Download the SDK tarball.  Requires CSL_SDK_URL to be set:

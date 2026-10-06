@@ -816,6 +816,34 @@ def test_transposed_stream_extents_1D(second_index):
     assert stream_extents.is_transposed[out_identifier] is False
 
 
+def test_stream_argument_shapes_are_two_dimensional():
+    """
+    Metadata shape is the memcpy rectangle ``(w, h)``, plus ``buffer_size`` as the third axis.
+    0-D and 1-D stream types are padded; 2-D types and compile-time scalars are not.
+    """
+    collectives = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'collectives')
+    kernel = parser.parse_file(os.path.join(collectives, 'scalar_reduce_1D.sptl'))
+    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, N=4))
+    inputs, outputs = analysis.get_kernel_stream_arguments(kernel)
+    assert inputs['inp']['shape'] == [4, 1]
+    assert inputs['inp']['buffer_size'] == 1
+    assert outputs['out']['shape'] == [1, 1]
+    assert outputs['out']['buffer_size'] == 1
+
+    simple = os.path.join(os.path.dirname(__file__), '..', '..', 'samples', 'spatial', 'simple')
+    kernel = parser.parse_file(os.path.join(simple, 'add.sptl'))
+    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, N=8))
+    inputs, outputs = analysis.get_kernel_stream_arguments(kernel)
+    assert inputs['a']['shape'] == [8, 8]
+    assert outputs['out']['shape'] == [8, 8]
+
+    kernel = parser.parse_file(os.path.join(simple, 'mult_scalar.sptl'))
+    kernel = passes.constexpr_propagation(passes.concretize_parameters(kernel, N=4))
+    inputs, _ = analysis.get_kernel_stream_arguments(kernel)
+    assert inputs['coeff']['shape'] == []
+    assert inputs['a']['shape'] == [4, 4]
+
+
 if __name__ == '__main__':
     test_completion_dag_simple()
     test_completion_dag_concurrent()
@@ -839,3 +867,4 @@ if __name__ == '__main__':
     test_transposed_stream_extents(True)
     test_transposed_stream_extents_1D(False)
     test_transposed_stream_extents_1D(True)
+    test_stream_argument_shapes_are_two_dimensional()

@@ -579,6 +579,9 @@ class RoutingDeclaration(SpatialNode):
                     meta-for loop variable such as ``stage``).  It must evaluate to
                     an integer by the time CSL lowering runs; use
                     :attr:`resolved_channel` to obtain the concrete value.
+
+    How many words a stream carries is stated by its type (``stream<T, BOUND>``), not
+    here; see :class:`StreamType` and ``stream_lifetime``.
     """
     hops: Union[list[RoutingHop], Literal["auto"]] = "auto"  # list of hops or 'auto'
     channel: Union["Expression", int, Literal["auto"]] = "auto"
@@ -617,7 +620,11 @@ class RoutingDeclaration(SpatialNode):
             channel_str = str(self.channel)
         else:
             channel_str = self.channel.as_ir()
-        return f"{indent_str}hops = {hops_str}, \n{indent_str}channel = {channel_str}"
+        lines = [
+            f"{indent_str}hops = {hops_str}",
+            f"{indent_str}channel = {channel_str}",
+        ]
+        return ", \n".join(lines)
 
 
 @dataclass
@@ -925,9 +932,15 @@ class CloseStatement(Statement):
     #: How many switch positions the routers along the stream's path move forward when this close
     #: retires the stream's route configuration. One wavelet is emitted per position, and a
     #: transition that changes both a router's input and its output direction takes two. Filled in
-    #: during lowering by ``csl.routing.plan_switch_advances``; ``None`` means no router has to act,
-    #: in which case the close generates no code. Not part of the surface syntax.
+    #: during lowering by ``csl.routing.plan_switch_advances``; ``None`` means no control wavelet
+    #: is sent. Not part of the surface syntax.
     switch_advance: Optional[int] = None
+    #: When True, the sending PE flips only its own router, and does so on the last data wavelet
+    #: (``.advance_switch`` on the fabric output DSD) rather than by a ``SWITCH_ADV`` control
+    #: wavelet. Used only on WSE-2: a control wavelet on the same output queue as the data is
+    #: what drops a wavelet there once a back-pressured send of three or more f32 values fills
+    #: the queue. Mutually exclusive with ``switch_advance``. Not part of the surface syntax.
+    advance_data_switch: bool = False
 
     def validate(self) -> None:
         assert isinstance(self.stream_name, (Identifier, ArraySlice))
@@ -935,6 +948,8 @@ class CloseStatement(Statement):
             assert isinstance(self.completion_name, Completion)
         if self.switch_advance is not None:
             assert isinstance(self.switch_advance, int) and self.switch_advance > 0
+        if self.advance_data_switch:
+            assert self.switch_advance is None
 
     def as_ir(self, indent: int = 0) -> str:
         indent_str = '  ' * indent

@@ -1,0 +1,231 @@
+/**
+ * Batcher odd-even mergesort on R independent rows of N = 2^L PEs.
+ *
+ * Each PE holds a block of K f32 keys. After the kernel, every row is sorted in ascending order:
+ * PE (i, j) holds keys i*K .. i*K + (K-1) of row j. All communication is along x, so rows do not
+ * interact.
+ *
+ * Algorithm
+ * ---------
+ * The first phase loads each PE's block and sorts it locally. The network then runs merge levels
+ * l = 1 .. L, each consisting of sub-phases p = 1 .. l that compare PEs at distance d = 2^(l-p).
+ * In sub-phase p = 1, PE i is paired with PE i + d within each box of 2^l PEs. In sub-phases
+ * p >= 2, the first and last d PEs of each box do not participate. Every comparator is a
+ * compare-split: the partners exchange their blocks, the lower PE keeps the K smallest and the
+ * higher PE the K largest of the 2K keys.
+ *
+ * Channel assignment
+ * ------------------
+ * Long-distance phases (4*d >= N) have overlapping paths and are bundled onto one channel per
+ * direction using hardware counter filters (see irspec/docs/spatial/routing_wse.md). For L <= 4,
+ * there are at most three such phases, matching the three available hardware filters per PE.
+ *
+ *   bundled (4*d >= N):  fwd = N + 2*(l*(L+1) + p),   bwd = fwd + 1
+ *
+ * The remaining short-distance phases pool channels by distance d and the residue (coordinate mod 2d),
+ * regardless of send direction:
+ *
+ *   pooled  (4*d <  N):  fwd = 2*d - 2 + c_lo,         bwd = 2*d - 2 + c_hi
+ *
+ * where c_lo and c_hi are the residues modulo 2d of the lower and the higher partner. For p = 1,
+ * c_lo = r and c_hi = r + d; for p >= 2 the two are swapped, so all phases at one distance use the
+ * same 2d channels, numbered 2d - 2 .. 4d - 3. On such a channel, sources, destinations and relays
+ * form disjoint residue classes. Each PE therefore keeps one role on a channel for the whole kernel,
+ * and its router alternates between at most two switch positions:
+ *
+ *   source        R->E  or  R->W
+ *   destination   W->R  or  E->R
+ *   relay         W->E  or  E->W
+ *
+ * Channels per phase for L = 3:
+ *
+ *   (l=1,p=1) d=1: (0,1)(2,3)(4,5)(6,7)    fwd 0    bwd 1
+ *   (l=2,p=1) d=2: (0,2)(1,3)(4,6)(5,7)    bundled
+ *   (l=2,p=2) d=1: (1,2)(5,6)              fwd 1    bwd 0
+ *   (l=3,p=1) d=4: (0,4)(1,5)(2,6)(3,7)    bundled
+ *   (l=3,p=2) d=2: (2,4)(3,5)              bundled
+ *   (l=3,p=3) d=1: (1,2)(3,4)(5,6)         fwd 1    bwd 0
+ *
+ * The kernel uses 8 colors for L = 3 and 12 colors for L = 4.
+ *
+ * Constraints: 1 <= L <= 4, K >= 1, R >= 1. Requires WSE-3, which binds each fabric queue to one
+ * color for the whole kernel; the pooling above keeps the busiest PE at five input and five output
+ * queues for L = 4.
+ **/
+kernel @batcher_oddeven_wse3_1d<L, K, R>(
+    stream<f32, K>[1<<L, R] readonly  inp,
+    stream<f32, K>[1<<L, R] writeonly out
+) {
+    place i16 i, i16 j in [0:1<<L, 0:R] {
+        f32[K] val   // this PE's block, ascending
+        f32[K] tmp   // the partner's block
+        f32[K] res   // merge target
+        f32 x
+        f32 y
+        i16 pv  // walk into val
+        i16 pt  // walk into tmp
+        i16 pr  // where the walk writes
+        i16 take
+    }
+
+    // Load this PE's block and sort it, which is the invariant the comparators below rely on.
+    phase {
+        compute i16 i, i16 j in [0:1<<L, 0:R] {
+            await receive(val, inp[i, j])
+            for i16 m in [1:K] {
+                for i16 s in [0:K-1] {
+                    pv = ((m - s) - 1) if ((m - s) - 1) > 0 else 0
+                    pt = pv + 1
+                    x = val[pv]
+                    y = val[pt]
+                    val[pv] = x if x < y else y
+                    val[pt] = y if x < y else x
+                }
+            }
+        }
+    }
+
+    for i16 l in [1:L+1] {
+        // p = 1: all PEs participate, dist = 1<<(l-1). The low partner of matching r has residue r
+        // mod 2*dist and the high partner r + dist, which is the channel each of them sends on.
+        phase {
+            for i16 r in [0:1<<(l-1)] {
+                dataflow i16 i, i16 j in [r:1<<L:1<<l, 0:R] {
+                    stream<f32, K> fwd = relative_stream(1<<(l-1), 0) {
+                        hops = auto,
+                        channel = ((1<<L) + (2 * ((l * (L+1)) + 1))) if (((1<<(l-1)) << 2) >= (1<<L)) else (((2 * (1<<(l-1))) - 2) + r)
+                    }
+                    stream<f32, K> bwd = relative_stream(-(1<<(l-1)), 0) {
+                        hops = auto,
+                        channel = (((1<<L) + (2 * ((l * (L+1)) + 1))) + 1) if (((1<<(l-1)) << 2) >= (1<<L)) else (((2 * (1<<(l-1))) - 2) + (r + (1<<(l-1))))
+                    }
+                }
+                dataflow i16 i, i16 j in [(r + (1<<(l-1))):1<<L:1<<l, 0:R] {
+                    stream<f32, K> fwd = relative_stream(1<<(l-1), 0) {
+                        hops = auto,
+                        channel = ((1<<L) + (2 * ((l * (L+1)) + 1))) if (((1<<(l-1)) << 2) >= (1<<L)) else (((2 * (1<<(l-1))) - 2) + r)
+                    }
+                    stream<f32, K> bwd = relative_stream(-(1<<(l-1)), 0) {
+                        hops = auto,
+                        channel = (((1<<L) + (2 * ((l * (L+1)) + 1))) + 1) if (((1<<(l-1)) << 2) >= (1<<L)) else (((2 * (1<<(l-1))) - 2) + (r + (1<<(l-1))))
+                    }
+                }
+
+                compute i16 i, i16 j in [r:1<<L:1<<l, 0:R] {
+                    await send(val, fwd)
+                    await receive(tmp, bwd)
+                    // Keep the K smallest: merge upwards from the two block starts.
+                    pv = 0
+                    pt = 0
+                    for i16 m in [0:K] {
+                        x = val[pv]
+                        y = tmp[pt]
+                        take = 1 if x <= y else 0
+                        res[m] = x if take == 1 else y
+                        pv = pv + take
+                        pt = pt + (1 - take)
+                    }
+                    await map i16 m in [0:K] {
+                        val[m] = res[m]
+                    }
+                }
+                compute i16 i, i16 j in [(r + (1<<(l-1))):1<<L:1<<l, 0:R] {
+                    await receive(tmp, fwd)
+                    await send(val, bwd)
+                    // Keep the K largest: merge downwards from the two block ends.
+                    pv = K - 1
+                    pt = K - 1
+                    for i16 m in [0:K] {
+                        x = val[pv]
+                        y = tmp[pt]
+                        take = 1 if x >= y else 0
+                        pr = (K - 1) - m
+                        res[pr] = x if take == 1 else y
+                        pv = pv - take
+                        pt = pt - (1 - take)
+                    }
+                    await map i16 m in [0:K] {
+                        val[m] = res[m]
+                    }
+                }
+            }
+        }
+
+        // p = 2 .. l: skip first/last dist PEs of each 2^l box, dist = 1<<(l-p). The low partner's
+        // residue is dist + r here and the high partner's is r, the reverse of the p = 1 phases,
+        // which is what lets the two of them share these channels.
+        for i16 p in [2:l+1] {
+            phase {
+                for i16 r in [0:1<<(l-p)] {
+                    for i16 b in [0:1<<L:1<<l] {
+                        dataflow i16 i, i16 j in [(b + ((1<<(l-p)) + r)):((b + (1<<l)) - (1<<(l-p))) + r:2 * (1<<(l-p)), 0:R] {
+                            stream<f32, K> fwd = relative_stream(1<<(l-p), 0) {
+                                hops = auto,
+                                channel = ((1<<L) + (2 * ((l * (L+1)) + p))) if (((1<<(l-p)) << 2) >= (1<<L)) else (((2 * (1<<(l-p))) - 2) + ((1<<(l-p)) + r))
+                            }
+                            stream<f32, K> bwd = relative_stream(-(1<<(l-p)), 0) {
+                                hops = auto,
+                                channel = (((1<<L) + (2 * ((l * (L+1)) + p))) + 1) if (((1<<(l-p)) << 2) >= (1<<L)) else (((2 * (1<<(l-p))) - 2) + r)
+                            }
+                        }
+                        dataflow i16 i, i16 j in [(b + ((2 * (1<<(l-p))) + r)):(b + (1<<l)) + r:2 * (1<<(l-p)), 0:R] {
+                            stream<f32, K> fwd = relative_stream(1<<(l-p), 0) {
+                                hops = auto,
+                                channel = ((1<<L) + (2 * ((l * (L+1)) + p))) if (((1<<(l-p)) << 2) >= (1<<L)) else (((2 * (1<<(l-p))) - 2) + ((1<<(l-p)) + r))
+                            }
+                            stream<f32, K> bwd = relative_stream(-(1<<(l-p)), 0) {
+                                hops = auto,
+                                channel = (((1<<L) + (2 * ((l * (L+1)) + p))) + 1) if (((1<<(l-p)) << 2) >= (1<<L)) else (((2 * (1<<(l-p))) - 2) + r)
+                            }
+                        }
+
+                        compute i16 i, i16 j in [(b + ((1<<(l-p)) + r)):((b + (1<<l)) - (1<<(l-p))) + r:2 * (1<<(l-p)), 0:R] {
+                            await send(val, fwd)
+                            await receive(tmp, bwd)
+                            // Keep the K smallest: merge upwards from the two block starts.
+                            pv = 0
+                            pt = 0
+                            for i16 m in [0:K] {
+                                x = val[pv]
+                                y = tmp[pt]
+                                take = 1 if x <= y else 0
+                                res[m] = x if take == 1 else y
+                                pv = pv + take
+                                pt = pt + (1 - take)
+                            }
+                            await map i16 m in [0:K] {
+                                val[m] = res[m]
+                            }
+                        }
+                        compute i16 i, i16 j in [(b + ((2 * (1<<(l-p))) + r)):(b + (1<<l)) + r:2 * (1<<(l-p)), 0:R] {
+                            await receive(tmp, fwd)
+                            await send(val, bwd)
+                            // Keep the K largest: merge downwards from the two block ends.
+                            pv = K - 1
+                            pt = K - 1
+                            for i16 m in [0:K] {
+                                x = val[pv]
+                                y = tmp[pt]
+                                take = 1 if x >= y else 0
+                                pr = (K - 1) - m
+                                res[pr] = x if take == 1 else y
+                                pv = pv - take
+                                pt = pt - (1 - take)
+                            }
+                            await map i16 m in [0:K] {
+                                val[m] = res[m]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Write the sorted blocks back to the host.
+    phase {
+        compute i16 i, i16 j in [0:1<<L, 0:R] {
+            await send(val, out[i, j])
+        }
+    }
+}
