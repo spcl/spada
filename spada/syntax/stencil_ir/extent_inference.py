@@ -71,7 +71,7 @@ class ExtentInference(sast.ScopedNodeVisitor):
                 continue
 
             # Compute the Minkowski sum of the local extent and the uses
-            local_extent = local_extent_collector.extents[arg.name]
+            local_extent = local_extent_collector.extents_of(arg)
 
             if len(use_offsets) > 0:
                 arg_t.extent.extents = [*_minkowski_sum(local_extent, use_offsets)]
@@ -181,12 +181,23 @@ class LocalExtentCollector(sast.NodeVisitor):
     A node visitor that collects all input and output extents from field accesses in the visited blocks/statements.
     """
 
-    # The extents are stored in a dictionary with the field name as key and a set of extents as value.
-    extents: dict[str, set[tuple[int]]]
+    # The extents are stored in a dictionary with the (versioned) field identifier as key and a set of extents
+    # as value.
+    extents: dict[sast.Identifier, set[sast.Offset]]
 
     def __init__(self):
         super().__init__()
-        self.extents: dict[str, set[sast.Offset]] = defaultdict(set)
+        self.extents: dict[sast.Identifier, set[sast.Offset]] = defaultdict(set)
+
+    def extents_of(self, identifier: sast.Identifier) -> set[sast.Offset]:
+        """
+        Returns the local extents of a statement argument. Accesses to other versions of the same field (e.g.,
+        loop-carried reads in FORWARD/BACKWARD computations) are not accesses to this argument. If the version
+        does not occur in the body, falls back to all accesses by name.
+        """
+        if identifier in self.extents:
+            return self.extents[identifier]
+        return set().union(*(ext for ident, ext in self.extents.items() if ident.name == identifier.name))
 
     def visit_StatementBlock(self, node: sast.StatementBlock):
         # Visit only the body (arguments do not count as accesses)
@@ -194,9 +205,9 @@ class LocalExtentCollector(sast.NodeVisitor):
             self.visit(b)
     def visit_Identifier(self, node: sast.Identifier):
         # If a bare identifier (i.e., no subscript) is used, the extent (0, 0, 0) should be added
-        self.extents[node.name].add(sast.Offset((0, 0, 0)))
+        self.extents[node].add(sast.Offset((0, 0, 0)))
 
     def visit_Subscript(self, node: sast.Subscript):
         # If a subscript is found, add its subscript to the extents.
         # Make sure not to recursively visit into the subscript to avoid adding (0, 0, 0)
-        self.extents[node.value.name].add(sast.Offset((node.subscript[0], node.subscript[1], node.subscript[2])))
+        self.extents[node.value].add(sast.Offset((node.subscript[0], node.subscript[1], node.subscript[2])))

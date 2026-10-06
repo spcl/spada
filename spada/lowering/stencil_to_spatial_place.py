@@ -161,6 +161,19 @@ class ProgramPlacement:
         """
         return self.domain_shift
 
+    def get_field_storage(self, name: str) -> tuple[spa.Identifier, spa.ArrayType] | None:
+        """
+        Return the program-scope storage of a field, i.e., the buffer that all computation results of the field
+        are written to and that holds the field's current value at every level. For fields that are only read,
+        this is the input buffer.
+
+        :param name: The field name.
+        :return: The storage identifier and type, or None if the name is not a program-scope field.
+        """
+        if name not in self._program_scope_fields:
+            return None
+        return self._storage_map[self._program_scope_fields[name]].get(sast.Offset.zero())
+
     def get_storage(self,
                     identifier: sast.Identifier,
                     offset: sast.Offset = sast.Offset.zero()) -> tuple[spa.Identifier, spa.ArrayType | spa.ScalarType] | None:

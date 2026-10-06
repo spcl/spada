@@ -65,6 +65,61 @@ def collect_extents(node: sast.Node) -> dict[str, set[tuple[int]]]:
     return collector.extents
 
 
+def names_written_in(computation: sast.ComputationBlock) -> set[str]:
+    """
+    Returns the names of all fields that a computation block assigns to (statement, if-block and materialize
+    results).
+
+    :param computation: The computation block to inspect.
+    :return: The set of assigned field names.
+    """
+    names = set()
+    for node in computation.walk():
+        if isinstance(node, (sast.StatementBlock, sast.IfBlock)):
+            names.update(out.name for out in node.outputs)
+        elif isinstance(node, sast.MaterializeOp):
+            names.add(node.result.name)
+    return names
+
+
+def is_loop_carried_access(computation: sast.ComputationBlock, node: sast.Subscript) -> bool:
+    """
+    Returns True if a subscript in a FORWARD/BACKWARD computation reads a vertical level that the sequential
+    k-loop has already finished (k - n for FORWARD, k + n for BACKWARD). Such an access refers to the value of
+    the field at the *end* of an earlier iteration, i.e., to the computation's own result, rather than to the
+    version that is current at the point of the access in the loop body.
+
+    :param computation: The enclosing computation block.
+    :param node: The subscript to classify.
+    """
+    dz = node.subscript[2]
+    if computation.schedule == sast.ComputationType.FORWARD:
+        return dz < 0
+    if computation.schedule == sast.ComputationType.BACKWARD:
+        return dz > 0
+    return False
+
+
+def loop_carried_names(computation: sast.ComputationBlock) -> set[str]:
+    """
+    Returns the names of fields that a FORWARD/BACKWARD computation both assigns to and reads at a non-zero
+    vertical offset. For these fields, values flow across k-iterations (and across computation boundaries for
+    the first iterations of an interval), so the computation must take the incoming version as an input and
+    produce the field as an output.
+
+    :param computation: The computation block to inspect.
+    :return: The set of field names with cross-iteration dependencies (empty for PARALLEL computations).
+    """
+    if computation.schedule == sast.ComputationType.PARALLEL:
+        return set()
+    written = names_written_in(computation)
+    return {
+        node.value.name
+        for node in computation.walk()
+        if isinstance(node, sast.Subscript) and node.subscript[2] != 0 and node.value.name in written
+    }
+
+
 class InputOutputCollector(sast.NodeVisitor):
     """
     A node visitor that collects all input and output fields in the visited blocks/statements.

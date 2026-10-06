@@ -62,7 +62,7 @@ def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: ChannelStr
 
     # Input generation:
     arguments = kernel_arguments(stencil)
-    compute = input_phase(body, arguments, versioning)
+    compute = input_phase(body, arguments, versioning, placement_gen, _input_origins(stencil))
 
     body.extend(compute)
 
@@ -134,6 +134,28 @@ def kernel_arguments(stencil: sast.Program) -> list[spa.KernelArgument]:
 
     return arguments
 
+def _input_origins(stencil: sast.Program) -> dict[str, tuple[int, int]]:
+    """
+    Collect the horizontal origin of the domain of every input field.
+
+    :param stencil: The stencil program.
+    :return: A map from input field name to the (x, y) coordinates of the first element of its kernel argument.
+    """
+    origins = {}
+    for inp, inp_t in zip(stencil.inputs, stencil.operation_type.source):
+        if isinstance(inp_t, sast.FieldType):
+            assert isinstance(inp_t.domain, sast.Cartesian)
+            origins[inp.name] = (inp_t.domain.x[0], inp_t.domain.y[0])
+    return origins
+
+
+def _grid_to_array_index(var: spa.Identifier, offset: int) -> spa.Expression:
+    if offset == 0:
+        return spa.Expression(var)
+    return spa.Expression(spa.BinaryOperator(spa.Expression(var), '-',
+                                             spa.Expression(spa.ConstantLiteral(offset, ScalarType.i32))))
+
+
 def _input_name(original_name: str) -> str:
     return f"_{original_name}"
 
@@ -163,32 +185,56 @@ def _construct_arg(name: str, arg_t: sast.FieldType | ScalarType) -> spa.KernelA
 def input_phase(body: list[spa.PlaceBlock],
                 arguments: list[spa.KernelArgument],
                 versioning: Versioning[spa.Identifier],
+                placement: ProgramPlacement | None = None,
+                input_origins: dict[str, tuple[int, int]] | None = None,
                 subgrid_var_type: ScalarType = ScalarType.u16) -> list[spa.ComputeBlock]:
+    """
+    Generate the compute blocks that receive the kernel input streams into the input fields.
+
+    Computations write their results into the program-scope storage of a field, and only at the levels of their
+    interval. Hence, if an input field is also written, its program-scope storage is initialized with the input
+    so that untouched levels keep their input values and vertically-offset reads observe the current value.
+
+    :param body: The place blocks of the program.
+    :param arguments: The kernel arguments.
+    :param versioning: Versioning used to generate fresh identifiers.
+    :param placement: The program placement, used to find the program-scope storage of written input fields and
+        the shift from domain to grid coordinates.
+    :param input_origins: The (x, y) domain origin of every input field. Kernel argument arrays are indexed relative
+        to this origin, so a grid coordinate maps to index ``grid - shift - origin``. Requires ``placement``.
+    :param subgrid_var_type: The type of the subgrid variables.
+    :return: The compute blocks of the input phase.
+    """
     compute = []
+    shift = placement.get_shift() if placement else (0, 0, 0)
 
     for block in body:
         statements = []
 
         var_i = versioning.next_version('i')
         var_j = versioning.next_version('j')
+        declared = {field.field_name: field.dtype for field in block.statements}
 
         for field in block.statements:
             # Check if it is an input field by looking at the arguments and checking if there is
             # a field with the same name but with a _ prefix
             for arg in arguments:
                 if field.field_name.name == f'{arg.identifier.name[1:]}_0_0_0' and field.field_name.version == 0:
-                    # Generate input phase
-                    # TODO: Check / Fix the indices
-                    # Receive the input
+                    origin = (input_origins or {}).get(arg.identifier.name[1:], (-shift[0], -shift[1]))
                     receive_stream = spa.ArraySlice(array=arg.identifier,
-                                                    indices=[spa.Expression(var_i),
-                                                             spa.Expression(var_j)])
+                                                    indices=[_grid_to_array_index(var_i, shift[0] + origin[0]),
+                                                             _grid_to_array_index(var_j, shift[1] + origin[1])])
 
                     local_array = field.field_name
 
                     receive = spa.ReceiveStatement(local_array, receive_stream)
 
                     statements.append(receive)
+
+                    field_storage = placement.get_field_storage(arg.identifier.name[1:]) if placement else None
+                    if field_storage is not None and field_storage[0] != local_array and field_storage[0] in declared:
+                        statements.append(_copy_array(local_array, field.dtype, field_storage[0],
+                                                      declared[field_storage[0]], versioning))
 
         if len(statements) > 0:
             compute.append(spa.ComputeBlock(variables=[spa.TypedIdentifier(subgrid_var_type, var_i),
@@ -197,6 +243,24 @@ def input_phase(body: list[spa.PlaceBlock],
                                             statements=statements))
 
     return compute
+
+
+def _copy_array(src: spa.Identifier,
+                src_t: spa.ArrayType,
+                dst: spa.Identifier,
+                dst_t: spa.ArrayType,
+                versioning: Versioning[spa.Identifier]) -> spa.ForStatement:
+    """
+    Generate a loop that copies the overlapping prefix of two local one-dimensional arrays.
+
+    :return: The copy loop ``dst[k] = src[k]``.
+    """
+    length = min(src_t.shape[0], dst_t.shape[0])
+    k = spa.TypedIdentifier(ScalarType.i32, versioning.next_version('k'))
+    copy_stmt = spa.AssignmentStatement(spa.ArraySlice(dst, [spa.Expression(k.identifier)]),
+                                        spa.Expression(spa.ArraySlice(src, [spa.Expression(k.identifier)])))
+    return spa.ForStatement(variables=[k], range_expression=[spa.RangeExpression.from_args(0, length)],
+                            body=[copy_stmt])
 
 
 def output_phase(op: sast.ReturnOp,
