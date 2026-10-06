@@ -29,7 +29,7 @@ python3 <<EOF
 import numpy as np
 ref = np.load('expected_out.npy')
 output = np.load('OUT___kernel_out_0.npy')
-if not np.allclose(output, ref, atol=1e-5, rtol=1e-4):
+if not np.allclose(output, ref, atol=1e-6, rtol=1e-5):
     print("Test failed: Output does not match expected result.")
     print("  expected column (0, 0):", ref[0, 0])
     print("  got      column (0, 0):", output[0, 0])
