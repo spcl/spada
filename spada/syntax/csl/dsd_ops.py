@@ -124,38 +124,37 @@ def _with_map_operand_forms(statement: spir.MapStatement, assignment: spir.Assig
     """
     from spada.syntax.csl.statements import emit_expression, name_to_csl, dtype_as_csl
     axes = {var.identifier for var in statement.variables}
-    forms: dict[str, tuple[str, cslstruct.DataStructureDescriptor]] = {}
+    #: array -> rendering of its accesses in this operation, or None when the plain DSD is right
+    rendered: dict[str, Optional[tuple[str, cslstruct.DataStructureDescriptor]]] = {}
     for node in assignment.walk():
         if not isinstance(node, spir.ArraySlice) or len(node.indices) != 1:
             continue
         if isinstance(node.indices[0], spir.RangeExpression):
             continue
-        ids = {n for n in node.indices[0].walk() if isinstance(n, spir.Identifier)}
         key = node.array.as_ir()
-        if not ids & axes:
+        form: Optional[tuple[str, cslstruct.DataStructureDescriptor]]
+        if not any(isinstance(n, spir.Identifier) and n in axes for n in node.indices[0].walk()):
             text = emit_expression(spir.Expression(node), dsds, dtypes)
             form = (text, _ScalarElement(text))
         else:
-            if not ids - axes:
-                form = None
+            aff = affine.affine_form(node.indices[0])
+            if aff is None:
+                raise NotImplementedError(f'Index of {node.as_ir()} is not affine in the map variables')
+            terms = [(c, v) for v, c in aff[0].items() if v not in axes]
+            if terms:
+                offset = ' + '.join(name_to_csl(v) if c == 1 else f'{name_to_csl(v)} * {c}' for c, v in terms)
+                dsd_name, dsd = next(d for d in dsds[key] if isinstance(d[1], cslstruct.MemoryDSD))
+                form = (_offset_dsd(dsd_name, offset, dtype_as_csl(_get_base_dtype(dtypes, node.array))), dsd)
             else:
-                aff = affine.affine_form(node.indices[0])
-                if aff is None:
-                    raise NotImplementedError(f'Index of {node.as_ir()} is not affine in the map variables')
-                terms = [(c, v) for v, c in aff[0].items() if v not in axes]
-                offset = ' + '.join(f'{name_to_csl(v)}' if c == 1 else f'{name_to_csl(v)} * {c}' for c, v in terms)
-                memory = [d for d in dsds[key] if isinstance(d[1], cslstruct.MemoryDSD)]
-                elem = dtype_as_csl(_get_base_dtype(dtypes, node.array))
-                form = (_offset_dsd(memory[0][0], offset, elem), memory[0][1])
-        form = form if form else (None, None)
-        if key in forms and forms[key][0] != form[0]:
+                form = None
+        if key in rendered and (rendered[key] and rendered[key][0]) != (form and form[0]):
             raise NotImplementedError(f'{node.array.as_ir()} is accessed through different forms in one DSD operation')
-        forms[key] = form
-    forms = {key: form for key, form in forms.items() if form[0] is not None}
-    if not forms:
+        rendered[key] = form
+    adapted = {key: form for key, form in rendered.items() if form is not None}
+    if not adapted:
         return dsds
     dsds = copy.copy(dsds)
-    for key, form in forms.items():
+    for key, form in adapted.items():
         dsds[key] = [form]
     return dsds
 
