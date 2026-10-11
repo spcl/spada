@@ -4,7 +4,7 @@ Parses DSD operations from IR nodes.
 import copy
 from dataclasses import dataclass
 from typing import Literal, Optional
-from spada.syntax.spatial_ir import irnodes as spir
+from spada.syntax.spatial_ir import irnodes as spir, affine
 from spada.syntax.csl import structures as cslstruct
 
 UniqueDSDDict = cslstruct.UniqueDSDDict
@@ -54,6 +54,8 @@ class DSDOp:
             normalized_statement = get_dsd_statement(dtypes, statement)
         if normalized_statement is None:
             raise ValueError('Expected a statement that can be lowered to a DSD operation')
+        if isinstance(statement, spir.MapStatement):
+            dsds = _with_map_operand_forms(statement, normalized_statement, dtypes, dsds)
         dsd_objects = self.used_dsd_objects(normalized_statement, dsds)
         return self._append_async_suffix(self._as_csl(normalized_statement, dtypes, dsds), dsd_objects, async_target)
 
@@ -79,6 +81,83 @@ class DSDOp:
         :return: A list of DSD objects used in the statement.
         """
         raise NotImplementedError
+
+
+class _ScalarElement(cslstruct.DataStructureDescriptor):
+    """
+    Stands in for an array element used as a scalar operand of a DSD operation (e.g. ``x[l]``).
+    Its name in the DSD dictionary is the CSL text of the access.
+    """
+
+    def __init__(self, text: str):
+        self.text = text
+
+    def as_csl(self) -> str:
+        return self.text
+
+
+def _offset_dsd(dsd_name: str, offset: str, elem_type: str) -> str:
+    """
+    The DSD ``dsd_name`` moved to an absolute element offset from its base. This is the single
+    place that decides how a per-execution offset is spelled in the generated code.
+    """
+    return f'@increment_dsd_offset({dsd_name}, {offset}, {elem_type})'
+
+
+def _with_map_operand_forms(statement: spir.MapStatement, assignment: spir.AssignmentStatement,
+                            dtypes: dict[spir.Identifier, spir.IRType], dsds: UniqueDSDDict) -> UniqueDSDDict:
+    """
+    Adapts the DSD dictionary to the operands of one map-style DSD operation.
+
+    The memory DSDs of a map describe the accesses with every identifier other than the map
+    variables fixed at zero (see ``_dsd_from_array``). Inside the operation such an identifier
+    has a value, so:
+
+    * an element access that no map variable indexes is a scalar operand and renders as the
+      access itself (``x[l]``);
+    * an access with a nonzero part from other identifiers renders as the array's DSD moved by
+      that part: ``@increment_dsd_offset(dsd, offset, T)``. The offset is absolute from the
+      DSD's base, recomputed at every execution.
+
+    :return: ``dsds`` itself when no operand needs this, otherwise a copy with the affected
+             arrays rebound.
+    """
+    from spada.syntax.csl.statements import emit_expression, name_to_csl, dtype_as_csl
+    axes = {var.identifier for var in statement.variables}
+    forms: dict[str, tuple[str, cslstruct.DataStructureDescriptor]] = {}
+    for node in assignment.walk():
+        if not isinstance(node, spir.ArraySlice) or len(node.indices) != 1:
+            continue
+        if isinstance(node.indices[0], spir.RangeExpression):
+            continue
+        ids = {n for n in node.indices[0].walk() if isinstance(n, spir.Identifier)}
+        key = node.array.as_ir()
+        if not ids & axes:
+            text = emit_expression(spir.Expression(node), dsds, dtypes)
+            form = (text, _ScalarElement(text))
+        else:
+            if not ids - axes:
+                form = None
+            else:
+                aff = affine.affine_form(node.indices[0])
+                if aff is None:
+                    raise NotImplementedError(f'Index of {node.as_ir()} is not affine in the map variables')
+                terms = [(c, v) for v, c in aff[0].items() if v not in axes]
+                offset = ' + '.join(f'{name_to_csl(v)}' if c == 1 else f'{name_to_csl(v)} * {c}' for c, v in terms)
+                memory = [d for d in dsds[key] if isinstance(d[1], cslstruct.MemoryDSD)]
+                elem = dtype_as_csl(_get_base_dtype(dtypes, node.array))
+                form = (_offset_dsd(memory[0][0], offset, elem), memory[0][1])
+        form = form if form else (None, None)
+        if key in forms and forms[key][0] != form[0]:
+            raise NotImplementedError(f'{node.array.as_ir()} is accessed through different forms in one DSD operation')
+        forms[key] = form
+    forms = {key: form for key, form in forms.items() if form[0] is not None}
+    if not forms:
+        return dsds
+    dsds = copy.copy(dsds)
+    for key, form in forms.items():
+        dsds[key] = [form]
+    return dsds
 
 
 def _ident(expr: spir.Identifier | spir.ArraySlice | spir.TypedIdentifier) -> spir.Identifier:
