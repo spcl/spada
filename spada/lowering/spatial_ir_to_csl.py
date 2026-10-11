@@ -361,6 +361,10 @@ const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
         canonicalization.convert_foreach_data_tasks_to_loops(rect, dtypes)
         dtypes = _collect_identifier_types(rect.metadata, kernel.arguments)
 
+    # Turn affine loop nests into maps over DSDs where the DSD operation classifier accepts them
+    if preprocessing.vectorize_affine_loops(rect.metadata, dtypes):
+        dtypes = _collect_identifier_types(rect.metadata, kernel.arguments)
+
     benchmark_code = _generate_benchmarking_code(header, disable_benchmarking)
 
     # Convert compute block subgraphs into tasks:
@@ -861,7 +865,8 @@ def _mentions_any(node: spir.ArraySlice, axes: dict[spir.Identifier, spir.RangeE
     return False
 
 
-def _strided_index(index: spir.Expression, axis: spir.Identifier, rng: spir.RangeExpression) -> Optional[str]:
+def _strided_index(index: spir.Expression, axis: spir.Identifier,
+                   rng: spir.RangeExpression) -> Optional[tuple[str, str]]:
     """
     Expresses a 1-D access ``array[index(axis, free...)]`` as a tensor-access expression in
     ``__index``, with every identifier other than the map variable fixed to zero (the enclosing
@@ -916,15 +921,19 @@ def _dsd_from_array(array_candidates: dict[str, tuple[spir.FieldDeclaration, lis
         if use_index and map_axes:
             # Only the map variable selects elements; other identifiers are fixed per execution.
             # A range or offset of the map shows up in the descriptor (extent, stride, base).
-            axes_in_use = {n for ind in node.indices for n in ind.walk() if isinstance(n, spir.Identifier) and n in map_axes}
+            axes_in_use = {
+                n
+                for ind in node.indices for n in ind.walk() if isinstance(n, spir.Identifier) and n in map_axes
+            }
             if len(axes_in_use) > 1:
-                raise SyntaxError(f'Expected one index variable in array access, got {sorted(a.as_ir() for a in axes_in_use)}.\n'
-                                  f'  In line {node.lineinfo}')
+                raise SyntaxError(f'Expected one index variable in array access, got '
+                                  f'{sorted(a.as_ir() for a in axes_in_use)}.\n  In line {node.lineinfo}')
             if axes_in_use and len(node.indices) == 1 and not isinstance(node.indices[0], spir.RangeExpression):
                 (axis, ) = axes_in_use
                 strided = _strided_index(node.indices[0], axis, map_axes[axis])
                 if strided is not None:
-                    return cslstruct.MemoryDSD(dsd_type, name_to_csl(node.array), [strided[0]], ['__index'], [strided[1]])
+                    extent, expression = strided
+                    return cslstruct.MemoryDSD(dsd_type, name_to_csl(node.array), [extent], ['__index'], [expression])
                 # Not integer-affine: keep the plain substitution, other identifiers still excluded
                 far = passes.FindAndReplace({axis: spir.Identifier('__index', 0)})
                 indices = [expr_to_csl(far.visit(copy.deepcopy(ind))) for ind in node.indices]
