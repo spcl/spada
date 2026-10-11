@@ -6,10 +6,11 @@ from collections import defaultdict
 import copy
 import functools
 from io import StringIO
+from typing import Optional
 import textwrap
 from spada.lowering import fabric_occupancy, wse3
 from spada.syntax.common.types import BIT_WIDTH
-from spada.syntax.spatial_ir import irnodes as spir, canonicalization, analysis, passes
+from spada.syntax.spatial_ir import irnodes as spir, canonicalization, analysis, passes, affine
 from spada.syntax.spatial_ir import copy_elimination
 from spada.syntax.spatial_ir import canonical_subgrids
 from spada.syntax.spatial_ir import stream_lifetime
@@ -848,8 +849,47 @@ def _place_block_storage_bytes(place: spir.PlaceBlock) -> int:
     return sum(_field_storage_bytes(field) for field in place.statements)
 
 
+def _mentions_any(node: spir.ArraySlice, axes: dict[spir.Identifier, spir.RangeExpression]) -> bool:
+    """
+    Whether an array access depends on one of the given index variables (or is a range access).
+    """
+    for ind in node.indices:
+        if isinstance(ind, spir.RangeExpression):
+            return True
+        if any(isinstance(n, spir.Identifier) and n in axes for n in ind.walk()):
+            return True
+    return False
+
+
+def _strided_index(index: spir.Expression, axis: spir.Identifier, rng: spir.RangeExpression) -> Optional[str]:
+    """
+    Expresses a 1-D access ``array[index(axis, free...)]`` as a tensor-access expression in
+    ``__index``, with every identifier other than the map variable fixed to zero (the enclosing
+    sequential variables re-enter through ``@increment_dsd_offset`` at the operation, see
+    ``DSDOp.as_csl``).
+
+    :return: A ``(extent, expression)`` pair, or None if the access is not integer-affine in a
+             map variable with a constant range, in which case the caller keeps the plain form.
+    """
+    aff = affine.affine_form(index)
+    bounds = affine.const_range(rng)
+    if aff is None or bounds is None or aff[0].get(axis, 0) <= 0:
+        return None
+    start, stop, step = bounds
+    if step <= 0:
+        return None
+    coeff = aff[0][axis]
+    base = aff[1] + coeff * start
+    stride = coeff * step
+    expr = '__index' if stride == 1 else f'__index * {stride}'
+    if base:
+        expr += f' + {base}' if base > 0 else f' - {-base}'
+    return str(len(range(start, stop, step))), expr
+
+
 def _dsd_from_array(array_candidates: dict[str, tuple[spir.FieldDeclaration, list[int | spir.Expression]]],
-                    node: spir.Identifier | spir.ArraySlice):
+                    node: spir.Identifier | spir.ArraySlice,
+                    map_axes: Optional[dict[spir.Identifier, spir.RangeExpression]] = None):
     ident = node if isinstance(node, spir.Identifier) else node.array
     _, shape = array_candidates[ident.as_ir()]
     if len(shape) == 1:
@@ -873,6 +913,23 @@ def _dsd_from_array(array_candidates: dict[str, tuple[spir.FieldDeclaration, lis
     use_index = len(shape) == 1
 
     if isinstance(node, spir.ArraySlice):
+        if use_index and map_axes:
+            # Only the map variable selects elements; other identifiers are fixed per execution.
+            # A range or offset of the map shows up in the descriptor (extent, stride, base).
+            axes_in_use = {n for ind in node.indices for n in ind.walk() if isinstance(n, spir.Identifier) and n in map_axes}
+            if len(axes_in_use) > 1:
+                raise SyntaxError(f'Expected one index variable in array access, got {sorted(a.as_ir() for a in axes_in_use)}.\n'
+                                  f'  In line {node.lineinfo}')
+            if axes_in_use and len(node.indices) == 1 and not isinstance(node.indices[0], spir.RangeExpression):
+                (axis, ) = axes_in_use
+                strided = _strided_index(node.indices[0], axis, map_axes[axis])
+                if strided is not None:
+                    return cslstruct.MemoryDSD(dsd_type, name_to_csl(node.array), [strided[0]], ['__index'], [strided[1]])
+                # Not integer-affine: keep the plain substitution, other identifiers still excluded
+                far = passes.FindAndReplace({axis: spir.Identifier('__index', 0)})
+                indices = [expr_to_csl(far.visit(copy.deepcopy(ind))) for ind in node.indices]
+                return cslstruct.MemoryDSD(dsd_type, name_to_csl(node.array), extents, ['__index'], indices)
+
         # Find and replace index with __index
         idxvars = [_find_index(ind) for ind in node.indices]
         idxvars = [ind for ind in idxvars if ind is not None]
@@ -1259,11 +1316,16 @@ def _collect_unique_dsds(
                 return
             if not in_scope:
                 return
+            if visitor.map_axes and not _mentions_any(substmt, visitor.map_axes):
+                # Inside a map, an element access that no map variable indexes is one scalar
+                # operand (e.g. ``x[l]`` for an enclosing sequential loop variable ``l``)
+                return
 
-            dsd = _dsd_from_array(array_candidates, substmt)
+            dsd = _dsd_from_array(array_candidates, substmt, visitor.map_axes)
             dsds[substmt.array.as_ir()].append((f"{name_to_csl(substmt.array)}_dsd", dsd))
 
-        DSDVisitor(_visit_dsd, toplevel=not hasattr(stmt, 'body')).visit(stmt)
+        visitor = DSDVisitor(_visit_dsd, toplevel=not hasattr(stmt, 'body'))
+        visitor.visit(stmt)
 
     # Make DSD values in the dictionary unique if equivalent
     for key, dsd_list in dsds.items():
@@ -1303,6 +1365,9 @@ class DSDVisitor(spir.NodeVisitor):
         self.in_map = False
         self.in_for = False
         self.in_assignment = False
+        #: Index variables of the enclosing ``map`` statements and their ranges. Only these select
+        #: the elements a map's DSD walks; any other identifier in an index is fixed per execution.
+        self.map_axes: dict[spir.Identifier, spir.RangeExpression] = {}
         super().__init__()
 
     def visit_ForeachStatement(self, node: spir.ForeachStatement):
@@ -1316,10 +1381,15 @@ class DSDVisitor(spir.NodeVisitor):
         self.in_foreach = old_scope
 
     def visit_MapStatement(self, node: spir.MapStatement):
-        old_scope = self.in_map
+        old_scope, old_axes = self.in_map, self.map_axes
         self.in_map = True
+        self.map_axes = {
+            **old_axes,
+            **{var.identifier: rng for var, rng in zip(node.variables, node.range_expression)}
+        }
         self.generic_visit(node)
         self.in_map = old_scope
+        self.map_axes = old_axes
 
     def visit_ForStatement(self, node: spir.ForStatement):
         old_scope = self.in_for

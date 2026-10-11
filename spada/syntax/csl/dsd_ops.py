@@ -456,6 +456,20 @@ def get_dsd_statement(dtypes: dict[spir.Identifier, spir.IRType],
     return None
 
 
+def _is_scalar_element(expr: spir.SpatialNode, axes: set[spir.Identifier]) -> bool:
+    """
+    Whether an operand of a map is a single array element that no map variable indexes
+    (e.g. ``x[l]`` for ``l`` fixed by an enclosing loop), which a DSD operation takes as a scalar.
+    """
+    while isinstance(expr, spir.Expression):
+        expr = expr.value
+    if not axes or not isinstance(expr, spir.ArraySlice):
+        return False
+    if any(isinstance(idx, spir.RangeExpression) for idx in expr.indices):
+        return False
+    return not any(isinstance(n, spir.Identifier) and n in axes for idx in expr.indices for n in idx.walk())
+
+
 DISABLE_DSD = False
 
 
@@ -476,6 +490,7 @@ def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
     inner_stmt = get_dsd_statement(dtypes, stmt)
     if inner_stmt is None:
         return None
+    axes = {var.identifier for var in stmt.variables} if isinstance(stmt, spir.MapStatement) else set()
 
     dst = _get_id(inner_stmt.destination)
     if dst not in dtypes:
@@ -541,7 +556,7 @@ def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
     elif isinstance(inner_stmt, spir.MultiplyAccumulateOperator):  # @fmac*
         # @fmac* only works with scalar/constant values of ``c``
         c_type = _get_dtype(dtypes, inner_stmt.c.value)
-        if not isinstance(c_type, spir.ScalarType):
+        if not isinstance(c_type, spir.ScalarType) and not _is_scalar_element(inner_stmt.c, axes):
             return None
         a_dtype, b_dtype, c_dtype = (_get_base_dtype(dtypes, inner_stmt.a), _get_base_dtype(dtypes, inner_stmt.b),
                                      _get_base_dtype(dtypes, inner_stmt.c))
