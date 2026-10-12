@@ -14,7 +14,10 @@ Numerics are checked with a small interpreter for the generated CSL (memory DSDs
 used here, ``@increment_dsd_offset``, ``for``/``@range`` loops and scalar statements), run on
 identical random inputs against the same program lowered with ``--disable-dsd``.
 """
+import contextlib
+import io
 import re
+from pathlib import Path
 import numpy as np
 import pytest
 from spada.lowering.spatial_ir_to_csl import lower_spatial_ir_to_csl
@@ -460,6 +463,9 @@ def test_scalar_element_of_a_map_is_the_fmac_scalar():
     ''')
     inner_map = block.compute.statements[0].body[0]
     vector_map = block.compute.statements[1]
+    # only maps made by the vectorizer follow their ranges; written maps keep the original lowering
+    assert dsd_ops.get_dsd_op(dtypes, inner_map) is None
+    inner_map.follow_ranges = vector_map.follow_ranges = True
     assert dsd_ops.get_dsd_op(dtypes, inner_map) == '@fmacs'
     assert dsd_ops.get_dsd_op(dtypes, vector_map) is None  # c is a vector there: not an fmac
 
@@ -472,3 +478,62 @@ def test_pass_output_is_a_loop_around_a_map():
     dsd_ops.DISABLE_DSD = True
     block, dtypes = _block(_LOOPS.format(stmt='z[k] = z[k] + A[k*K+l] * x[l]'))
     assert preprocessing.vectorize_affine_loops(block, dtypes) == 0
+
+
+# ---------------------------------------------------------------------------------------------
+# Every shipped sample: lowering must not change except where the pass rewrites a loop
+
+_ROOT = Path(__file__).resolve().parents[2]
+#: Large instances take minutes to lower and the 16x16 ones repeat the 4x4x4 structure; shearsort_2D takes over a
+#: minute and does not lower at small sizes (before or after the pass)
+_SKIP = ('746_990', '128_128', '16_16_4', 'shearsort_2D')
+_SAMPLES = sorted(
+    str(p.relative_to(_ROOT)) for pattern in ('samples/**/*.sptl', 'tests/csl_runtime/samples/**/*.sptl')
+    for p in _ROOT.glob(pattern) if not any(s in p.name for s in _SKIP))
+
+#: Samples the pass rewrites (everything else must lower exactly as it does without the pass)
+_VECTORIZED = {
+    'samples/benchmarks/pure_vertical_4_4_4.sptl',
+    'samples/benchmarks/vertical_advection_4_4_4.sptl',
+    'samples/spatial/blas/gemv.sptl',
+    'samples/spatial/blas/gemv_twophase.sptl',
+    'samples/spatial/blas/matvec.sptl',
+}
+#: Samples that do not lower with small parameter values with or without the pass (unrelated to it)
+_NOT_LOWERABLE = {
+    'samples/spatial/simple/backward_sum.sptl',
+    'samples/spatial/stencils/laplacian.sptl',
+}
+
+
+def _lower_sample(path: str, tmp_path: Path, vectorize: bool, monkeypatch) -> dict[str, str] | None:
+    """ Lowered files of a sample (None if it does not lower for any of a few small parameter values). """
+    from spada.cli.compiler import generate_program
+    monkeypatch.setattr(preprocessing, 'VECTORIZE_AFFINE_LOOPS', vectorize)
+    for value in (4, 2, 8):
+        kernel = parser.parse_file(str(_ROOT / path))
+        params = [f'{p.name}={value}' for p in kernel.parameters if p.value is None]
+        out = tmp_path / f'{vectorize}_{value}'
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                generate_program(str(_ROOT / path), str(out), params)
+        except Exception:
+            continue
+        # a map callback is named after the id of its statement, which differs between runs
+        return {f.name: re.sub(r'map_callback_\d+', 'map_callback', f.read_text()) for f in sorted(out.iterdir())}
+    return None
+
+
+@pytest.mark.parametrize('path', _SAMPLES)
+def test_samples_lower_and_only_vectorized_ones_change(path, tmp_path, monkeypatch):
+    without = _lower_sample(path, tmp_path, False, monkeypatch)
+    with_pass = _lower_sample(path, tmp_path, True, monkeypatch)
+    if path in _NOT_LOWERABLE:
+        assert without is None and with_pass is None
+        return
+    assert without is not None, f'{path} no longer lowers even without the pass'
+    assert with_pass is not None, f'{path} fails to lower with the pass'
+    if path in _VECTORIZED:
+        assert with_pass != without, f'{path} was expected to be vectorized'
+    else:
+        assert with_pass == without, f'{path} changed although it is not expected to be vectorized'
