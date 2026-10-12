@@ -4,7 +4,7 @@ Parses DSD operations from IR nodes.
 import copy
 from dataclasses import dataclass
 from typing import Literal, Optional
-from spada.syntax.spatial_ir import irnodes as spir
+from spada.syntax.spatial_ir import irnodes as spir, affine
 from spada.syntax.csl import structures as cslstruct
 
 UniqueDSDDict = cslstruct.UniqueDSDDict
@@ -54,6 +54,8 @@ class DSDOp:
             normalized_statement = get_dsd_statement(dtypes, statement)
         if normalized_statement is None:
             raise ValueError('Expected a statement that can be lowered to a DSD operation')
+        if _follows_ranges(statement):
+            dsds = _with_map_operand_forms(statement, normalized_statement, dtypes, dsds)
         dsd_objects = self.used_dsd_objects(normalized_statement, dsds)
         return self._append_async_suffix(self._as_csl(normalized_statement, dtypes, dsds), dsd_objects, async_target)
 
@@ -79,6 +81,87 @@ class DSDOp:
         :return: A list of DSD objects used in the statement.
         """
         raise NotImplementedError
+
+
+def _follows_ranges(statement: spir.Statement) -> bool:
+    """ Whether a statement is a map made by the loop vectorizer (see ``MapStatement.follow_ranges``). """
+    return isinstance(statement, spir.MapStatement) and statement.follow_ranges
+
+
+class _ScalarElement(cslstruct.DataStructureDescriptor):
+    """
+    Stands in for an array element used as a scalar operand of a DSD operation (e.g. ``x[l]``).
+    Its name in the DSD dictionary is the CSL text of the access.
+    """
+
+    def __init__(self, text: str):
+        self.text = text
+
+    def as_csl(self) -> str:
+        return self.text
+
+
+def _offset_dsd(dsd_name: str, offset: str, elem_type: str) -> str:
+    """
+    The DSD ``dsd_name`` moved to an absolute element offset from its base. This is the single
+    place that decides how a per-execution offset is spelled in the generated code.
+    """
+    return f'@increment_dsd_offset({dsd_name}, {offset}, {elem_type})'
+
+
+def _with_map_operand_forms(statement: spir.MapStatement, assignment: spir.AssignmentStatement,
+                            dtypes: dict[spir.Identifier, spir.IRType], dsds: UniqueDSDDict) -> UniqueDSDDict:
+    """
+    Adapts the DSD dictionary to the operands of one map-style DSD operation.
+
+    The memory DSDs of a map describe the accesses with every identifier other than the map
+    variables fixed at zero (see ``_dsd_from_array``). Inside the operation such an identifier
+    has a value, so:
+
+    * an element access that no map variable indexes is a scalar operand and renders as the
+      access itself (``x[l]``);
+    * an access with a nonzero part from other identifiers renders as the array's DSD moved by
+      that part: ``@increment_dsd_offset(dsd, offset, T)``. The offset is absolute from the
+      DSD's base, recomputed at every execution.
+
+    :return: ``dsds`` itself when no operand needs this, otherwise a copy with the affected
+             arrays rebound.
+    """
+    from spada.syntax.csl.statements import emit_expression, name_to_csl, dtype_as_csl
+    axes = {var.identifier for var in statement.variables}
+    #: array -> rendering of its accesses in this operation, or None when the plain DSD is right
+    rendered: dict[str, Optional[tuple[str, cslstruct.DataStructureDescriptor]]] = {}
+    for node in assignment.walk():
+        if not isinstance(node, spir.ArraySlice) or len(node.indices) != 1:
+            continue
+        if isinstance(node.indices[0], spir.RangeExpression):
+            continue
+        key = node.array.as_ir()
+        form: Optional[tuple[str, cslstruct.DataStructureDescriptor]]
+        if not any(isinstance(n, spir.Identifier) and n in axes for n in node.indices[0].walk()):
+            text = emit_expression(spir.Expression(node), dsds, dtypes)
+            form = (text, _ScalarElement(text))
+        else:
+            aff = affine.affine_form(node.indices[0])
+            if aff is None:
+                raise NotImplementedError(f'Index of {node.as_ir()} is not affine in the map variables')
+            terms = [(c, v) for v, c in aff[0].items() if v not in axes]
+            if terms:
+                offset = ' + '.join(name_to_csl(v) if c == 1 else f'{name_to_csl(v)} * {c}' for c, v in terms)
+                dsd_name, dsd = next(d for d in dsds[key] if isinstance(d[1], cslstruct.MemoryDSD))
+                form = (_offset_dsd(dsd_name, offset, dtype_as_csl(_get_base_dtype(dtypes, node.array))), dsd)
+            else:
+                form = None
+        if key in rendered and (rendered[key] and rendered[key][0]) != (form and form[0]):
+            raise NotImplementedError(f'{node.array.as_ir()} is accessed through different forms in one DSD operation')
+        rendered[key] = form
+    adapted = {key: form for key, form in rendered.items() if form is not None}
+    if not adapted:
+        return dsds
+    dsds = copy.copy(dsds)
+    for key, form in adapted.items():
+        dsds[key] = [form]
+    return dsds
 
 
 def _ident(expr: spir.Identifier | spir.ArraySlice | spir.TypedIdentifier) -> spir.Identifier:
@@ -456,6 +539,20 @@ def get_dsd_statement(dtypes: dict[spir.Identifier, spir.IRType],
     return None
 
 
+def _is_scalar_element(expr: spir.SpatialNode, axes: set[spir.Identifier]) -> bool:
+    """
+    Whether an operand of a map is a single array element that no map variable indexes
+    (e.g. ``x[l]`` for ``l`` fixed by an enclosing loop), which a DSD operation takes as a scalar.
+    """
+    while isinstance(expr, spir.Expression):
+        expr = expr.value
+    if not axes or not isinstance(expr, spir.ArraySlice):
+        return False
+    if any(isinstance(idx, spir.RangeExpression) for idx in expr.indices):
+        return False
+    return not any(isinstance(n, spir.Identifier) and n in axes for idx in expr.indices for n in idx.walk())
+
+
 DISABLE_DSD = False
 
 
@@ -476,6 +573,7 @@ def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
     inner_stmt = get_dsd_statement(dtypes, stmt)
     if inner_stmt is None:
         return None
+    axes = {var.identifier for var in stmt.variables} if _follows_ranges(stmt) else set()
 
     dst = _get_id(inner_stmt.destination)
     if dst not in dtypes:
@@ -541,7 +639,7 @@ def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
     elif isinstance(inner_stmt, spir.MultiplyAccumulateOperator):  # @fmac*
         # @fmac* only works with scalar/constant values of ``c``
         c_type = _get_dtype(dtypes, inner_stmt.c.value)
-        if not isinstance(c_type, spir.ScalarType):
+        if not isinstance(c_type, spir.ScalarType) and not _is_scalar_element(inner_stmt.c, axes):
             return None
         a_dtype, b_dtype, c_dtype = (_get_base_dtype(dtypes, inner_stmt.a), _get_base_dtype(dtypes, inner_stmt.b),
                                      _get_base_dtype(dtypes, inner_stmt.c))
