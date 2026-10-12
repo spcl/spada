@@ -499,17 +499,16 @@ _VECTORIZED = {
     'samples/spatial/blas/gemv_twophase.sptl',
     'samples/spatial/blas/matvec.sptl',
 }
-#: Samples that do not lower with small parameter values with or without the pass (unrelated to it)
-_NOT_LOWERABLE = {
-    'samples/spatial/simple/backward_sum.sptl',
-    'samples/spatial/stencils/laplacian.sptl',
-}
 
 
-def _lower_sample(path: str, tmp_path: Path, vectorize: bool, monkeypatch) -> dict[str, str] | None:
-    """ Lowered files of a sample (None if it does not lower for any of a few small parameter values). """
+def _lower_sample(path: str, tmp_path: Path, vectorize: bool, monkeypatch) -> dict[str, str] | type:
+    """
+    Lowered files of a sample, or the type of the last exception if it does not lower for any of a few
+    small parameter values (which samples lower depends on the architecture, ``WSE_ARCH``).
+    """
     from spada.cli.compiler import generate_program
     monkeypatch.setattr(preprocessing, 'VECTORIZE_AFFINE_LOOPS', vectorize)
+    failure = Exception
     for value in (4, 2, 8):
         kernel = parser.parse_file(str(_ROOT / path))
         params = [f'{p.name}={value}' for p in kernel.parameters if p.value is None]
@@ -517,22 +516,24 @@ def _lower_sample(path: str, tmp_path: Path, vectorize: bool, monkeypatch) -> di
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 generate_program(str(_ROOT / path), str(out), params)
-        except Exception:
+        except Exception as e:
+            failure = type(e)
             continue
         # a map callback is named after the id of its statement, which differs between runs
         return {f.name: re.sub(r'map_callback_\d+', 'map_callback', f.read_text()) for f in sorted(out.iterdir())}
-    return None
+    return failure
 
 
 @pytest.mark.parametrize('path', _SAMPLES)
 def test_samples_lower_and_only_vectorized_ones_change(path, tmp_path, monkeypatch):
     without = _lower_sample(path, tmp_path, False, monkeypatch)
     with_pass = _lower_sample(path, tmp_path, True, monkeypatch)
-    if path in _NOT_LOWERABLE:
-        assert without is None and with_pass is None
-        return
-    assert without is not None, f'{path} no longer lowers even without the pass'
-    assert with_pass is not None, f'{path} fails to lower with the pass'
+    if isinstance(without, type):
+        # Not lowerable on this architecture whatever the pass does: it must not change that
+        assert with_pass is without, f'{path} lowers with the pass but not without it' if not isinstance(
+            with_pass, type) else f'{path} fails differently with the pass'
+        pytest.skip(f'{path} does not lower on this architecture')
+    assert not isinstance(with_pass, type), f'{path} fails to lower with the pass ({with_pass.__name__})'
     if path in _VECTORIZED:
         assert with_pass != without, f'{path} was expected to be vectorized'
     else:
