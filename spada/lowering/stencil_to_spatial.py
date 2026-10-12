@@ -10,7 +10,7 @@ from spada.lowering.stencil_to_spatial_place import ProgramPlacement
 from spada.lowering.versioning import Versioning
 from spada.syntax.common.types import ScalarType
 from spada.syntax.spatial_ir.canonical_subgrids import canonicalize_subgrids, fill_compute_rectangle
-from spada.syntax.spatial_ir.grid_geometry import split_rectangles
+from spada.syntax.spatial_ir.grid_geometry import Rectangle, group_rectangles_by_domain, split_rectangles
 
 from spada.syntax.stencil_ir.domain_collector import DomainCollector
 from spada.syntax.stencil_ir.canonicalize_expression import CanonicalizeExpression
@@ -268,52 +268,61 @@ def output_phase(op: sast.ReturnOp,
                  versioning: Versioning[spa.Identifier],
                  placement: ProgramPlacement,
                  grid_var_t: ScalarType = ScalarType.u32) -> list[spa.ComputeBlock]:
-    # For each return value, find the corresponding argument and generate the output phase
-    # TODO Handle different domain sizes for output fields
+    """
+    Generate the compute blocks that send each returned field to its kernel output.
+
+    A phase may place each PE in only one compute block, so sends whose domains overlap are
+    placed together: the overlap carries every send, and any exclusive region is its own block.
+    Each block indexes the output arguments with its own subgrid coordinates.
+
+    :param op: The stencil return operation. Each value is a field stored by ``placement``.
+    :param arguments: The kernel arguments.
+    :param versioning: Versioning used to generate fresh subgrid identifiers.
+    :param placement: Placement of the returned fields, including the shift from domain coordinates
+        to grid coordinates.
+    :param grid_var_t: The type of the subgrid variables.
+    :return: The compute blocks of the output phase, with disjoint subgrids.
+    """
+    shift = placement.get_shift()
+    assert shift[0] >= 0 and shift[1] >= 0
+
+    outputs: list[Rectangle[tuple[int, spa.Identifier]]] = []
+    for index, (arg, arg_t) in enumerate(zip(op.values, op.operation_type.source)):
+        assert isinstance(arg_t.domain, sast.Cartesian)
+        buf, _buf_t = placement.get_storage(arg.value)
+        x_range = (arg_t.domain.x[0] + shift[0], arg_t.domain.x[1] + shift[0], 1)
+        y_range = (arg_t.domain.y[0] + shift[1], arg_t.domain.y[1] + shift[1], 1)
+        outputs.append(Rectangle(x_range, y_range, (index, buf)))
 
     compute = []
-    shift = placement.get_shift()
-
-    for i, (arg, arg_t) in enumerate(zip(op.values, op.operation_type.source)):
-        x_range = [arg_t.domain.x[0] + shift[0], arg_t.domain.x[1] + shift[0]]
-        y_range = [arg_t.domain.y[0] + shift[1], arg_t.domain.y[1] + shift[1]]
-
-        # Create a send statement for each output
-
-        buf, buf_t = placement.get_storage(arg.value)
-
+    for group in group_rectangles_by_domain(split_rectangles(outputs)):
         var_i = versioning.next_version('i')
         var_j = versioning.next_version('j')
 
-        assert shift[0] >= 0
-        assert shift[1] >= 0
+        sends: dict[int, spa.Identifier] = {}
+        for rect in group:
+            index, buf = rect.metadata
+            previous = sends.get(index)
+            if previous is not None:
+                assert previous == buf
+                continue
+            sends[index] = buf
 
-        var_i_expr = spa.RangeExpression(
-            spa.Expression(spa.BinaryOperator(spa.Expression(var_i),
-                                              '-',
-                                              spa.Expression(spa.ConstantLiteral(shift[0],
-                                                                                 ScalarType.i32)))))
+        statements = []
+        for index in sorted(sends):
+            x_index = spa.RangeExpression(
+                spa.Expression(spa.BinaryOperator(spa.Expression(var_i), '-',
+                                                  spa.Expression(spa.ConstantLiteral(shift[0], ScalarType.i32)))))
+            y_index = spa.RangeExpression(
+                spa.Expression(spa.BinaryOperator(spa.Expression(var_j), '-',
+                                                  spa.Expression(spa.ConstantLiteral(shift[1], ScalarType.i32)))))
+            target = spa.ArraySlice(array=spa.Identifier(_ith_output_name(index), 0), indices=[x_index, y_index])
+            statements.append(spa.SendStatement(sends[index], target))
 
-        var_j_expr = spa.RangeExpression(
-            spa.Expression(spa.BinaryOperator(spa.Expression(var_j),
-                                              '-',
-                                              spa.Expression(spa.ConstantLiteral(shift[1],
-                                                                                 ScalarType.i32)))))
-
-        target = spa.ArraySlice(
-            array=spa.Identifier(_ith_output_name(i), 0),
-            indices=[var_i_expr, var_j_expr]
-        )
-
-        stmt = spa.SendStatement(buf, target)
-
-        comp = spa.ComputeBlock(
-            variables=[spa.TypedIdentifier(grid_var_t, var_i),
-                       spa.TypedIdentifier(grid_var_t, var_j)],
-            subgrid=spa.SubgridExpression(spa.RangeExpression.from_args(x_range[0], x_range[1]),
-                                          spa.RangeExpression.from_args(y_range[0], y_range[1])),
-            statements=[stmt]
-        )
-        compute.append(comp)
+        compute.append(spa.ComputeBlock(
+            variables=[spa.TypedIdentifier(grid_var_t, var_i), spa.TypedIdentifier(grid_var_t, var_j)],
+            subgrid=spa.SubgridExpression.from_tuple(group[0].x_range, group[0].y_range),
+            statements=statements,
+        ))
 
     return compute
