@@ -22,6 +22,9 @@ def _fma_fusion(rect: PEBlock):
 #: ``_fma_fusion`` above stays a TODO. This is the single switch for that scope.
 FUSE_MAC_IN_VECTORIZED_LOOPS = True
 
+#: Master switch of ``vectorize_affine_loops``. Off, lowering is exactly what it was without the pass.
+VECTORIZE_AFFINE_LOOPS = True
+
 #: Whether a nest may become ``@fmachs`` with a 32-bit DSD multiplicand (f32 accumulator, f32 vector,
 #: f16 scalar), which is what ``get_dsd_op`` returns for that combination. The SDK 2.10 compiler accepts
 #: it, but on the simulator it leaves the accumulator unchanged, while the library form of
@@ -53,7 +56,7 @@ def vectorize_affine_loops(rect: PEBlock, dtypes: dict[spir.Identifier, spir.IRT
     :return: The number of loop nests rewritten.
     """
     from spada.syntax.csl import dsd_ops
-    if dsd_ops.DISABLE_DSD:
+    if dsd_ops.DISABLE_DSD or not VECTORIZE_AFFINE_LOOPS:
         return 0
     vectorizer = _Vectorizer(rect.compute, dtypes)
     rect.compute = vectorizer.visit(rect.compute)
@@ -200,7 +203,7 @@ class _Vectorizer(spir.NodeTransformer):
             new_assign = _fuse_multiply_accumulate(new_assign, axis)
         axis_var = copy.deepcopy(loop_vars[axis_pos])
         axis_range = copy.deepcopy(loop_ranges[axis_pos])
-        vector_map = spir.MapStatement([axis_var], [axis_range], [new_assign])
+        vector_map = spir.MapStatement([axis_var], [axis_range], [new_assign], follow_ranges=True)
         from spada.syntax.csl import dsd_ops
         op = dsd_ops.get_dsd_op(self.dtypes, vector_map)
         if op in (None, ''):

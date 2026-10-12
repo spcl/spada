@@ -1008,6 +1008,10 @@ class MapStatement(Statement):
     range_expression: list[RangeExpression]
     body: list[Statement]
     completion_name: Optional[Completion] = None
+    #: Set by the loop vectorizer (``csl.preprocessing``): the DSDs of this map follow its ranges exactly
+    #: (extent, stride and base come from the range, identifiers other than the map variables are fixed per
+    #: execution) rather than spanning the whole array. Maps written as such keep the original lowering.
+    follow_ranges: bool = False
 
     def validate(self) -> None:
         assert isinstance(self.variables, list)

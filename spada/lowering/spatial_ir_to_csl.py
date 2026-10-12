@@ -1392,10 +1392,11 @@ class DSDVisitor(spir.NodeVisitor):
     def visit_MapStatement(self, node: spir.MapStatement):
         old_scope, old_axes = self.in_map, self.map_axes
         self.in_map = True
-        self.map_axes = {
-            **old_axes,
-            **{var.identifier: rng for var, rng in zip(node.variables, node.range_expression)}
-        }
+        if node.follow_ranges:
+            self.map_axes = {
+                **old_axes,
+                **{var.identifier: rng for var, rng in zip(node.variables, node.range_expression)}
+            }
         self.generic_visit(node)
         self.in_map = old_scope
         self.map_axes = old_axes

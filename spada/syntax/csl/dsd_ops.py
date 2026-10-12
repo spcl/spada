@@ -54,7 +54,7 @@ class DSDOp:
             normalized_statement = get_dsd_statement(dtypes, statement)
         if normalized_statement is None:
             raise ValueError('Expected a statement that can be lowered to a DSD operation')
-        if isinstance(statement, spir.MapStatement):
+        if _follows_ranges(statement):
             dsds = _with_map_operand_forms(statement, normalized_statement, dtypes, dsds)
         dsd_objects = self.used_dsd_objects(normalized_statement, dsds)
         return self._append_async_suffix(self._as_csl(normalized_statement, dtypes, dsds), dsd_objects, async_target)
@@ -81,6 +81,11 @@ class DSDOp:
         :return: A list of DSD objects used in the statement.
         """
         raise NotImplementedError
+
+
+def _follows_ranges(statement: spir.Statement) -> bool:
+    """ Whether a statement is a map made by the loop vectorizer (see ``MapStatement.follow_ranges``). """
+    return isinstance(statement, spir.MapStatement) and statement.follow_ranges
 
 
 class _ScalarElement(cslstruct.DataStructureDescriptor):
@@ -568,7 +573,7 @@ def get_dsd_op(dtypes: dict[spir.Identifier, spir.IRType],
     inner_stmt = get_dsd_statement(dtypes, stmt)
     if inner_stmt is None:
         return None
-    axes = {var.identifier for var in stmt.variables} if isinstance(stmt, spir.MapStatement) else set()
+    axes = {var.identifier for var in stmt.variables} if _follows_ranges(stmt) else set()
 
     dst = _get_id(inner_stmt.destination)
     if dst not in dtypes:
