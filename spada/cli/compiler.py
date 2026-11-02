@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Optional
 from spada.lowering import spatial_ir_to_csl as s2c
+from spada.lowering.parametric import check_precondition, parse_precondition
 from spada.syntax.spatial_ir import parser, passes, analysis, irnodes as spa, canonicalization
 from spada.syntax.csl import constants as csl
 from spada.syntax.common import serialization
@@ -29,6 +30,14 @@ class GeneratedProgram:
     fabric_offsets: tuple[int, int]
     #: Value to pass to ``--channels``
     memcpy_channels: int
+
+
+def _has_metaprogramming(kernel: spa.Kernel) -> bool:
+    """
+    :return: Whether the kernel contains compile-time ``for`` blocks.
+    """
+    return any(isinstance(block, spa.MetaForBlock) or (isinstance(block, spa.Phase) and block.metaprogramming_blocks)
+               for block in kernel.body)
 
 
 def parse_parameters(param: list[str]) -> dict[str, Any]:
@@ -87,7 +96,14 @@ def generate_program(input_file: str, output_folder: str, param: list[str] = (),
     """
     kernel_parameters = parse_parameters(param)
 
-    kernel = parser.parse_file(input_file)
+    with open(input_file) as fp:
+        source = fp.read()
+    precondition = parse_precondition(source)
+    if precondition is not None:
+        check_precondition(precondition, kernel_parameters)
+
+    kernel = parser.parse_string(source, input_file)
+    parametric = bool(kernel.parameters) or _has_metaprogramming(kernel)
     # If there are unconcretized parameters, we need to concretize them
     non_concrete_parameters = {param.name for param in kernel.parameters if param.value is None}
     non_concrete_parameters -= set(kernel_parameters.keys())
@@ -100,6 +116,13 @@ def generate_program(input_file: str, output_folder: str, param: list[str] = (),
         print("Concretizing parameters:", kernel_parameters)
     kernel = passes.concretize_parameters(kernel, **kernel_parameters)
     kernel = passes.constexpr_propagation(kernel)
+    if parametric:
+        # Normalize: expand compile-time loops (e.g., parity guards) and round-trip through the parser,
+        # so that the back end sees the same tree as for the equivalent concrete file (literal types
+        # and shape representations are those of parsed and folded text).
+        kernel = canonicalization.inline_metaprogramming(kernel)
+        kernel = parser.parse_string(kernel.as_ir(), input_file)
+        kernel = passes.constexpr_propagation(kernel)
 
     # Argument checks
     using_memcpy_mode = None

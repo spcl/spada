@@ -7,8 +7,10 @@ import spada.syntax.stencil_ir.irnodes as sast
 import spada.syntax.spatial_ir.irnodes as spa
 from spada.lowering.versioning import Versioning
 
+from spada.syntax.common.symbolic import is_symbolic
 from spada.syntax.common.types import ScalarType
-from spada.syntax.spatial_ir.grid_geometry import Rectangle, split_rectangles, group_rectangles_by_domain
+from spada.lowering.regions import partition
+from spada.syntax.spatial_ir.grid_geometry import Rectangle
 from spada.syntax.stencil_ir.domain_collector import DomainCollector
 
 AbstractFieldDeclaration = Rectangle[spa.FieldDeclaration]
@@ -208,7 +210,8 @@ class ProgramPlacement:
             assert domain.z[0] >= 0, "Z dimension must be non-negative"
             # Not that this might over-allocate the z-dimension, which is done to simplify the address calculations
             # We expect this temporary storage to be optimized away in a later pass
-            field_type = spa.ArrayType(data_type, [domain.z[1]])
+            depth = domain.z[1]
+            field_type = spa.ArrayType(data_type, [spa.expression_of(depth) if is_symbolic(depth) else depth])
 
             self._set_storage(identifier, offset, spa_identifier, field_type)
 
@@ -261,8 +264,7 @@ class ProgramPlacement:
         :param fields:
         :return:
         """
-        split = split_rectangles(fields)
-        grouped = group_rectangles_by_domain(split)
+        grouped = partition(fields)
         blocks = []
         for group in grouped:
             block = self._abstract_fields_group_to_place_blocks(group)

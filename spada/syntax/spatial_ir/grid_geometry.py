@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from math import gcd
 from typing import Generic, TypeVar, Union
 
+from spada.syntax.common.symbolic import Coord
+
 T = TypeVar('T')
 
 
@@ -12,16 +14,15 @@ class Rectangle(Generic[T]):
     metadata: T
 
     def __post_init__(self):
+        # Bounds may be anchored symbolic coordinates (see ``spada.syntax.common.symbolic``) on the
+        # parametric stencil lowering path; strides are always integers.
+        assert isinstance(self.x_range[2], int)
+        assert isinstance(self.y_range[2], int)
         assert self.x_range[2] >= 1, "Strides must be positive"
         assert self.y_range[2] >= 1, "Strides must be positive"
+        assert all(isinstance(v, (int, Coord)) for v in self.x_range[:2] + self.y_range[:2])
         assert self.x_range[0] <= self.x_range[1], "Rectangle x Range is invalid"
         assert self.y_range[0] <= self.y_range[1], "Rectangle y Range is invalid"
-        assert isinstance(self.x_range[0], int)
-        assert isinstance(self.x_range[1], int)
-        assert isinstance(self.x_range[2], int)
-        assert isinstance(self.y_range[0], int)
-        assert isinstance(self.y_range[1], int)
-        assert isinstance(self.y_range[2], int)
 
     def contains_point(self, x: int, y: int) -> bool:
         """

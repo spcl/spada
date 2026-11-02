@@ -8,9 +8,12 @@ from spada.lowering.stencil_to_spatial_dataflow import ProgramDataflow
 from spada.lowering.stencil_to_spatial_place import ProgramPlacement
 
 from spada.lowering.versioning import Versioning
+from spada.lowering.regions import canonicalize_subgrids, partition
+from spada.syntax.common.symbolic import Coord, is_symbolic
 from spada.syntax.common.types import ScalarType
-from spada.syntax.spatial_ir.canonical_subgrids import canonicalize_subgrids, fill_compute_rectangle
-from spada.syntax.spatial_ir.grid_geometry import Rectangle, group_rectangles_by_domain, split_rectangles
+from spada.syntax.spatial_ir.canonical_subgrids import fill_compute_rectangle
+from spada.syntax.spatial_ir.grid_geometry import Rectangle
+from spada.syntax.spatial_ir.symbolic_grid import coord_of_expr
 
 from spada.syntax.stencil_ir.domain_collector import DomainCollector
 from spada.syntax.stencil_ir.canonicalize_expression import CanonicalizeExpression
@@ -20,11 +23,15 @@ from spada.syntax.stencil_ir.ssa import SSAVisitor
 from spada.syntax.spatial_ir.passes import mark_readonly_writeonly_arguments
 from spada.syntax.spatial_ir.analysis import detect_undefined_array_access
 
-def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: ChannelStrategy = ChannelStrategy.TRIVIAL) -> spa.Kernel:
+def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: ChannelStrategy = ChannelStrategy.TRIVIAL,
+                             parameters: list[str] | None = None) -> spa.Kernel:
     """Lower a stencil to a spatial program.
 
     Args:
         stencil (Stencil): The stencil program to lower.
+        channel_strategy: The channel assignment strategy for streams.
+        parameters: Kernel parameter names, for stencils whose domain is symbolic (see
+            ``spada.lowering.parametric``). Requires an active ``ConstraintLog``.
 
     Returns:
         Spatial: The lowered spatial program.
@@ -79,7 +86,8 @@ def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: ChannelStr
             output_compute = output_phase(comp, arguments, versioning, placement_gen)
             body.append(spa.Phase([], [], output_compute))
 
-    kernel = spa.Kernel(name=stencil.name or "", parameters=[], arguments=arguments, body=body)
+    kernel = spa.Kernel(name=stencil.name or "", parameters=[spa.Parameter(p) for p in parameters or []],
+                        arguments=arguments, body=body)
 
     # Add a dummy compute block that spans everything
     kernel = fill_compute_rectangle(kernel)
@@ -92,10 +100,11 @@ def lower_stencil_to_spatial(stencil: sast.Program, channel_strategy: ChannelStr
 
     kernel = mark_readonly_writeonly_arguments(kernel)
 
-    # Verification
-    undefined = detect_undefined_array_access(kernel)
-    for id, x_range, y_range in undefined:
-        print(f"ERROR: undefined identifier {id.as_ir()} in block {x_range}, {y_range}")
+    # Verification (requires concrete subgrids; parametric kernels are checked after concretization)
+    if not parameters:
+        undefined = detect_undefined_array_access(kernel)
+        for id, x_range, y_range in undefined:
+            print(f"ERROR: undefined identifier {id.as_ir()} in block {x_range}, {y_range}")
 
     return kernel
 
@@ -171,15 +180,23 @@ def _construct_arg(name: str, arg_t: sast.FieldType | ScalarType) -> spa.KernelA
         array_size_x = domain.x[1] - domain.x[0]
         array_size_y = domain.y[1] - domain.y[0]
         array_size_z = domain.z[1] - domain.z[0]
-        stream_type = spa.StreamType(arg_t.dtype, spa.Expression(spa.ConstantLiteral(array_size_z, spa.ScalarType.i16)))
+        stream_type = spa.StreamType(arg_t.dtype, spa.expression_of(array_size_z, spa.ScalarType.i16))
 
-        array_type = spa.ArrayType(stream_type, [array_size_x, array_size_y])
+        array_type = spa.ArrayType(stream_type, [_shape_entry(array_size_x), _shape_entry(array_size_y)])
         identifier = spa.Identifier(name, 0)
         return spa.KernelArgument(array_type, identifier)
     else:
         assert isinstance(arg_t, ScalarType)
         identifier = spa.Identifier(name, 0)
         return spa.KernelArgument(arg_t, identifier)
+
+
+def _shape_entry(size: int | Coord) -> int | spa.Expression:
+    """
+    :param size: An integer or symbolic array extent.
+    :return: The extent as an ``ArrayType`` shape entry (integers stay integers).
+    """
+    return spa.expression_of(size) if is_symbolic(size) else size
 
 
 def input_phase(body: list[spa.PlaceBlock],
@@ -255,7 +272,7 @@ def _copy_array(src: spa.Identifier,
 
     :return: The copy loop ``dst[k] = src[k]``.
     """
-    length = min(src_t.shape[0], dst_t.shape[0])
+    length = min(coord_of_expr(src_t.shape[0]), coord_of_expr(dst_t.shape[0]))
     k = spa.TypedIdentifier(ScalarType.i32, versioning.next_version('k'))
     copy_stmt = spa.AssignmentStatement(spa.ArraySlice(dst, [spa.Expression(k.identifier)]),
                                         spa.Expression(spa.ArraySlice(src, [spa.Expression(k.identifier)])))
@@ -295,7 +312,7 @@ def output_phase(op: sast.ReturnOp,
         outputs.append(Rectangle(x_range, y_range, (index, buf)))
 
     compute = []
-    for group in group_rectangles_by_domain(split_rectangles(outputs)):
+    for group in partition(outputs):
         var_i = versioning.next_version('i')
         var_j = versioning.next_version('j')
 

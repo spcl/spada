@@ -8,7 +8,8 @@ from spada.lowering.stencil_to_spatial_place import ProgramPlacement
 
 from spada.lowering.versioning import Versioning
 from spada.syntax.common.types import ScalarType
-from spada.syntax.spatial_ir.grid_geometry import Rectangle, split_rectangles, group_rectangles_by_domain
+from spada.lowering.regions import partition
+from spada.syntax.spatial_ir.grid_geometry import Rectangle
 
 from spada.syntax.stencil_ir.domain_collector import DomainCollector
 
@@ -133,8 +134,7 @@ class ProgramDataflow:
 
     def _abstract_declarations_to_block(self, abstract_streams: list[AbstractStream]) -> list[spa.DataflowBlock]:
 
-        abstract_streams = split_rectangles(abstract_streams)
-        grouped = group_rectangles_by_domain(abstract_streams)
+        grouped = partition(abstract_streams)
 
         blocks = []
         # Generate dataflow blocks from the abstract declarations
